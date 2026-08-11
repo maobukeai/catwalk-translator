@@ -1,6 +1,6 @@
-# Product Evolution Research Report — Round 11: 01/09 UI/UX
+# Product Evolution Research Report — Round 12: 01/09 UI/UX
 
-> **演进轮次**：Round 11 (Product Evolution Mode)  
+> **演进轮次**：Round 12 (Product Evolution Mode)  
 > **当前轮盘阶段**：01/09 UI/UX 视觉与交互极致打磨 (Visual & Interaction Refinement)  
 > **研究对象**：CG AI Screenshot Translator (`app_v2`)  
 > **报告生成时间**：2026-08-11  
@@ -51,7 +51,7 @@
 2. **Mock 环境数据防御缺失 (`tauri.ts:739`)**：
    - **警告信息**：`History save failed: TypeError: current.find is not a function`。
    - **根因**：`saveTranslationHistory` 假定 `cmdGetHistory()` 必返回数组，但在单元测试 mock 环境下可能返回 undefined 或非数组。
-   - **修复方案**：增加 `const currentList = Array.isArray(current) ? current : [];` 防御性判断。
+   - **修复方案**：增加 `const list = Array.isArray(current) ? current : [];` 防御性判断。
 
 ---
 
