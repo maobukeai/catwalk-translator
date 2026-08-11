@@ -75,6 +75,16 @@ function App() {
   // Browser-level hotkey listener fallback (matches exact configured hotkey strings)
   useEffect(() => {
     const handleGlobalKeyDown = async (e: KeyboardEvent) => {
+      // Capture Overlay hotkey (F4 or configured hotkey e.g. Ctrl+Alt+D)
+      if (
+        (settings.hotkeyEnabled ?? true) &&
+        (matchesHotkey(e, settings.hotkey || 'Ctrl+Alt+D') || e.key === 'F4')
+      ) {
+        e.preventDefault();
+        setIsOverlayOpen((prev) => !prev);
+        return;
+      }
+
       // Spotlight hotkey
       if ((settings.spotlightHotkeyEnabled ?? true) && matchesHotkey(e, settings.spotlightHotkey || 'Alt+Space')) {
         e.preventDefault();

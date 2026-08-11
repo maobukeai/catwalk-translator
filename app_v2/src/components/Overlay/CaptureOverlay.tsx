@@ -3,7 +3,7 @@
  *
  * Performance-optimised flow (<200ms end-to-end):
  *  1. Hotkey -> Rust hides main window and expands transparent always-on-top selection window (0ms image transfer delay)
- *  2. User draws selection rect directly over real screen (with translucent mask + spotlight corners)
+ *  2. User draws selection rect directly over real screen (with translucent mask + crosshair guides + spotlight corners)
  *  3. On mouse release: Rust captures ONLY that region via native GDI BitBlt (<1ms)
  *  4. Feed tiny region BMP to persistent RapidOCR daemon (<80ms) + sample background colors
  *  5. Render in-place translated text blocks directly at exact original screen coordinates
@@ -71,14 +71,23 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   // Selection box state (logical CSS pixels)
   const [startPos, setStartPos] = useState<{ x: number; y: number } | null>(null);
   const [currPos, setCurrPos] = useState<{ x: number; y: number } | null>(null);
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   // Recognition & translation result
   const [overlayResult, setOverlayResult] = useState<OverlayResult | null>(null);
   const [emptyNotice, setEmptyNotice] = useState<string | null>(null);
+  const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
+
+  const showFeedback = (msg: string) => {
+    setFeedbackToast(msg);
+    setTimeout(() => {
+      if (mountedRef.current) setFeedbackToast(null);
+    }, 2200);
+  };
 
   useEffect(() => {
     if (settings.captureEngine) {
@@ -98,8 +107,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       setOverlayResult(null);
       setStartPos(null);
       setCurrPos(null);
+      setCursorPos(null);
       setIsPinned(false);
       setBannerDismissed(false);
+      setFeedbackToast(null);
       return;
     }
 
@@ -155,6 +166,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           })
         );
         setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : null));
+        showFeedback(`已切换至 ${newTargetLang} 重新翻译`);
       } catch (err) {
         console.warn('[CaptureOverlay] Retranslate error:', err);
       }
@@ -181,17 +193,32 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
+      // F4: 一键快速关闭 / 切换
+      if (e.key === 'F4') {
+        e.preventDefault();
+        if (!isPinned) {
+          handleClose();
+        } else {
+          showFeedback('📌 当前处于锁定状态，请先解除锁定 (Ctrl+P)');
+        }
+        return;
+      }
+
       // 速赢 5: Ctrl+P 切换锁定
       if (e.ctrlKey && e.key.toLowerCase() === 'p') {
         e.preventDefault();
-        setIsPinned((prev) => !prev);
+        setIsPinned((prev) => {
+          const next = !prev;
+          showFeedback(next ? '📌 已固定卡片 (防误触退出)' : '🔓 已解除固定');
+          return next;
+        });
         return;
       }
 
       if (e.key === 'Escape') {
         e.preventDefault();
         if (isPinned) {
-          // Pinned 状态下忽略 Esc 关闭
+          showFeedback('📌 当前处于锁定状态，请按 Ctrl+P 解锁后再退出');
           return;
         }
         handleClose();
@@ -209,6 +236,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             const u = new SpeechSynthesisUtterance(topBlock.original);
             u.lang = 'en-US';
             window.speechSynthesis.speak(u);
+            showFeedback('🔊 正在朗读原文...');
           }
           return;
         }
@@ -228,8 +256,11 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           e.preventDefault();
           const translatedText = overlayResult.blocks.map((b) => b.translated).join('\n');
           navigator.clipboard.writeText(translatedText);
+          showFeedback('📋 全部译文已复制到剪贴板！');
           if (!isPinned) {
-            handleClose();
+            setTimeout(() => {
+              if (mountedRef.current) handleClose();
+            }, 600);
           }
           return;
         }
@@ -238,6 +269,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         if (e.ctrlKey && e.key.toLowerCase() === 'd') {
           e.preventDefault();
           saveTranslationHistory(topBlock.original, topBlock.translated, `${topBlock.sourceTier} (⭐已生词本)`).catch(console.warn);
+          showFeedback('⭐ 已收藏至生词本 (Ctrl+D)');
           return;
         }
       }
@@ -256,6 +288,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     if (e.button === 2) {
       if (!isPinned) {
         handleClose();
+      } else {
+        showFeedback('📌 当前处于固定状态，点击图钉或按 Ctrl+P 解锁');
       }
       return;
     }
@@ -278,12 +312,16 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   }, [phase, isPinned]);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging || !startPos || !containerRef.current) return;
+    if (!containerRef.current) return;
     const r = containerRef.current.getBoundingClientRect();
-    setCurrPos({
-      x: Math.max(0, Math.min(e.clientX - r.left, r.width)),
-      y: Math.max(0, Math.min(e.clientY - r.top, r.height)),
-    });
+    const x = Math.max(0, Math.min(e.clientX - r.left, r.width));
+    const y = Math.max(0, Math.min(e.clientY - r.top, r.height));
+
+    setCursorPos({ x, y });
+
+    if (isDragging && startPos) {
+      setCurrPos({ x, y });
+    }
   }, [isDragging, startPos]);
 
   const onMouseUp = useCallback(async () => {
@@ -361,7 +399,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
       if (result.blocks.length === 0) {
         setEmptyNotice('未在选区内识别到清晰文本，请重新划框框选');
-        setTimeout(() => setEmptyNotice(null), 2500);
+        setTimeout(() => {
+          if (mountedRef.current) setEmptyNotice(null);
+        }, 2500);
         setPhase('selecting');
         setStartPos(null);
         setCurrPos(null);
@@ -398,6 +438,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     e.preventDefault();
     if (!isPinned) {
       handleClose();
+    } else {
+      showFeedback('📌 卡片已锁定 (按 Ctrl+P 解锁)');
     }
   }, [isPinned]);
 
@@ -409,8 +451,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     setOverlayResult(null);
     setStartPos(null);
     setCurrPos(null);
+    setCursorPos(null);
     setIsPinned(false);
     setBannerDismissed(false);
+    setFeedbackToast(null);
     if (isTauri()) {
       try {
         await cmdCloseOverlay();
@@ -476,12 +520,36 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       onMouseUp={onMouseUp}
       onContextMenu={onContextMenu}
     >
-      {/* ── 速赢 1: 选区半透明遮罩 + 聚光灯边框与四角 L 标 ─────────────────────── */}
+      {/* ── 选区阶段全屏半透明遮罩 + 十字准星与聚光灯 ──────────────────────── */}
       {(phase === 'selecting' || isDragging) && (
         <div
           className="absolute inset-0 pointer-events-none"
-          style={{ background: 'rgba(0, 0, 0, 0.35)' }}
+          style={{ background: 'rgba(0, 0, 0, 0.38)' }}
         >
+          {/* 十字准星参考线 (Crosshair Guidelines) */}
+          {cursorPos && !isDragging && (
+            <>
+              <div
+                className="absolute top-0 bottom-0 pointer-events-none border-l border-dashed border-sky-400/35"
+                style={{ left: cursorPos.x }}
+              />
+              <div
+                className="absolute left-0 right-0 pointer-events-none border-t border-dashed border-sky-400/35"
+                style={{ top: cursorPos.y }}
+              />
+              <div
+                className="absolute pointer-events-none text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-slate-900/90 text-sky-300 border border-sky-400/30 shadow-lg backdrop-blur-md"
+                style={{
+                  left: Math.min(cursorPos.x + 12, (typeof window !== 'undefined' ? window.innerWidth : 1920) - 90),
+                  top: Math.min(cursorPos.y + 12, (typeof window !== 'undefined' ? window.innerHeight : 1080) - 30),
+                }}
+              >
+                {Math.round(cursorPos.x)}, {Math.round(cursorPos.y)}
+              </div>
+            </>
+          )}
+
+          {/* 选区矩形框与 L 标尺 */}
           {selBox && selBox.w > 4 && (
             <div
               style={{
@@ -492,34 +560,36 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                 height: selBox.h,
                 pointerEvents: 'none',
                 zIndex: 105,
-                boxShadow: '0 0 0 1px rgba(255,255,255,0.6), 0 4px 24px rgba(0,0,0,0.4)',
+                boxShadow: '0 0 0 1.5px rgba(56,189,248,0.9), 0 0 24px rgba(56,189,248,0.35), inset 0 0 16px rgba(56,189,248,0.12)',
               }}
-              className="border border-white/80 bg-sky-500/10 rounded-[2px]"
+              className="border border-white/90 bg-sky-500/15 rounded-[2px]"
             >
               {/* 四角 8x8 白色 L 形角标 */}
-              <div className="absolute -top-[1px] -left-[1px] w-2 h-2 border-t-2 border-l-2 border-white pointer-events-none" />
-              <div className="absolute -top-[1px] -right-[1px] w-2 h-2 border-t-2 border-r-2 border-white pointer-events-none" />
-              <div className="absolute -bottom-[1px] -left-[1px] w-2 h-2 border-b-2 border-l-2 border-white pointer-events-none" />
-              <div className="absolute -bottom-[1px] -right-[1px] w-2 h-2 border-b-2 border-r-2 border-white pointer-events-none" />
+              <div className="absolute -top-[1px] -left-[1px] w-2.5 h-2.5 border-t-2 border-l-2 border-white pointer-events-none shadow-sm" />
+              <div className="absolute -top-[1px] -right-[1px] w-2.5 h-2.5 border-t-2 border-r-2 border-white pointer-events-none shadow-sm" />
+              <div className="absolute -bottom-[1px] -left-[1px] w-2.5 h-2.5 border-b-2 border-l-2 border-white pointer-events-none shadow-sm" />
+              <div className="absolute -bottom-[1px] -right-[1px] w-2.5 h-2.5 border-b-2 border-r-2 border-white pointer-events-none shadow-sm" />
 
-              <span className="absolute -top-6 left-0 text-[11px] font-mono bg-sky-600/90 text-white px-1.5 py-0.5 rounded shadow">
-                {Math.round(selBox.w)} × {Math.round(selBox.h)}
+              {/* 尺寸指示气泡 */}
+              <span className="absolute -top-7 left-0 text-[11px] font-mono font-bold bg-gradient-to-r from-sky-600 to-blue-600 text-white px-2 py-0.5 rounded shadow-lg border border-white/30 flex items-center gap-1.5 backdrop-blur-md">
+                <span>📐</span>
+                <span>{Math.round(selBox.w)} × {Math.round(selBox.h)} px</span>
               </span>
             </div>
           )}
         </div>
       )}
 
-      {/* ── 顶部控制条 (AI 模型选择 + 速赢 4: 目标语种胶囊 + 速赢 5: Pin 锁定) ────── */}
+      {/* ── 顶部控制条 (AI 模型选择 + 目标语种胶囊 + Pin 锁定) ─────────────────── */}
       {(phase === 'selecting' || phase === 'overlay') && (
         <div className="overlay-toolbar absolute top-6 left-1/2 -translate-x-1/2 z-[220] flex flex-wrap items-center justify-center gap-2.5 pointer-events-auto">
           {/* Guidance Toast */}
-          <div className={`flex items-center gap-2 rounded-full px-4 py-1.5 shadow-2xl text-xs border backdrop-blur-md ${
+          <div className={`flex items-center gap-2 rounded-full px-4 py-1.5 shadow-2xl text-xs border backdrop-blur-md transition-all ${
             isLight
               ? 'bg-white/95 border-slate-300 text-slate-800'
               : 'bg-slate-900/90 border-white/20 text-zinc-100'
           }`}>
-            <span>🐱</span>
+            <span className="text-base">🐱</span>
             <span className="font-bold text-sky-500">猫步划词翻译</span>
             <span className={isLight ? 'text-slate-300' : 'text-zinc-500'}>·</span>
             <span className={`font-medium ${isLight ? 'text-slate-700' : 'text-zinc-200'}`}>按住鼠标左键划框</span>
@@ -539,7 +609,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                   ? 'bg-white hover:bg-slate-50 text-slate-900 border-slate-300'
                   : 'bg-slate-900/90 hover:bg-slate-950 text-white border-white/30'
               }`}
-              title="切换划词翻译 AI 大模型与通道"
+              title="切换划词翻译 AI 大模型与通道 (快捷键: Tab 循环切换)"
             >
               <optgroup label="── 智能自动降级 ──">
                 <option value="auto">🤖 默认多级智能优先级队列 (推荐)</option>
@@ -560,7 +630,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             </select>
           </div>
 
-          {/* 速赢 4: 目标语种切换胶囊 */}
+          {/* 目标语种切换胶囊 */}
           <div className={`flex items-center p-0.5 rounded-full border shadow-2xl backdrop-blur-md ${
             isLight ? 'bg-white/95 border-slate-300' : 'bg-slate-900/90 border-white/20'
           }`}>
@@ -571,23 +641,29 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                 onClick={() => handleLanguageChange(opt.code)}
                 className={`px-2.5 py-1 text-xs font-semibold rounded-full transition cursor-pointer ${
                   targetLang === opt.code
-                    ? 'bg-sky-500 text-white shadow-sm'
+                    ? 'bg-sky-500 text-white shadow-sm font-bold'
                     : (isLight ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100' : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white')
                 }`}
-                title={`目标语言：${opt.label}`}
+                title={`切换目标语言：${opt.label}`}
               >
                 {opt.label}
               </button>
             ))}
           </div>
 
-          {/* 速赢 5: Pin 锁定按钮 */}
+          {/* Pin 锁定按钮 */}
           <button
             type="button"
-            onClick={() => setIsPinned((prev) => !prev)}
-            className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold border shadow-2xl transition cursor-pointer backdrop-blur-md ${
+            onClick={() => {
+              setIsPinned((prev) => {
+                const next = !prev;
+                showFeedback(next ? '📌 已锁定卡片 (防误触退出)' : '🔓 已解除固定');
+                return next;
+              });
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border shadow-2xl transition cursor-pointer backdrop-blur-md ${
               isPinned
-                ? 'bg-amber-500 text-white border-amber-400 shadow-amber-500/30 ring-2 ring-amber-400/40'
+                ? 'bg-amber-500 text-white border-amber-400 shadow-amber-500/40 ring-2 ring-amber-400/60 font-bold'
                 : (isLight
                     ? 'bg-white/95 border-slate-300 text-slate-700 hover:bg-slate-100'
                     : 'bg-slate-900/90 border-white/20 text-zinc-200 hover:bg-slate-800')
@@ -608,7 +684,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                   ? 'bg-white/95 border-slate-300 text-slate-600 hover:bg-red-50 hover:text-red-600'
                   : 'bg-slate-900/90 border-white/20 text-zinc-300 hover:bg-red-950/60 hover:text-red-400'
               }`}
-              title="退出划词 Overlay"
+              title="退出划词 Overlay (快捷键: Esc / F4)"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -618,10 +694,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         </div>
       )}
 
-      {/* ── 速赢 3: 降级感知提示 Banner ────────────────────────────────────────── */}
+      {/* ── 降级感知提示 Banner ────────────────────────────────────────────────── */}
       {isDowngraded && !bannerDismissed && (
-        <div className="absolute top-18 left-1/2 -translate-x-1/2 z-[230] pointer-events-auto flex items-center gap-2 bg-amber-500/20 border border-amber-500/30 text-amber-300 px-3 py-1 rounded-full text-xs shadow-lg backdrop-blur-md animate-fade-in">
-          <span>⚠️ LLM 通道降级，使用 {effectiveEngineName} 翻译</span>
+        <div className="absolute top-18 left-1/2 -translate-x-1/2 z-[230] pointer-events-auto flex items-center gap-2 bg-amber-500/20 border border-amber-500/40 text-amber-200 px-3.5 py-1 rounded-full text-xs shadow-xl backdrop-blur-md animate-fade-in font-medium">
+          <span>⚠️ LLM 通道降级，已自动使用 {effectiveEngineName} 翻译</span>
           <button
             type="button"
             onClick={() => setBannerDismissed(true)}
@@ -635,7 +711,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         </div>
       )}
 
-      {/* ── 速赢 2: CaptureOverlay 翻译中态文字阶段 ────────────────────────────── */}
+      {/* ── CaptureOverlay 翻译中态文字阶段 ─────────────────────────────────── */}
       {phase === 'processing' && (
         <div className="absolute inset-0 flex items-center justify-center z-[120] pointer-events-none">
           <div className={`flex items-center gap-3 border rounded-2xl px-7 py-4 shadow-2xl backdrop-blur-md ${
@@ -649,7 +725,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             </svg>
             <div className="flex items-center gap-2 font-semibold text-sm">
               <span>🐱 正在提取与翻译…</span>
-              <span className="text-xs opacity-80">
+              <span className="text-xs opacity-80 font-mono">
                 ({processingStage === 'ocr'
                   ? '识别中...'
                   : processingStage === 'translate'
@@ -671,6 +747,15 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         </div>
       )}
 
+      {/* ── Feedback Toast (Copy / Pin / Voice actions) ────────────────────────── */}
+      {feedbackToast && (
+        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[250] pointer-events-none animate-bounce">
+          <div className="flex items-center gap-2 bg-slate-900/95 border border-sky-400/50 rounded-full px-4 py-1.5 shadow-2xl text-xs font-semibold text-sky-200 backdrop-blur-md">
+            <span>{feedbackToast}</span>
+          </div>
+        </div>
+      )}
+
       {/* ── In-place translated text blocks ───────────────────────────────────── */}
       {phase === 'overlay' && overlayResult && overlayResult.blocks.map((block, i) => (
         <OverlayBlockCard
@@ -678,7 +763,17 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           block={block}
           onClose={handleClose}
           isPinned={isPinned}
-          onTogglePin={() => setIsPinned((prev) => !prev)}
+          onTogglePin={() => {
+            setIsPinned((prev) => {
+              const next = !prev;
+              showFeedback(next ? '📌 已固定卡片' : '🔓 已解除固定');
+              return next;
+            });
+          }}
+          onCopySingle={(text) => {
+            navigator.clipboard.writeText(text);
+            showFeedback(`📋 已复制: "${text}"`);
+          }}
         />
       ))}
     </div>
@@ -691,6 +786,7 @@ interface OverlayBlockCardProps {
   onClose: (force?: boolean) => void;
   isPinned: boolean;
   onTogglePin: () => void;
+  onCopySingle?: (text: string) => void;
 }
 
 const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
@@ -698,14 +794,23 @@ const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   onClose,
   isPinned,
   onTogglePin,
+  onCopySingle,
 }) => {
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ mx: 0, my: 0, ox: 0, oy: 0 });
   const [pos, setPos] = useState({ x: block.logicalX, y: block.logicalY });
+  const [isCopied, setIsCopied] = useState(false);
 
+  // 动态字号与多行自适应计算
+  const charCount = Math.max(block.translated.length, 1);
+  const computedW = Math.max(block.logicalW + 6, 36);
   const fontSize = Math.max(
     10,
-    Math.min(block.logicalH * 0.65, (block.logicalW / Math.max(block.translated.length, 1)) * 1.5, 22)
+    Math.min(
+      block.logicalH * 0.68,
+      (computedW / charCount) * 1.55,
+      22
+    )
   );
 
   const onMouseDown = (e: React.MouseEvent) => {
@@ -735,26 +840,49 @@ const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
     setDragging(false);
   };
 
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onCopySingle) {
+      onCopySingle(block.translated);
+    } else {
+      navigator.clipboard.writeText(block.translated);
+    }
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 1800);
+  };
+
+  const handleSpeech = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(block.original);
+      u.lang = 'en-US';
+      window.speechSynthesis.speak(u);
+    }
+  };
+
   return (
     <div
-      className="overlay-block group absolute flex items-center justify-center rounded-[3px]"
+      className="overlay-block group absolute flex items-center justify-center rounded-[3px] transition-shadow duration-150"
       style={{
         left: pos.x - 3,
         top: pos.y - 2,
-        width: Math.max(block.logicalW + 6, 36),
+        width: computedW,
         height: Math.max(block.logicalH + 4, 18),
         background: block.bgCss,
         color: block.fgCss,
         fontSize: `${fontSize}px`,
         fontFamily: '"Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif',
         fontWeight: 600,
-        lineHeight: 1.1,
+        lineHeight: 1.15,
         cursor: dragging ? 'grabbing' : 'grab',
         userSelect: 'none',
-        zIndex: 200,
+        zIndex: isPinned ? 210 : 200,
         boxShadow: isPinned
-          ? '0 0 0 1.5px rgba(245, 158, 11, 0.7), 0 4px 14px rgba(0,0,0,0.4)'
-          : '0 2px 8px rgba(0,0,0,0.3)',
+          ? '0 0 0 2px rgba(245, 158, 11, 0.85), 0 6px 18px rgba(245, 158, 11, 0.35)'
+          : dragging
+          ? '0 8px 24px rgba(0,0,0,0.5), 0 0 0 1px rgba(56,189,248,0.7)'
+          : '0 2px 10px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.12)',
         whiteSpace: 'nowrap',
         overflow: 'visible',
         padding: '1px 5px',
@@ -771,7 +899,7 @@ const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         }
       }}
     >
-      {block.translated}
+      <span className="truncate">{block.translated}</span>
 
       {/* 📌 Pin indicator / toggle button on card top-right (速赢 5) */}
       <button
@@ -789,6 +917,29 @@ const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
       >
         📌
       </button>
+
+      {/* 悬停微型操作工具栏 (复制 / 朗读 / 词库小标) */}
+      <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 z-30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 bg-slate-950/90 border border-white/20 rounded-full px-2 py-0.5 shadow-xl text-[10px] text-zinc-300 pointer-events-auto backdrop-blur-md">
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="hover:text-sky-300 p-0.5 transition cursor-pointer"
+          title="复制此条译文"
+        >
+          {isCopied ? '✓' : '📋'}
+        </button>
+        <button
+          type="button"
+          onClick={handleSpeech}
+          className="hover:text-sky-300 p-0.5 transition cursor-pointer"
+          title="朗读英文发音 (Space)"
+        >
+          🔊
+        </button>
+        <span className="text-[9px] font-mono text-zinc-400 opacity-80 border-l border-white/20 pl-1">
+          {block.sourceTier || '词库'}
+        </span>
+      </div>
     </div>
   );
 };
