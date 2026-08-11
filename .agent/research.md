@@ -1,6 +1,6 @@
-# Product Evolution Research Report — Round 15: 01/09 UI/UX
+# Product Evolution Research Report — Round 16: 01/09 UI/UX
 
-> **演进轮次**：Round 15 (Product Evolution Mode)  
+> **演进轮次**：Round 16 (Product Evolution Mode)  
 > **当前轮盘阶段**：01/09 UI/UX 视觉与交互极致打磨 (Visual & Interaction Refinement)  
 > **研究对象**：CG AI Screenshot Translator (`app_v2`)  
 > **报告生成时间**：2026-08-12  
@@ -16,7 +16,7 @@
 - **核心技术栈基准**：
   - **宿主/系统层**：Tauri 2.0 (Rust 2021) + GDI/BitBlt 选区毫秒级截取 + 系统托盘常驻与全局透明置顶遮罩窗口。
   - **推理引擎层**：RapidOCR ONNX (PP-OCRv4 DBNet + SVTR 单例常驻架构，CLAHE 暗色 UI 自适应局部直方图增强)。
-  - **前端视图层**：React 19 + TypeScript + Tailwind CSS 4 + Lucide Icons + Zustand 状态管理与数据持久化。
+  - **前端视图层**：React 19 + TypeScript 5.8 + Tailwind CSS 4 + Lucide Icons + Zustand 状态管理与数据持久化。
 - **核心健康度指标矩阵 (Core Health Matrix)**：
   - 端到端划词翻译延迟 (E2E Latency)：~185ms (基线目标 <250ms，评级：🟢 EXCELLENT)
   - PP-OCRv4 区域推理耗时：~65ms (基线目标 <120ms，评级：🟢 EXCELLENT)
@@ -37,7 +37,7 @@
 | **划词覆层** | `src/components/Overlay/CaptureOverlay.tsx` | 1. `rgba(0,0,0,0.38)` 全屏半透明暗化遮罩与动态虚线十字准星<br>2. 实时 `(X, Y)` 坐标 HUD 与 `📐 W×H px` 选区尺寸气泡<br>3. 阶段化文字过渡 (`识别中... -> 翻译中... -> 渲染中...`)<br>4. Pin 锁定 (`Ctrl+P`)、单条复制、TTS 语音 (`Space`)、多语种胶囊 (`1~6`)、AI 模型循环 (`Tab`) | 1. 目前仅支持原位覆盖形态，在密集滑块与材质节点场景容易阻挡下方控件视线与数值<br>2. 密集多行文本块缺乏纵向 AABB 避让算法与安全边界夹取保护<br>3. 缺少键盘快捷键可视化速查面板 (`?` / `F1`)，高阶功能可发现性低 |
 | **主翻译器** | `src/components/MainWindow/DualPaneTranslator.tsx` | 1. 左右双栏实时防抖翻译 (350ms Debounce)<br>2. 源语言/目标语言快速互换与语种下拉选择<br>3. 多翻译引擎横向滑动 Tab 栏与并排对比卡片<br>4. 复制反馈、语音朗读与历史自动持久化 | 1. 命中专业 CG 词库的名词缺少行内视觉着重强调与悬浮参数释义<br>2. 多引擎 Tab 栏两侧缺少滚动溢出渐变遮罩与平滑触控回弹 |
 | **标题栏** | `src/components/TitleBar.tsx` | 1. 原生 `startDragging()` 窗口拖拽手柄<br>2. 最小化、最大化/还原、关闭三键交互<br>3. 品牌 Logo 与版本号徽标 | 1. 窗口控制按钮触控感应区偏小 (<36px)，未达无障碍触控热区标准<br>2. 关闭按钮缺乏柔和渐变过渡与 `:active` 按压微缩微反馈 |
-| **侧边栏** | `src/components/Sidebar/Sidebar.tsx` | 1. 模块化工作台与工具分组导航<br>2. 选中项微型发光指示条与渐变图标底座<br>3. 底部“划词翻译”CTA 按钮与 RapidOCR 状态指示 | 1. 导航项与快捷按钮缺少 Hover 快捷键 Tooltip 提示<br>2. 缺少动态键盘焦点轮廓线 (`focus-visible`) |
+| **侧边栏** | `src/components/Sidebar/Sidebar.tsx` | 1. 模块化工作台与工具分组导航<br>2. 选中项微型发光指示条与渐变图标底座<br>3. 底部“划词翻译”CTA 按钮与 RapidOCR 状态指示 | 1. 导航项与快捷按钮缺少 Hover 快捷键 Tooltip 提示<br>2. 缺少动态键盘焦点轮廓线 (`focus-visible:ring-2`) |
 | **设计系统** | `src/index.css` | 1. Mica/Acrylic 毛玻璃基础类 (`.glass-panel`, `.glass-card`)<br>2. 自定义极细滚动条 (`scrollbar-thin`)<br>3. 基础微动画 (`page-in`, `fade-in`) | 1. 缺少琥珀金 Pin 锁定呼吸光晕动画 (`.pulse-glow-amber`)<br>2. 缺少 Tooltip 弹性进场动效 (`.tooltip-pop`)<br>3. 缺少 CG 术语下划线与徽章样式 (`.cg-term-highlight`, `.cg-term-badge`)<br>4. 缺少无障碍触控热区类 (`.touch-hit-box`) |
 
 ---
@@ -51,7 +51,7 @@
 2. **Vitest 测试断言层级失效 (`m4_overlay_sampler.test.tsx:83`)**：
    - **错误信息**：`AssertionError: expected 'truncate' to contain 'overlay-block'`。
    - **根因**：`findByText('BSDF 材质')` 获取到了内部包裹文本的 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 导致断言失败。
-   - **修复对策**：在测试中使用 `card.closest('.overlay-block')` 或在根节点补充对应类名。
+   - **修复对策**：在测试中使用 `(await screen.findByText('BSDF 材质')).closest('.overlay-block')` 或在根节点补充对应类名。
 3. **Mock 环境数据防御缺失 (`tauri.ts:739`)**：
    - **警告信息**：`History save failed: TypeError: current.find is not a function`。
    - **根因**：`saveTranslationHistory` 假定 `cmdGetHistory()` 必返回数组，但在单元测试 mock 环境下可能返回 undefined 或非数组。
@@ -75,7 +75,7 @@
 
 ### 2.2 2026 数字艺术与 3D/CG 专业工具 UI/UX 核心原则
 
-1. **Non-Destructive Context Preservation (非破坏性上下文保留)**：
+1. **Non-Destructive Context Preservation (非破坏性上下文保留 / 流式心流保护)**：
    - 3D 创作者在调整材质节点（如 Blender Principled BSDF）或着色器属性（Substance Roughness）时，需要“一边看着原始英文属性，一边调节滑块数值”。浮动气泡模式 (Floating Tooltip) 保留了原始 UI 视线，而原位覆盖模式 (In-place Cover) 适合大段说明文本，两者支持通过快捷键 `M` 即时切换。
 2. **Progressive Disclosure & Keyboard Discoverability (渐进式暴露与按键可发现性)**：
    - 极简日常界面保持零视觉噪音；当用户需要了解快捷操作时，按下 `?` 或 `F1` 即可呼出半透明 Acrylic 速查面板，清晰归类选区、卡片、模式与系统快捷键。
@@ -166,8 +166,8 @@
   1. `App.tsx`：修正 `settings.hotkeyEnabled` 为 `settings.captureHotkeyEnabled`，解决 `tsc` 编译报错。
   2. `TitleBar.tsx`：将最小化、最大化、关闭按钮 Hit Box 扩大至 36x36px；关闭按钮增加柔和红色背景渐变过渡，支持 `:active` 按压微缩（`scale(0.95)`）微动效；Logo 徽标增加 Tooltip 说明。
   3. `Sidebar.tsx`：为每个导航 Tab 与底部“划词翻译”按钮增加 Hover 快捷键气泡提示；Active 状态增加动态平滑呼吸光束与清晰聚焦轮廓线 (`focus-visible:ring-2`)。
-  4. `tauri.ts`：在 `saveTranslationHistory` 等方法中增加数组安全守卫，杜绝 mock 环境报错。
-  5. `m4_overlay_sampler.test.tsx`：修正卡片元素选择器与类名断言层级，确保测试套件 100% 绿灯。
+  4. `tauri.ts`：在 `saveTranslationHistory` 等方法中增加数组安全守卫（`const list = Array.isArray(current) ? current : [];`），杜绝 mock 环境报错。
+  5. `m4_overlay_sampler.test.tsx`：修正卡片元素选择器与类名断言层级（`card.closest('.overlay-block')`），确保测试套件 100% 绿灯。
 
 ---
 
