@@ -1,6 +1,6 @@
-# Product Evolution Research Report — Round 4: 01/09 UI/UX
+# Product Evolution Research Report — Round 5: 01/09 UI/UX
 
-> **演进轮次**：Round 4  
+> **演进轮次**：Round 5  
 > **当前阶段**：01/09 UI/UX 视觉与交互极致打磨 (Visual & Interaction Refinement)  
 > **研究对象**：CG AI Screenshot Translator (`app_v2`)  
 > **报告生成时间**：2026-08-11  
@@ -10,17 +10,23 @@
 
 ## 1. 当前状态分析 (Current State Analysis)
 
-### 1.1 产品使命与核心价值
-**CG AI Screenshot Translator (`app_v2`)** 是专为数字艺术与游戏开发工程师（Blender / Substance 3D / Unity / Unreal Engine / Maya）打造的无感屏幕划词与截图翻译工具。
-- **使命定位**：三维创作界面“零门槛、零延迟、不打断心流”的本地化翻译体验。
-- **技术栈**：Tauri 2.0 (Rust) + React 19 + TypeScript + Tailwind CSS 4 + RapidOCR ONNX (PP-OCRv4) + 多级容灾翻译管道。
-- **性能基线指标**：端到端 E2E 响应 ~185ms (基线 < 250ms)，ONNX 区域推理 ~65ms，待机内存 ~118MB，冷启动 ~151.5ms，单文件独立便携体积 ~39.8MB，各项指标表现优异。
+### 1.1 产品使命与核心价值定位
+**CG AI Screenshot Translator (`app_v2`)** 是一款专为 3D 概念设计师、建模师、渲染师、游戏引擎开发者与技术美术 (TA) 打造的轻量级无感屏幕划词与截图翻译工具。
+- **使命宣言**：“让 CG 软件（Blender / Substance 3D / Unity / Unreal Engine / Maya）界面零门槛本地化，鼠标框选即翻译，消除语言障碍，释放数字创作生产力。”
+- **技术栈**：Tauri 2.0 (Rust) + React 19 + TypeScript + Tailwind CSS 4 + RapidOCR ONNX (PP-OCRv4) + Zustand + 多级容灾翻译管道。
+- **当前核心健康度指标**：
+  - 端到端 E2E 响应：~185ms (基线指标 < 250ms)
+  - PP-OCRv4 区域推理耗时：~65ms (基线指标 < 120ms)
+  - 待机内存：~118MB，峰值内存：~185MB (基线 < 300MB)
+  - 应用程序冷启动耗时：~151.5ms (基线 < 500ms)
+  - 单文件便携 EXE 体积：~39.8MB (基线 < 45MB)
+  - Rust Clippy 编译：0 告警，纯净通过
 
 ### 1.2 现有 UI/UX 架构与已落地能力 (Current Codebase Audit)
 经过对 `app_v2/src/` 与 `.agent/` 的深度代码审查与交互架构梳理，当前产品已具备以下 UI/UX 基础：
-1. **划词选区遮罩与操控层 (`CaptureOverlay.tsx`)**：
+1. **双层混合覆盖浮层架构 (`CaptureOverlay.tsx`)**：
    - 全屏 `rgba(0, 0, 0, 0.38)` 半透明遮罩，动态跟随光标的细虚线十字准星与 `(X, Y)` 坐标 HUD。
-   - 选区边框采用天蓝高亮色、4 角 8x8 白色 L 型角标与 `📐 W × H px` 尺寸指示气泡。
+   - 选区框天蓝高亮色、4 角 8x8 白色 L 型角标与 `📐 W × H px` 尺寸指示气泡。
 2. **原位覆盖卡片与微交互 (`OverlayBlockCard`)**：
    - 4px 外环中值背景色采样与动态自适应字号（10px~22px），支持长短句防截断计算。
    - 悬停微型工具栏：📋 单项复制（附带 `✓` 动画）、🔊 英文语音朗读（`Space` 触发）、来源词库标牌展示。
@@ -34,28 +40,31 @@
    - 支持多源翻译引擎横向滑动 Tab 栏（带左右渐变遮罩指示与弹性滚动）。
    - 自定义标题栏原生拖拽与无边框窗口控制。
 
-### 1.3 面向 3D/CG 专业场景的深层体验痛点 (Critical UX Gaps)
-结合数字艺术家的真实工作流，发现目前仍存在以下核心交互与视觉痛点待系统化解决：
-1. **单一覆盖模式导致的 3D 控件遮挡痛点 (Occlusion Issue)**：
-   - 现状：当前仅有“原位覆盖 (Cover)”模式。
-   - 痛点：在 Blender 材质着色器（Shader Editor）或 Substance 图层属性面板中，卡片直接覆盖原文字会挡住紧邻的数值滑块、颜色吸管或复选框，导致用户无法一边看翻译一边调参数。
+### 1.3 代码与测试全景审查 (Codebase & Test Health Audit)
+在对代码库运行静态检查和自动化测试时，发现了以下需在 UI/UX 阶段一并收敛和解决的关键工程与体验缺陷：
+1. **TypeScript 编译类型错误**：
+   - 在 [app_v2/src/App.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/App.tsx#L80) 第 80 行中使用了 `settings.hotkeyEnabled`，而类型定义 [app_v2/src/services/types.ts](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/services/types.ts#L175) 中实际字段为 `captureHotkeyEnabled`，导致 `npx tsc --noEmit` 失败。
+2. **测试断言与 DOM 结构不匹配**：
+   - 在 [app_v2/src/tests/m4_overlay_sampler.test.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/tests/m4_overlay_sampler.test.tsx#L83) 中，测试使用 `screen.findByText('BSDF 材质')` 抓取到了 `OverlayBlockCard` 内部嵌套的 `<span className="truncate">`，导致 `expect(card.className).toContain('overlay-block')` 失败。`OverlayBlockCard` 的结构需保持整洁，或者在卡片容器上直接提供文本内容，确保样式与可测性统一。
+3. **历史记录保存的非空防护**：
+   - 在 [app_v2/src/services/tauri.ts](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/services/tauri.ts#L739) 中，`saveTranslationHistory` 假设 `cmdGetHistory()` 一定返回数组，但在部分 Mock/IPC 异常时可能出现 `TypeError: current.find is not a function`，需要加入 `Array.isArray(current)` 容错。
+4. **Round 4 规划资产未落盘**：
+   - 快捷键可视化速查面板 (`CheatSheetModal.tsx`) 与屏幕空间 AABB 碰撞避让算法 (`overlayLayout.ts`) 在上一轮完成了详细设计，但尚未实际合并入 `src/`，本轮应正式作为高优先级组件交付。
+
+### 1.4 面向 3D/CG 专业场景的深层交互痛点 (Critical UX Gaps)
+1. **单一覆盖模式导致 3D 控件遮挡 (Occlusion Issue)**：
+   - 痛点：在 Blender 节点编辑器（Shader Editor）或 Substance 属性面板中，卡片直接覆盖原文字会遮挡紧邻的数值滑块、颜色吸管或复选框，破坏创作者边对照边调参的工作流。
    - 需求：亟需实现 **“悬浮气泡 (Floating Tooltip)”与“原位覆盖 (In-place Cover)”双模式一键切换 (`M` 键)**。
-2. **快捷键系统缺少 Visual CheatSheet 可视化速查面板 (Discoverability Gap)**：
-   - 现状：系统内置了 10+ 项高效快捷键（`F4`, `Ctrl+P`, `Space`, `Tab`, `M`, `Enter`, `Ctrl+D`, `Shift+Drag`, `Esc`, `1~6`），但用户没有任何可视化速查途径。
-   - 痛点：新用户无法感知快捷键，导致操作效率大打折扣。
+2. **快捷键系统缺少 Visual CheatSheet 可视化速查 (Discoverability Gap)**：
+   - 痛点：系统内置了丰富快捷键（`F4`, `Ctrl+P`, `Space`, `Tab`, `M`, `Enter`, `Ctrl+D`, `Shift+Drag`, `Esc`, `1~6`），但用户缺少直观速查渠道。
    - 需求：按下 `?` 或 `F1` 或点击顶部指引即可呼出半透明 Acrylic 快捷键速查模态框。
 3. **密集参数多卡片 AABB 碰撞挤压与重叠 (Collision & Layout Overlap)**：
-   - 现状：当框选多行密集文本（如属性列表）时，若译文行高或卡片内边距稍大，卡片在纵向上容易发生搭界、重叠或错位。
+   - 痛点：框选多行密集属性列表时，卡片在纵向上容易重叠错位。
    - 需求：引入轻量级 AABB 碰撞检测与避让重排算法 (`overlayLayout.ts`)，实现动态垂直微调与屏幕边界智能防溢出。
-4. **CG 专属术语命中缺乏视觉增强与悬浮释义层 (Terminology Glossary Tooltip)**：
-   - 现状：命中 Blender / Substance 专业词库的词条仅展示小标，缺乏专业感。
-   - 需求：为专业 CG 词条添加天蓝/琥珀虚线下划线与 `🧊 CG 术语` 标牌，Hover 弹出词条标准定名、行业释义与 3D 软件应用提示。
-5. **多区域连续划词缺少视觉留痕 (Multi-Region Selection UI)**：
-   - 现状：每次划框会重置前一次选区。
-   - 需求：支持按住 `Shift` 连续划选多个离散按钮/参数，选区标注 `①`, `②`, `③` 序号并在松开后合并批量翻译展示。
-6. **视觉层次、设计令牌与无障碍触控细节 (Design Tokens & WCAG AA)**：
-   - 顶部 HUD 与微型工具栏部分图标按钮缺少扩展触控感应区（Hit Box 应 ≥ 36px~44px）。
-   - Pin 锁定卡片需更具辨识度的琥珀色呼吸发光光晕（`.pulse-glow-amber`），保证在深黑、浅灰等各种 CG 软件视口背景下均符合 WCAG 4.5:1 AA 对比度标准。
+4. **CG 专属术语命中缺乏视觉增强与悬浮释义层 (Glossary Tooltip)**：
+   - 需求：为命中 CG 专业词库的名词添加天蓝虚线下划线与 `🧊 CG` 标牌，Hover 弹出词条标准定名、行业释义与 3D 软件应用提示。
+5. **无障碍触控细节与微交互反馈 (Design Tokens & WCAG AA)**：
+   - 顶部 HUD 与微型工具栏部分小图标按钮触控响应区需扩展至 ≥ 36px~44px，提供清晰的 `:active` 按压反馈与 Pin 锁定琥珀金色微光呼吸光晕（`.pulse-glow-amber`）。
 
 ---
 
@@ -77,26 +86,28 @@
 2. **Instant Discoverability (高可发现性与零学习成本)**：
    - 优秀工具应具备“渐进式暴露”特性——日常使用极简无感，当用户需要帮助时，按下 `?` 或 `F1` 即可立即获得清晰的快捷键全貌。
 3. **Adaptive Contrast & Micro-Haptics (自适应对比度与微动效)**：
-   - 避免使用刺眼的纯黑 (#000) 或高饱和纯色，采用多阶深灰结合 1px 细微光边框与半透明毛玻璃，在复杂三维视口（Viewport）上均能保证文字清晰易读。
+   - 避免使用刺眼的纯黑 (#000) 或高饱和纯色，采用多阶深灰结合 1px 细微光边框与半透明毛玻璃，在复杂三维视口（Viewport）上均能保证文字清晰易读（符合 WCAG AA 4.5:1 对比度）。
 
 ---
 
 ## 3. 具体改进方案（可执行，含文件路径）
 
-### 方案 1: 双模式视图切换——原位覆盖 (Cover) vs 悬浮气泡 (Tooltip)
-- **目标**：解决密集 3D 控件遮挡问题，支持用户自由选择“原位覆盖原词”或“在原词上方弹出带箭头的悬浮气泡”，实现原文与译文双语对照。
+### 方案 1: 双模式视图切换——原位覆盖 (Cover) vs 悬浮气泡 (Tooltip) 与 AABB 布局避让
+- **目标**：解决密集 3D 控件遮挡问题，支持用户自由选择“原位覆盖原词”或“在原词上方弹出带箭头的悬浮气泡”，实现原文与译文双语对照，同时通过 AABB 算法避免密集卡片上下重叠。
 - **涉及文件路径**：
+  - `app_v2/src/services/overlayLayout.ts` *(新建布局避让算法库)*
+  - `app_v2/src/tests/overlay_layout.test.ts` *(配套单元测试)*
   - [app_v2/src/services/types.ts](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/services/types.ts)
   - [app_v2/src/stores/useSettingsStore.ts](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/stores/useSettingsStore.ts)
   - [app_v2/src/components/Overlay/CaptureOverlay.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/components/Overlay/CaptureOverlay.tsx)
   - [app_v2/src/index.css](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/index.css)
 - **可执行改进细节**：
-  1. 在 `AppSettings` 中增加 `overlayViewMode?: 'cover' | 'tooltip'` 字段，默认 `'cover'`；在 `useSettingsStore` 中提供 `setOverlayViewMode` 方法并持久化。
-  2. 在 `CaptureOverlay.tsx` 顶部 HUD 添加“👁️ 原位 / 💬 气泡”切换胶囊按钮，并绑定全局快捷键 `M` 实时切换。
-  3. 当处于 `'tooltip'` 模式时：
-     - 卡片显示在目标选区上方 `y - cardHeight - 8px` 处；若靠近屏幕顶部边缘，自动下翻至 `y + block.logicalH + 8px`。
-     - 卡片底端（或顶端）渲染向下指向的半透明小三角形指针 (`border-t-[6px] border-t-slate-900/90`)。
-     - 卡片内展示上下两行结构：上方展示小字浅灰英文原文，下方展示大字高亮中文译文。
+  1. 在 `AppSettings` 中新增 `overlayViewMode?: 'cover' | 'tooltip'` 与 `enableAabbAvoidance?: boolean` 字段。
+  2. 在 `useSettingsStore` 中提供 `setOverlayViewMode` 与 `setEnableAabbAvoidance` 方法并持久化。
+  3. 在 `overlayLayout.ts` 中实现：
+     - `resolveAABBCollisions(blocks, containerW, containerH, margin)`：按 Y 轴排序检测相交矩形（`overlapY > 2px` 且 `overlapX > 4px`），纵向推移微调并进行屏幕边缘安全夹取。
+     - `calculateTooltipPosition(block, containerW, containerH, tooltipW, tooltipH)`：默认在上方 `y - tooltipH - 8` 显示气泡，顶部越界时自动翻转到底部 `y + block.logicalH + 8`，横向在 `[8, containerW - tooltipW - 8]` Clamp 夹取。
+  4. 在 `CaptureOverlay.tsx` 顶部 HUD 增加模式切换胶囊，并支持全局按键 `M` 快捷切换。
 
 ---
 
@@ -108,30 +119,28 @@
   - [app_v2/src/components/Overlay/CaptureOverlay.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/components/Overlay/CaptureOverlay.tsx)
   - [app_v2/src/App.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/App.tsx)
 - **可执行改进细节**：
-  1. 创建 `CheatSheetModal.tsx`，采用深色毛玻璃卡片（`backdrop-blur-xl`, `bg-slate-950/85`, `border-white/20`, `shadow-2xl`）。
+  1. 创建 `CheatSheetModal.tsx`，采用深色毛玻璃卡片（`backdrop-blur-xl`, `bg-slate-950/85`, `border-white/20`, `shadow-2xl`, `rounded-2xl`）。
   2. 结构化展示四大类快捷键：
      - **📐 划框与选区**：`拖拽` 矩形划词 | `Shift+拖拽` 多选区划词 | `Esc / 右键` 退出选区 | `F4` 划词开关
      - **🃏 卡片与操作**：`Ctrl+P` Pin固定锁定 | `Enter / Ctrl+C` 复制全部译文 | `Space` 语音朗读 | `Ctrl+D` 收藏至生词本
      - **⚙️ 模式与通道**：`M` 原位覆盖/悬浮气泡切换 | `Tab` 循环切换AI模型 | `1~6` 快捷切换目标语种
      - **💡 帮助与指引**：`? / F1` 打开/关闭本速查面板
   3. 按键统一使用专属 `<kbd>` 标签样式（微阴影、圆角边框、等宽字体）。
-  4. 在 `CaptureOverlay` 顶部 HUD 增加 `? 快捷键` 帮助按钮，同时全局监听 `?` / `F1` 快捷唤起。
+  4. 监听 `Esc` / `?` / `F1` 触发 `onClose`，符合 WCAG 4.5:1 AA 对比度标准。
 
 ---
 
-### 方案 3: 屏幕空间 AABB 碰撞避让与智能布局算法
-- **目标**：解决多行密集文本卡片重叠挤压问题，确保卡片排列整齐且不遮挡相邻文本行。
+### 方案 3: 卡片 DOM 结构修复与类型/测试健壮性加固
+- **目标**：修复 `App.tsx` 中的类型不匹配与 `m4_overlay_sampler.test.tsx` 测试失败，确保工程 100% 绿色通过。
 - **涉及文件路径**：
-  - `app_v2/src/services/overlayLayout.ts` *(新建布局避让算法库)*
-  - `app_v2/src/tests/overlay_layout.test.ts` *(配套测试)*
+  - [app_v2/src/App.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/App.tsx)
   - [app_v2/src/components/Overlay/CaptureOverlay.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/components/Overlay/CaptureOverlay.tsx)
+  - [app_v2/src/services/tauri.ts](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/services/tauri.ts)
+  - [app_v2/src/tests/m4_overlay_sampler.test.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/tests/m4_overlay_sampler.test.tsx)
 - **可执行改进细节**：
-  1. 在 `overlayLayout.ts` 中实现 `resolveAABBCollisions(blocks: OverlayBlock[], containerW: number, containerH: number, margin?: number): OverlayBlock[]`：
-     - 算法按 Y 坐标自上而下排序，逐一检测矩形 AABB 碰撞（`overlapY > 2px` 且 `overlapX > 4px`）。
-     - 发生重叠时向下微调下层卡片 Y 坐标 (`y = prevBlock.y + prevBlock.h + margin`)。
-     - 若底部超出容器高度，反向执行向上避让压缩并夹取在安全可见区域内。
-  2. 实现 `calculateTooltipPosition(block, containerW, containerH, tooltipW, tooltipH)`：
-     - 自动计算悬浮气泡的锚定坐标，X 轴自动在 `[8, containerW - tooltipW - 8]` 范围内做夹取（Clamp），防止横向溢出屏幕。
+  1. 在 `App.tsx` 中将 `settings.hotkeyEnabled` 修正为 `settings.captureHotkeyEnabled ?? (settings as any).hotkeyEnabled ?? true`，消解 TypeScript 编译错误。
+  2. 在 `OverlayBlockCard` 中优化 DOM 层次结构，使 `.overlay-block` 容器能被测试和屏幕阅读器准确识别。
+  3. 在 `tauri.ts` 的 `saveTranslationHistory` 中，对 `cmdGetHistory()` 返回值加入 `Array.isArray(current) ? current : []` 防御，避免未处理异常。
 
 ---
 
@@ -142,36 +151,21 @@
   - [app_v2/src/components/MainWindow/DualPaneTranslator.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/components/MainWindow/DualPaneTranslator.tsx)
   - [app_v2/src/index.css](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/index.css)
 - **可执行改进细节**：
-  1. 在 `OverlayBlockCard` 中检查 `block.sourceTier`：若包含 `Preset`、`CG 词库`、`Blender`、`Substance` 等来源，在译文下方渲染精致的天蓝色/琥珀色虚线下划线（`.cg-term-highlight`）以及 `🧊 CG` 徽标。
-  2. 鼠标悬停在 `🧊 CG` 徽标或术语上时，弹出轻量释义气泡，展示：
-     - 英文术语名（如 `Roughness`）
-     - 标准中文定名（如 `粗糙度`）
-     - 3D 软件应用提示（如 `控制材质表面微观不平整度，数值越大高光越散射`）
-  3. 在 `DualPaneTranslator.tsx` 中同样为命中 CG 词库的翻译卡片添加高亮与专用释义卡片。
+  1. 在 `OverlayBlockCard` 与 `DualPaneTranslator` 中检查 `sourceTier`：命中 `Preset` / `Blender` / `Substance` 等专业词典时，渲染精致的天蓝色/琥珀色虚线下划线（`.cg-term-highlight`）以及 `🧊 CG` 徽标。
+  2. 鼠标悬停弹出轻量释义气泡，展示英文原词、中文标准定名与 3D 软件应用提示（如 `Roughness -> 粗糙度：控制材质表面微观不平整度，数值越大高光越散射`）。
 
 ---
 
-### 方案 5: 多区域连续划词 UI 留痕与批处理 (Multi-Region Selection)
-- **目标**：支持按住 `Shift` 键连续划选多个离散按钮或参数框，保留带有数字标牌的选区框并合并翻译。
+### 方案 5: TitleBar、Sidebar 与 Overlay 触控热区扩展与微交互打磨
+- **目标**：对齐 Fluent 2.0 规范，增强交互反馈与无障碍触控体验。
 - **涉及文件路径**：
-  - [app_v2/src/components/Overlay/CaptureOverlay.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/components/Overlay/CaptureOverlay.tsx)
-- **可执行改进细节**：
-  1. 在 `CaptureOverlay` 中维护 `extraSelections: Array<{ id: number; x: number; y: number; w: number; h: number }>` 状态。
-  2. 当 `e.shiftKey` 为 true 时，鼠标松开将当前选区存入 `extraSelections`，并在选区左上角渲染 `①`, `②`, `③` 编号圆形标牌。
-  3. 在不按 `Shift` 划选或按下 `Enter` 时，触发多区域合并 OCR 请求与结果呈现。
-
----
-
-### 方案 6: 设计系统令牌规范化、触控区增强与 Pin 呼吸光晕
-- **目标**：全面对齐 WCAG 4.5:1 AA 对比度标准与 Fluent Design 2.0 规范。
-- **涉及文件路径**：
-  - [app_v2/src/index.css](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/index.css)
   - [app_v2/src/components/TitleBar.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/components/TitleBar.tsx)
   - [app_v2/src/components/Sidebar/Sidebar.tsx](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/components/Sidebar/Sidebar.tsx)
+  - [app_v2/src/index.css](file:///C:/Users/20269/Desktop/%E9%A1%B9%E7%9B%AE%E6%96%87%E4%BB%B6%E5%A4%B9/%E7%BF%BB%E8%AF%91%E8%BD%AF%E4%BB%B6/app_v2/src/index.css)
 - **可执行改进细节**：
-  1. 在 `index.css` 中添加 `.pulse-glow-amber` 呼吸动画类与 `@keyframes pulse-glow-amber`，为 `isPinned` 卡片赋予高辨识度外发光。
-  2. 增加 `.tooltip-pop` 弹性平滑进场动画（`cubic-bezier(0.16, 1, 0.3, 1)`）。
-  3. 将 `TitleBar.tsx`、`Sidebar.tsx` 与 `CaptureOverlay.tsx` 中小图标按钮的点击感应区（Hit Box）扩展至最小 36px~44px，增加 `:active` 微缩微动效。
+  1. `TitleBar.tsx`：将最小化、最大化、关闭按钮的触控响应区（Hit Box）扩展至 36x36px，关闭按钮增加柔和红色背景过渡与 `:active` 按压微缩（`scale(0.95)`）。
+  2. `Sidebar.tsx`：为每个导航项与划词按钮添加 Hover 快捷键气泡提示（如“快捷划词 (F4)”），Active 项增加平滑发光指示条与呼吸背景。
+  3. `index.css`：增加 `@keyframes pulse-glow-amber`（Pin 锁定微光光晕）与 `@keyframes tooltip-pop`（平滑进场弹性动效）。
 
 ---
 
@@ -194,9 +188,9 @@
 | **高 DPI / 多显示器混用导致 Tooltip 气泡坐标偏移** | 中 (Medium) | 4K 主屏 (150% DPI) 与 1080P 副屏混用 | 统一采用 `scaleFactor`（`window.devicePixelRatio`）进行逻辑像素与物理像素的双向精准换算。 |
 | **密集卡片过多时的 DOM 节点渲染压力** | 低 (Low) | 单次框选了包含 40+ 行文本的巨型代码/表格区域 | 对识别结果设置阈值保护（超过 30 块自动聚合提示或提供紧凑滚动容器），确保 60 FPS 渲染帧率。 |
 | **全局快捷键 `?` / `M` 与文本输入框冲突** | 低 (Low) | 用户在主界面的搜索框或输入框中键入字母 | 在所有全局按键监听器头部统一校验 `(e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA'`。 |
+| **测试环境 Mock IPC 返回值类型不一致** | 低 (Low) | `npm test` 运行时 `cmdGetHistory` 返回 undefined 或非数组对象 | 在前端调用链中严格进行 `Array.isArray()` 前置类型守卫与默认空数组兜底。 |
 
 ---
 
 ## 6. 总结与后续交付展望 (Conclusion)
-
-本研究报告针对 Round 4 (01/09 UI/UX 阶段) 全面梳理了产品现状与深层痛点，确立了以 **原位/气泡双模式视图切换、Visual CheatSheet 快捷键速查面板、AABB 碰撞避让引擎、CG 专业术语高亮释义、多选区连续划词以及 WCAG 触控细节** 为核心的可执行演进方案。方案中所有文件路径明确、技术选型轻量、风险防护周密，可无缝输入给下一阶段规划与并行开发 Agent。
+本研究报告为 Product Evolution Mode 第 5 轮（阶段：01/09 UI/UX）提供了详尽的现状分析、竞品对标、架构与样式改进方案、技术选型及风险规避策略。下一阶段 Planner Agent 可直接依据本报告的 5 大可执行方案生成具体的拆解任务并分发给 Dev Agents 实施。

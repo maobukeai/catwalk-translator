@@ -135,7 +135,7 @@ RPROMPT
 )
 
   RESEARCH_OUT=$(agy -p "$RESEARCH_PROMPT" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 8m 2>&1)
-  R_STATUS=$(echo "$RESEARCH_OUT" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status','ERROR'))" 2>/dev/null)
+  R_STATUS=$(echo "$RESEARCH_OUT" | python -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status','ERROR'))" 2>/dev/null)
   if [ "$R_STATUS" = "SUCCESS" ]; then
     log "Phase 0 完成"
   else
@@ -180,12 +180,18 @@ prompt: <完整开发指令>
 
 如果当前阶段无待办或 research.md 建议推进到下一阶段，写 N: 0 并在末尾写 ADVANCE_STAGE=true。
 
+**⚠️ 硬性要求（否则主控脚本会因 bash 展开失败）：**
+- prompt 字段中**禁止**使用反引号 ` （用尖括号或方括号代替，比如 [git commit]）
+- prompt 字段中**禁止**使用 $ 符号
+- prompt 字段中**禁止**出现未闭合的引号
+- 所有 shell 命令写在方括号内，如 [cargo build]、[npm test]，不要加引号或反引号
+
 完成后只输出 DONE，不写代码。
 PPROMPT
 )
 
   PLANNER_OUT=$(agy -p "$PLANNER_PROMPT" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 5m 2>&1)
-  P_STATUS=$(echo "$PLANNER_OUT" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status','ERROR'))" 2>/dev/null)
+  P_STATUS=$(echo "$PLANNER_OUT" | python -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('status','ERROR'))" 2>/dev/null)
   log "Phase 1 status=$P_STATUS"
 
   TASKS="$STATE_DIR/tasks.md"
@@ -210,6 +216,10 @@ PPROMPT
     continue
   fi
 
+  # 防御：从 tasks.md 中剥离 bash 元字符（防止 bash 展开崩溃主控）
+  sed -i 's/`//g; s/\$/\\$/g' "$TASKS"
+  log "已清理 tasks.md 中 bash 元字符"
+
   N=$(grep "^N:" "$TASKS" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '[:space:]')
   N=${N:-2}
   [ -z "$N" ] || [ "$N" -lt 2 ] 2>/dev/null && N=2
@@ -226,6 +236,10 @@ PPROMPT
     TASK_PROMPT=$(sed -n "/^## Task ${i}$/,/^## Task /p" "$TASKS" 2>/dev/null | grep "^prompt:" | head -1 | cut -d: -f2-)
 
     [ -z "$TASK_NAME" ] && continue
+
+    # 防御性剥离 bash 元字符（防止 Planner 偶尔违反约束）
+    TASK_PROMPT=$(printf '%s' "$TASK_PROMPT" | sed 's/`//g; s/\$//g')
+
     TASK_NAME_CLEAN=$(echo "$TASK_NAME" | tr -cs 'a-zA-Z0-9' '-')
     BRANCH="feature/r${ROUND}-t${i}-${TASK_NAME_CLEAN}"
     WT_DIR="$WORKDIR/.worktrees/t${i}"
@@ -237,6 +251,7 @@ PPROMPT
       git worktree add "$WT_DIR" main -b "$BRANCH" 2>/dev/null
     WT_DIRS+=("$WT_DIR")
 
+    # 内联 prompt（Planner 已禁止输出反引号）
     DEV_PROMPT="${TASK_PROMPT}
 
 当前工作目录：${WT_DIR}（独立 git worktree，分支 ${BRANCH}）
@@ -244,13 +259,13 @@ PPROMPT
 
 开发步骤：
 1. 执行上述开发任务
-2. 通过 10 道检查门的前 4 道 + 后 2 道（跳过视觉验证/回归/无倒退/控制台 由主控做）：
+2. 通过 10 道检查门的关键项：
    - cargo build / npm run build 编译通过
-   - cargo clippy 无 Warning
+   - cargo clippy 无 Warning（Rust 项目）
    - cargo test / npm run test 通过
-   - cargo fmt --check / 前端格式正确
+   - cargo fmt --check 无 diff
    - git diff 自查（只包含本次目标改动）
-   - git commit -m "[${STAGE}] Task ${i}: ${TASK_NAME}"
+   - git add -A && git commit -m "[${STAGE}] Task ${i}: ${TASK_NAME}"
 3. 不要触发下一轮，完成后只输出 DONE
 
 工作目录在提示中给出，请直接使用该路径。
