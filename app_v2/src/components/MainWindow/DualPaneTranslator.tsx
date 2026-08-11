@@ -530,7 +530,14 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
           {/* Translation Result Output */}
           <div className="flex-1 w-full overflow-y-auto py-3 text-base leading-relaxed scrollbar-thin">
-            {currentTranslationText ? (
+            {loading ? (
+              <div className="space-y-3 py-1 animate-pulse">
+                <div className={`h-4 rounded ${isLight ? 'bg-slate-200' : 'bg-slate-700/50'} w-3/4 mb-2`} />
+                <div className={`h-4 rounded ${isLight ? 'bg-slate-200' : 'bg-slate-700/50'} w-1/2 mb-2`} />
+                <div className={`h-4 rounded ${isLight ? 'bg-slate-200' : 'bg-slate-700/50'} w-5/6 mb-2`} />
+                <div className={`h-4 rounded ${isLight ? 'bg-slate-200' : 'bg-slate-700/50'} w-2/3 mb-2`} />
+              </div>
+            ) : currentTranslationText ? (
               <p className={`font-medium whitespace-pre-wrap selection:bg-blue-600 selection:text-white ${
                 isLight ? 'text-slate-900' : 'text-zinc-100'
               }`}>
