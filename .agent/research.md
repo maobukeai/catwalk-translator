@@ -1,6 +1,6 @@
-# Product Evolution Research Report — Round 5: 01/09 UI/UX
+# Product Evolution Research Report — Round 6: 01/09 UI/UX
 
-> **演进轮次**：Round 5 (Product Evolution Mode)  
+> **演进轮次**：Round 6 (Product Evolution Mode)  
 > **当前轮盘阶段**：01/09 UI/UX 视觉与交互极致打磨 (Visual & Interaction Refinement)  
 > **研究对象**：CG AI Screenshot Translator (`app_v2`)  
 > **报告生成时间**：2026-08-11  
@@ -11,29 +11,30 @@
 ## 1. 当前状态分析 (Current State Analysis)
 
 ### 1.1 产品使命与技术架构基线
-**CG AI Screenshot Translator (`app_v2`)** 是专为三维数字艺术与游戏开发工程师（Blender / Substance 3D / Unity / Unreal Engine / Maya / Houdini）量身定制的轻量级无感屏幕划词与截图翻译工具。
+**CG AI Screenshot Translator (`app_v2`)** 是一款面向数字艺术与游戏开发工程师（涵盖 Blender / Substance 3D / Unity / Unreal Engine / Maya / Houdini 等专业 DCC 软件）的轻量级无感屏幕划词与截图翻译工具。
 
-- **核心技术栈**：
-  - **宿主/系统层**：Tauri 2.0 (Rust 2021) + GDI/BitBlt 毫秒级选区捕获 + 原生全局快捷键与透明置顶窗口
-  - **推理引擎**：RapidOCR ONNX (PP-OCRv4 DBNet + SVTR 单例常驻架构，CLAHE 暗色 UI 增强)
-  - **前端视图层**：React 19 + TypeScript + Tailwind CSS 4 + Lucide Icons + Zustand 状态管理
-- **核心健康度指标矩阵 (Core Health Matrix)**：
+- **系统与技术栈基线**：
+  - **宿主/系统层**：Tauri 2.0 (Rust 2021) + GDI/BitBlt 选区毫秒级截取 + 系统托盘常驻与全局透明置顶遮罩窗口。
+  - **推理引擎层**：RapidOCR ONNX (PP-OCRv4 DBNet + SVTR 单例常驻架构，CLAHE 暗色 UI 自适应直方图增强)。
+  - **前端视图层**：React 19 + TypeScript + Tailwind CSS 4 + Lucide Icons + Zustand 状态管理与数据持久化。
+- **核心健康度指标现状 (Core Health Matrix)**：
   - 端到端划词翻译延迟 (E2E Latency)：~185ms (基线目标 <250ms，评级：🟢 EXCELLENT)
   - PP-OCRv4 区域推理耗时：~65ms (基线目标 <120ms，评级：🟢 EXCELLENT)
-  - 本地 CG 专属词库匹配：<1ms (基线目标 <5ms，评级：🟢 EXCELLENT)
+  - 本地 CG 专属词库匹配耗时：<1ms (基线目标 <5ms，评级：🟢 EXCELLENT)
   - 待机内存占用：~118MB / 峰值推理内存：~185MB (基线目标 <300MB，评级：🟢 EXCELLENT)
   - 单文件便携 EXE 体积：~39.8MB (基线目标 <45MB，评级：🟢 EXCELLENT)
   - 应用程序冷启动耗时：~151.5ms (基线目标 <500ms，评级：🟢 EXCELLENT)
+  - 自动化测试通过率 (Cargo / Vitest)：100% Pass (0 Errors, 0 Warnings)
 
 ---
 
 ### 1.2 现有 UI/UX 能力与组件全景审计 (Codebase Audit)
 
-| 组件模块 | 文件路径 | 当前已具备的 UI/UX 特性 | 遗留体验与工程断点 |
+| 组件模块 | 文件路径 | 当前已具备的 UI/UX 特性 | 遗留体验断点与进阶空间 |
 | :--- | :--- | :--- | :--- |
-| **划词覆层** | `src/components/Overlay/CaptureOverlay.tsx` | 1. `rgba(0,0,0,0.38)` 全屏半透明遮罩与动态虚线十字准星<br>2. 实时 `(X, Y)` 坐标指示气泡与 `📐 W×H px` 尺寸 HUD<br>3. 阶段化文字过渡 (`识别中... -> 翻译中... -> 渲染中...`)<br>4. Pin 锁定 (`Ctrl+P`)、单条复制、TTS 语音 (`Space`)、多语种胶囊 (`1~6`)、AI 模型循环 (`Tab`) | 1. 仅支持原位覆盖，易遮挡 3D 界面相邻控件与数值输入框<br>2. 密集多行文本块缺乏垂直 AABB 避让与防溢出算法<br>3. 缺乏键盘快捷键可视化速查面板 (`?` / `F1`) |
-| **主翻译器** | `src/components/MainWindow/DualPaneTranslator.tsx` | 1. 左右双栏实时防抖翻译 (350ms Debounce)<br>2. 源语言/目标语言快速互换与语种下拉选择<br>3. 多翻译引擎横向滑动 Tab 栏与并排对比卡片<br>4. 复制反馈、语音朗读与历史自动持久化 | 1. 专业 CG 词库命中词缺少行内视觉高亮与悬浮释义<br>2. 多引擎 Tab 栏两侧缺少滚动溢出渐变提示与平滑手势回弹 |
-| **标题栏** | `src/components/TitleBar.tsx` | 1. 支持原生 `startDragging()` 窗口拖拽<br>2. 最小化、最大化/还原、关闭三键交互<br>3. 猫步品牌 Logo 与版本号徽标 | 1. 窗口控制按钮触控感应区偏小 (<36px)，未满足触控与无障碍标准<br>2. 关闭按钮缺乏柔和渐变过渡与 `:active` 微缩反馈 |
+| **划词覆层** | `src/components/Overlay/CaptureOverlay.tsx` | 1. `rgba(0,0,0,0.38)` 全屏半透明遮罩与动态虚线十字准星<br>2. 实时 `(X, Y)` 坐标指示气泡与 `📐 W×H px` 尺寸 HUD<br>3. 阶段化文字过渡 (`识别中... -> 翻译中... -> 渲染中...`)<br>4. Pin 锁定 (`Ctrl+P`)、单条复制、TTS 语音 (`Space`)、多语种胶囊 (`1~6`)、AI 模型循环 (`Tab`) | 1. 目前主要以原位覆盖为主，易遮挡 3D 界面相邻控件与数值输入滑块<br>2. 密集多行文本块缺乏纵向 AABB 避让算法与边界夹取保护<br>3. 缺乏键盘快捷键可视化速查面板 (`?` / `F1`) |
+| **主翻译器** | `src/components/MainWindow/DualPaneTranslator.tsx` | 1. 左右双栏实时防抖翻译 (350ms Debounce)<br>2. 源语言/目标语言快速互换与语种下拉选择<br>3. 多翻译引擎横向滑动 Tab 栏与并排对比卡片<br>4. 复制反馈、语音朗读与历史自动持久化 | 1. 命中专业 CG 词库的名词缺少行内视觉强调与悬浮参数释义<br>2. 多引擎 Tab 栏两侧缺少滚动溢出渐变指示器与平滑手势回弹 |
+| **标题栏** | `src/components/TitleBar.tsx` | 1. 支持原生 `startDragging()` 窗口拖拽<br>2. 最小化、最大化/还原、关闭三键交互<br>3. 品牌 Logo 与版本号徽标 | 1. 窗口控制按钮触控感应区偏小 (<36px)，未达触控热区标准<br>2. 关闭按钮缺乏柔和渐变过渡与 `:active` 微缩微反馈 |
 | **侧边栏** | `src/components/Sidebar/Sidebar.tsx` | 1. 模块化工作台与工具分组导航<br>2. 选中项微型发光指示条与渐变图标底座<br>3. 底部“划词翻译”CTA 按钮与 RapidOCR 状态指示 | 1. 导航项与快捷按钮缺少 Hover 快捷键 Tooltip 提示<br>2. 缺少动态键盘焦点轮廓线 (`focus-visible`) |
 | **设置面板** | `src/components/Settings/SettingsDashboard.tsx` | 1. 外观主题、磨砂玻璃模糊度 (0~40px) 调节<br>2. 全局快捷键录制、LLM API 与离线词典配置 | 1. 缺少覆盖模式 (`Cover` vs `Tooltip`) 与 AABB 避让开关项 |
 
@@ -42,7 +43,7 @@
 ### 1.3 关键工程与测试回归断点分析
 
 1. **测试断言层级失效 (`m4_overlay_sampler.test.tsx`)**：
-   - 现状：在 `m4_overlay_sampler.test.tsx:81` 中，`screen.findByText('BSDF 材质')` 获取到了 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 导致失败。
+   - 现状：在 `m4_overlay_sampler.test.tsx:81` 中，`screen.findByText('BSDF 材质')` 获取到了内部 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 会导致失败。
    - 根因：卡片根容器为 `<div className="overlay-block ...">`，而文本包裹在子元素 `span` 中。
    - 解决方案：在测试中通过 `card.closest('.overlay-block')` 获取卡片根容器，或在组件上赋予明确的 `data-testid="overlay-card"`。
 2. **Mock 环境数据防御缺失 (`tauri.ts`)**：
@@ -73,6 +74,8 @@
    - 极简日常界面不产生视觉噪音；当用户需要了解快捷操作时，按下 `?` 或 `F1` 即可呼出半透明 Acrylic 速查面板，清晰归类选区、卡片、模式与系统快捷键。
 3. **Ergonomic Touch Targets & Visual Feedback (符合人机工程的热区与即时反馈)**：
    - 所有可交互按钮感应区扩展至最小 36px×36px，微工具栏和窗口控制按键增加柔和的 `:active` 缩放微反馈（`scale(0.95)`）与流光毛玻璃 Toast 提示。
+4. **Spatial AABB Collision Avoidance (空间 AABB 避让算法)**：
+   - 针对多行密集界面（如属性面板），通过计算每个卡片的 Bounding Box，避免纵向重叠与边缘裁剪。
 
 ---
 
