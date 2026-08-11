@@ -1,0 +1,20 @@
+{
+  "Height Range": "高度范围",
+  "AO Mixing Mode": "AO混合模式",
+  "Curvature Blur Radius": "曲率模糊半径",
+  "Subsurface": "次表面",
+  "Roughness": "粗糙度",
+  "Base Color": "基础色",
+  "Metallic": "金属度",
+  "Normal Space": "法线空间",
+  "Opacity": "不透明度",
+  "Curvature": "曲率",
+  "World Space Normal": "世界空间法线",
+  "Position": "位置图",
+  "Thickness": "厚度图",
+  "Smart Material": "智能材质",
+  "Smart Mask": "智能遮罩",
+  "Anchor Point": "锚点",
+  "Tri-planar Projection": "三平面投影",
+  "Metal Edge Wear": "金属边缘磨损"
+}

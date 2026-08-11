@@ -1,0 +1,18 @@
+{
+  "SOP": "SOP 几何体节点层级 (Surface Operator)",
+  "DOP": "DOP 动态动力学解算层级 (Dynamic Operator)",
+  "VOP": "VOP 向量着色器/程序化节点 (VEX Operator)",
+  "ROP": "ROP 渲染输出层级 (Render Operator)",
+  "COP": "COP 合成节点层级 (Composite Operator)",
+  "TOP": "TOP 任务与工作流节点 (Task Operator / PDG)",
+  "Vellum": "Vellum 软体/布料/流体解算器",
+  "Pyro FX": "Pyro 烟火与火焰烟雾解算器",
+  "RBD Material Fracture": "RBD 刚体破碎材质破碎节点",
+  "FLIP Fluid": "FLIP 粒子流体解算",
+  "Solaris": "Solaris USD 组装与渲染环境",
+  "Karma Render": "Karma USD 原生渲染引擎",
+  "VEX": "VEX 高性能节点表达式语言",
+  "Wrangler": "Attribute Wrangle 属性表达节点",
+  "Packed Primitive": "打包基元 (Packed Primitive)",
+  "Point Velocity": "点速度属性"
+}

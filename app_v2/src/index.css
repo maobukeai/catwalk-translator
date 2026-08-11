@@ -1,0 +1,181 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-app: rgba(18, 18, 22, 0.85);
+    --bg-surface: rgba(25, 25, 30, 0.7);
+    --bg-card: rgba(30, 30, 36, 0.65);
+    --border-card: rgba(255, 255, 255, 0.12);
+    --text-primary: #f8f8fc;
+    --text-secondary: #d1d1e0;
+    --text-muted: #9494a8;
+  }
+
+  html, body {
+    background-color: transparent !important;
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif;
+    user-select: none;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+  }
+}
+
+/* Native Window Drag Header Support for Tauri / WebView2 */
+header[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+[data-tauri-drag-region="false"],
+button, input, textarea, a, select {
+  -webkit-app-region: no-drag;
+}
+
+/* Mica / Acrylic Glassmorphism Card Utilities */
+.glass-panel {
+  background: rgba(24, 24, 30, 0.65);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.glass-card {
+  background: rgba(30, 30, 38, 0.6);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-card:hover {
+  background: rgba(38, 38, 48, 0.7);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* Bright Frosted Glass Pill / Badge Utility */
+.glass-pill-light {
+  background: rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  color: #1e293b;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.glass-input {
+  background: rgba(18, 18, 24, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #f8f8fc;
+  backdrop-filter: blur(8px);
+}
+
+.glass-input:focus {
+  border-color: rgba(59, 130, 246, 0.6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+}
+
+/* Thin scrollbar utility (Tailwind v4 @utility) */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  &::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 9999px;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.25);
+  }
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Sidebar nav item hover / active indicator */
+.side-item {
+  position: relative;
+  transition: all 0.18s ease;
+}
+
+.side-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 50%;
+  width: 3px;
+  border-radius: 0 4px 4px 0;
+  background: linear-gradient(180deg, #38bdf8, #6366f1);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+}
+
+/* Frosted glass: physical noise texture (SVG feTurbulence) */
+.glass-noise-tex {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 150px 150px;
+}
+
+/* Glowing aurora blobs drifting slowly behind the frosted glass */
+@keyframes aurora-drift {
+  0% { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(48px, -36px) scale(1.18); }
+}
+
+/* Animated page transitions */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.page-in {
+  animation: page-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Custom crisp scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Font Family & Typography Utilities */
+.font-system { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+.font-yahei { font-family: 'Microsoft YaHei', '微软雅黑', sans-serif; }
+.font-segoe { font-family: 'Segoe UI', sans-serif; }
+.font-inter { font-family: 'Inter', sans-serif; }
+.font-mono { font-family: 'JetBrains Mono', Consolas, Monaco, monospace; }
+
+/* Font Size Scaling Utilities */
+.font-scale-small { font-size: 13px; }
+.font-scale-medium { font-size: 14px; }
+.font-scale-large { font-size: 16px; }
+.font-scale-xlarge { font-size: 18px; }
+

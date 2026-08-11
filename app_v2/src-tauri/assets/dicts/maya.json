@@ -1,0 +1,19 @@
+{
+  "Bifrost": "Bifrost 流体与粒子程序化图表",
+  "XGen": "XGen 毛发与植被生成系统",
+  "Arnold Render": "Arnold 阿诺德渲染器",
+  "MASH": "MASH 程序化运动图形工具集",
+  "Skin Cluster": "皮肤蒙皮簇 (Skin Cluster)",
+  "BlendShape": "融合变形 (BlendShape / 形变键)",
+  "IK Handle": "IK 反向动力学句柄",
+  "Constraint": "约束",
+  "Outliner": "大纲视图 (Outliner)",
+  "Node Editor": "节点编辑器",
+  "Hypershade": "Hypershade 材质与着色器图表",
+  "Graph Editor": "曲线编辑器",
+  "Channel Box": "通道盒",
+  "Attribute Editor": "属性编辑器",
+  "UV Editor": "UV 编辑器",
+  "Retopology": "重拓扑工具",
+  "Quad Draw": "四边形绘制拓扑工具"
+}
