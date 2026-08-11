@@ -26,3 +26,8 @@ desktop.ini
 # 环境密钥
 .env
 .env.*
+
+# AGY 调试残留
+AGY_WRITE_TEST.txt
+agy_*.json
+agy_*.log

@@ -272,6 +272,60 @@ fn crop_bgr(bgr: &[u8], w: usize, h: usize, x: u32, y: u32, bw: u32, bh: u32) ->
 
 // ---- Detection (DET) --------------------------------------------------------
 
+/// Global histogram equalization independently on BGR 3 channels.
+/// Builds a 256-bin cumulative distribution function (CDF) per channel
+/// and maps intensities via lookup table to stretch contrast.
+fn hist_equalize_bgr(img: &[u8], w: usize, h: usize) -> Vec<u8> {
+    let total_pixels = match w.checked_mul(h) {
+        Some(p) if p > 0 => p,
+        _ => return img.to_vec(),
+    };
+    if img.len() < total_pixels.saturating_mul(3) {
+        return img.to_vec();
+    }
+
+    let mut out = vec![0u8; total_pixels * 3];
+
+    for c in 0..3 {
+        let mut hist = [0u32; 256];
+        for i in 0..total_pixels {
+            hist[img[i * 3 + c] as usize] += 1;
+        }
+
+        let mut cdf = [0u32; 256];
+        let mut acc = 0u32;
+        for i in 0..256 {
+            acc += hist[i];
+            cdf[i] = acc;
+        }
+
+        let cdf_min = cdf.iter().copied().find(|&v| v > 0).unwrap_or(0);
+        let mut lut = [0u8; 256];
+        if (total_pixels as u32) > cdf_min {
+            let denom = (total_pixels as u32 - cdf_min) as f32;
+            for i in 0..256 {
+                if cdf[i] >= cdf_min {
+                    let v = ((cdf[i] - cdf_min) as f32 / denom) * 255.0;
+                    lut[i] = v.round().clamp(0.0, 255.0) as u8;
+                } else {
+                    lut[i] = 0;
+                }
+            }
+        } else {
+            // All pixels have the same value; preserve original intensities.
+            for i in 0..256 {
+                lut[i] = i as u8;
+            }
+        }
+
+        for i in 0..total_pixels {
+            out[i * 3 + c] = lut[img[i * 3 + c] as usize];
+        }
+    }
+
+    out
+}
+
 /// Resize + normalize + DET inference. Returns the (post-sigmoid) probability
 /// map and its dims (mw, mh).
 fn run_detection(
@@ -286,13 +340,22 @@ fn run_detection(
     let rh = (((h as f32 * ratio).round() as u32 / 32).max(1)) * 32;
     let resized = resize_bgr_bilinear(bgr, w, h, rw, rh);
 
+    let use_he = std::env::var("ONNX_PREPROCESS_HE")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(true);
+    let det_img = if use_he {
+        hist_equalize_bgr(&resized, rw as usize, rh as usize)
+    } else {
+        resized
+    };
+
     // Normalize (hwc): (x/255 - mean) / std, then transpose to CHW.
     let mut input = vec![0f32; 3 * rw as usize * rh as usize];
     for y in 0..rh {
         for x in 0..rw {
             let px = (y * rw + x) as usize;
             for c in 0..3 {
-                let val = resized[px * 3 + c] as f32 / 255.0;
+                let val = det_img[px * 3 + c] as f32 / 255.0;
                 input[c * (rh as usize * rw as usize) + px] = (val - DET_MEAN[c]) / DET_STD[c];
             }
         }
@@ -751,5 +814,55 @@ mod tests {
         }
         let boxes = postprocess_db(&map, 64, 64, 640, 640);
         assert_eq!(boxes.len(), 1);
+    }
+
+    #[test]
+    fn test_hist_equalize_bgr_contrast_expansion() {
+        let w = 10;
+        let h = 10;
+        // Degraded contrast: values clustered in a narrow range (30 vs 45)
+        let mut low_contrast_img = Vec::with_capacity(w * h * 3);
+        for y in 0..h {
+            for x in 0..w {
+                let val = if (x + y) % 2 == 0 { 30u8 } else { 45u8 };
+                low_contrast_img.push(val); // B
+                low_contrast_img.push(val); // G
+                low_contrast_img.push(val); // R
+            }
+        }
+
+        let equalized = hist_equalize_bgr(&low_contrast_img, w, h);
+        assert_eq!(equalized.len(), w * h * 3);
+
+        // Verify contrast expansion for each channel (max - min > 100)
+        for c in 0..3 {
+            let mut min_val = 255u8;
+            let mut max_val = 0u8;
+            for i in 0..(w * h) {
+                let v = equalized[i * 3 + c];
+                min_val = min_val.min(v);
+                max_val = max_val.max(v);
+            }
+            let diff = max_val - min_val;
+            assert!(
+                diff > 100,
+                "Equalized grayscale spread max - min should be > 100, got diff={}, min={}, max={}",
+                diff,
+                min_val,
+                max_val
+            );
+        }
+    }
+
+    #[test]
+    fn test_hist_equalize_bgr_edge_cases() {
+        // Uniform color image: should safely preserve values without panic
+        let uniform = vec![100u8; 10 * 10 * 3];
+        let eq_uniform = hist_equalize_bgr(&uniform, 10, 10);
+        assert_eq!(eq_uniform, uniform);
+
+        // Empty / zero size
+        let empty = hist_equalize_bgr(&[], 0, 0);
+        assert!(empty.is_empty());
     }
 }
