@@ -265,6 +265,7 @@ ${QA_TARGETS}
   fi
 
   echo "[$(date)] MAIN_LOOP: 第 ${ROUND} 轮完成，${N} 个 agent，合并 ${MERGED_COUNT}/${N}，耗时 ${DURATION}s" >> "$LOG"
+  notify_stage "Phase 3 合并 完成: $MERGED_COUNT/$N"
 
   # === 对话压缩：stdout 只输出一行摘要，其余全部进文件 ===
   # 主会话通过 process poll 只看到这一行，避免上下文膨胀
