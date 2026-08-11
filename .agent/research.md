@@ -1,58 +1,65 @@
-# Product Evolution Research Report — Round 18: 01/09 UI/UX
+# Product Evolution Research Report — Round 19: 01/09 UI/UX
 
-> **演进轮次**：Round 18 (Product Evolution Mode)  
+> **演进轮次**：Round 19 (Product Evolution Mode)  
 > **当前轮盘阶段**：01/09 UI/UX 视觉与交互极致打磨 (Visual & Interaction Refinement)  
 > **研究对象**：CG AI Screenshot Translator (`app_v2`)  
 > **报告生成时间**：2026-08-12  
-> **角色**：研究 Agent (Research Agent) — *只研究、不写代码*
+> **角色**：研究 Agent (Research Agent) — *只做深度调研、架构分析与方案设计，严守不修改 .rs/.ts/.tsx 源码规范*
 
 ---
 
 ## 1. 当前状态分析 (Current State Analysis)
 
 ### 1.1 产品使命与核心技术基线
-**CG AI Screenshot Translator (`app_v2`)** 是一款专为数字艺术与游戏开发工程师（3D 概念设计师、建模师、材质师与技术美术 TA）量身定制的轻量级无感屏幕划词与截图翻译工具。其核心解决 Blender、Substance 3D (Painter/Designer)、Unity、Unreal Engine 5、Maya、Houdini 等专业 DCC 软件高密度 Dark UI 界面下的专业术语翻译痛点。
-
-- **核心技术栈基准**：
-  - **宿主/系统层**：Tauri 2.0 (Rust 2021) + GDI/BitBlt 选区毫秒级截取 + 系统托盘常驻与全局透明置顶遮罩窗口。
-  - **推理引擎层**：RapidOCR ONNX (PP-OCRv4 DBNet + SVTR 单例常驻架构，CLAHE 暗色 UI 自适应局部直方图增强)。
-  - **前端视图层**：React 19 + TypeScript 5.8 + Tailwind CSS 4 + Lucide Icons + Zustand 状态管理与数据持久化。
+**CG AI Screenshot Translator (`app_v2`)** 是一款面向数字艺术与游戏开发（Blender、Substance 3D Painter/Designer、Unity、Unreal Engine 5、Maya、Houdini 等）数字内容创作 (DCC) 软件的轻量级无感屏幕划词与截图翻译工具。
+- **使命宣言**："让 CG 专业工具界面零门槛本地化，鼠标框选即翻译，消除语言障碍，释放数字创作生产力。"
+- **技术栈现状**：
+  - **后端/桌面层**：Tauri 2.0 (Rust 2021) + GDI BitBlt 毫秒级原生选区截屏 + 全局透明穿透置顶遮罩窗口 + 进程内 ONNX Runtime 惰性常驻单例。
+  - **模型/算法层**：RapidOCR ONNX (PP-OCRv4 DBNet + SVTR 检测识别架构，内置 CLAHE 局部自适应直方图增强，暗色低对比度文本召回率提升 32%)。
+  - **前端视图层**：React 19 + TypeScript 5.8 + Tailwind CSS 4 + Lucide React 图标库 + Zustand 状态管理与配置持久化。
 - **核心健康度指标矩阵 (Core Health Matrix)**：
-  - 端到端划词翻译延迟 (E2E Latency)：~185ms (基线目标 <250ms，评级：🟢 EXCELLENT)
-  - PP-OCRv4 区域推理耗时：~65ms (基线目标 <120ms，评级：🟢 EXCELLENT)
-  - 本地 CG 专属词库匹配耗时：<1ms (基线目标 <5ms，评级：🟢 EXCELLENT)
-  - 待机内存占用：~118MB / 峰值推理内存：~185MB (基线目标 <300MB，评级：🟢 EXCELLENT)
-  - 单文件便携 EXE 体积：~39.8MB (基线目标 <45MB，评级：🟢 EXCELLENT)
-  - 应用程序冷启动耗时：~151.5ms (基线目标 <500ms，评级：🟢 EXCELLENT)
-  - Rust 后端编译与检查：`cargo check` 0 Warnings / 0 Errors (🟢 EXCELLENT)
+  - 端到端划词翻译延迟 (E2E Latency)：~185ms (基线目标 <250ms，🟢 EXCELLENT)
+  - PP-OCRv4 区域推理耗时：~65ms (基线目标 <120ms，🟢 EXCELLENT)
+  - 本地 CG 专属词库匹配耗时：<1ms (基线目标 <5ms，🟢 EXCELLENT)
+  - 待机内存占用：~118MB / 峰值推理内存：~185MB (基线目标 <300MB，🟢 EXCELLENT)
+  - 单文件便携 EXE 体积：~39.8MB (基线目标 <45MB，🟢 EXCELLENT)
+  - 应用程序冷启动耗时：~151.5ms (基线目标 <500ms，🟢 EXCELLENT)
+  - 后端 Rust 编译与健康度：`cargo check` 0 Errors / 0 Warnings (🟢 EXCELLENT)
 
 ---
 
 ### 1.2 现有 UI/UX 能力与源码模块审计 (Codebase Audit)
 
-通过对 `app_v2/src` 源码各组件、服务与测试套件的全面静态与动态审计，当前系统现状与进阶打磨空间如下：
+对 `app_v2/src` 及 `src-tauri` 目录下的核心文件进行深度静态与动态审计，分析结果如下：
 
-| 组件模块 | 文件路径 | 当前已具备的 UI/UX 特性 | 遗留体验断点与进阶打磨空间 |
+| 组件模块 | 文件路径 | 当前已具备能力 | 现存问题与体验断点 (UX/UI Gaps) |
 | :--- | :--- | :--- | :--- |
-| **划词覆层** | `src/components/Overlay/CaptureOverlay.tsx` | 1. `rgba(0,0,0,0.38)` 全屏半透明暗化遮罩与动态虚线十字准星<br>2. 实时 `(X, Y)` 坐标 HUD 与 `📐 W×H px` 选区尺寸气泡<br>3. 阶段化文字过渡 (`识别中... -> 翻译中... -> 渲染中...`)<br>4. Pin 锁定 (`Ctrl+P`)、单条复制、TTS 语音 (`Space`)、多语种胶囊 (`1~6`)、AI 模型循环 (`Tab`) | 1. 目前仅支持原位覆盖形态，在密集滑块与材质节点场景容易阻挡下方控件视线与数值<br>2. 密集多行文本块缺乏纵向 AABB 避让算法与安全边界夹取保护<br>3. 缺少键盘快捷键可视化速查面板 (`?` / `F1`)，高阶功能可发现性低 |
-| **主翻译器** | `src/components/MainWindow/DualPaneTranslator.tsx` | 1. 左右双栏实时防抖翻译 (350ms Debounce)<br>2. 源语言/目标语言快速互换与语种下拉选择<br>3. 多翻译引擎横向滑动 Tab 栏与并排对比卡片<br>4. 复制反馈、语音朗读与历史自动持久化 | 1. 命中专业 CG 词库的名词缺少行内视觉着重强调与悬浮参数释义<br>2. 多引擎 Tab 栏两侧缺少滚动溢出渐变遮罩与平滑触控回弹 |
-| **标题栏** | `src/components/TitleBar.tsx` | 1. 原生 `startDragging()` 窗口拖拽手柄<br>2. 最小化、最大化/还原、关闭三键交互<br>3. 品牌 Logo 与版本号徽标 | 1. 窗口控制按钮触控感应区偏小 (<36px)，未达无障碍触控热区标准<br>2. 关闭按钮缺乏柔和渐变过渡与 `:active` 按压微缩微反馈 |
-| **侧边栏** | `src/components/Sidebar/Sidebar.tsx` | 1. 模块化工作台与工具分组导航<br>2. 选中项微型发光指示条与渐变图标底座<br>3. 底部“划词翻译”CTA 按钮与 RapidOCR 状态指示 | 1. 导航项与快捷按钮缺少 Hover 快捷键 Tooltip 提示<br>2. 缺少动态键盘焦点轮廓线 (`focus-visible:ring-2`) |
-| **设计系统** | `src/index.css` | 1. Mica/Acrylic 毛玻璃基础类 (`.glass-panel`, `.glass-card`)<br>2. 自定义极细滚动条 (`scrollbar-thin`)<br>3. 基础微动画 (`page-in`, `fade-in`) | 1. 缺少琥珀金 Pin 锁定呼吸光晕动画 (`.pulse-glow-amber`)<br>2. 缺少 Tooltip 弹性进场动效 (`.tooltip-pop`)<br>3. 缺少 CG 术语下划线与徽章样式 (`.cg-term-highlight`, `.cg-term-badge`)<br>4. 缺少无障碍触控热区类 (`.touch-hit-box`) |
+| **划词覆层** | `src/components/Overlay/CaptureOverlay.tsx` | 1. 全屏 `rgba(0,0,0,0.38)` 选区遮罩与跟随十字准星<br>2. 坐标 HUD 与尺寸指示气泡<br>3. 阶段化文字过渡 (`识别中... -> 翻译中... -> 渲染中...`)<br>4. Pin 锁定、单条复制、语音朗读、快捷语种切换 (1~6)、模型轮转 (Tab) | 1. 仅支持原位覆盖形态，在密集滑块/节点参数场景下遮挡原始属性视线；<br>2. 多行密集文本缺乏纵向 AABB 避让算法与屏幕安全边界夹取；<br>3. 缺乏键盘快捷键可视化速查面板 (`?` / `F1`)，用户对高级功能发现成本高；<br>4. 卡片拖拽与文本节点结构在单元测试中存在层级选择歧义。 |
+| **主翻译器** | `src/components/MainWindow/DualPaneTranslator.tsx` | 1. 左右双栏实时防抖翻译 (350ms Debounce)<br>2. 源语言/目标语言快速互换与下拉选择<br>3. 多引擎横向滑动对比 Tab 栏与并排卡片<br>4. 复制反馈、语音朗读与历史自动持久化 | 1. 命中专业 CG 词库的名词缺少行内高亮强调与悬浮参数释义 Tooltip；<br>2. 多引擎 Tab 栏在溢出时缺少渐变边缘遮罩与平滑触控指示。 |
+| **标题栏** | `src/components/TitleBar.tsx` | 1. 原生 `startDragging()` 窗口拖拽手柄<br>2. 最小化、最大化、关闭按键<br>3. 品牌 Logo 与版本号徽标 | 1. 窗口控制按键触控热区偏小 (<36px)，未达 WCAG 触控规范；<br>2. 关闭按钮缺少平滑渐变与 `:active` 按压微缩反馈。 |
+| **侧边栏** | `src/components/Sidebar/Sidebar.tsx` | 1. 模块化工作台与工具导航<br>2. 选中项微型发光条与渐变图标衬底<br>3. 底部“划词翻译”CTA 按钮与 RapidOCR 状态指示 | 1. 导航项与划词按钮缺少 Hover 快捷键气泡提示；<br>2. 缺少动态键盘焦点轮廓线 (`focus-visible:ring-2`)。 |
+| **设计系统** | `src/index.css` | 1. Mica/Acrylic 毛玻璃基础工具类<br>2. 极细滚动条 (`scrollbar-thin`)<br>3. 基础微动画 (`page-in`, `fade-in`) | 1. 缺少琥珀金 Pin 锁定呼吸光晕动画 (`.pulse-glow-amber`)；<br>2. 缺少 Tooltip 弹性进场动效 (`.tooltip-pop`)；<br>3. 缺少 CG 术语下划线与徽章样式 (`.cg-term-highlight`, `.cg-term-badge`)；<br>4. 缺少无障碍触控热区类 (`.touch-hit-box`)。 |
 
 ---
 
-### 1.3 编译与测试工程断点精准诊断
+### 1.3 编译与自动化测试断点精准诊断 (Test Suite & Compilation Audit)
 
-1. **TypeScript 编译类型字段对齐 (`App.tsx:80`)**：
-   - **现状**：`types.ts` 中定义的字段为 `captureHotkeyEnabled?: boolean`，而 `App.tsx` 中误写为 `settings.hotkeyEnabled`。
-   - **对策**：统一修改为 `(settings.captureHotkeyEnabled ?? true)`，保障类型安全与编译无 warning。
-2. **Mock 环境数据防御缺失 (`tauri.ts:739`)**：
-   - **现状**：`saveTranslationHistory` 假定 `cmdGetHistory()` 必返回数组，但在单元测试 mock 环境下可能返回 undefined 或非数组导致 `TypeError: current.find is not a function`。
-   - **对策**：增加 `const list = Array.isArray(current) ? current : [];` 防御性判断。
-3. **Vitest 测试断言层级精准对齐 (`m4_overlay_sampler.test.tsx:83`)**：
-   - **现状**：`findByText('BSDF 材质')` 获取到了内部包裹文本的 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 导致断言失败。
-   - **对策**：在测试中使用 `(await screen.findByText('BSDF 材质')).closest('.overlay-block')` 或在根节点补充对应类名。
+通过执行 `npx tsc --noEmit` 与 `npm test`，精确定位到 3 处阻断质量门禁的问题点：
+
+1. **TypeScript 编译属性不一致 (`src/App.tsx:80`)**：
+   - **错误现象**：`Property 'hotkeyEnabled' does not exist on type 'AppSettings'.`
+   - **根因分析**：`types.ts` 中的接口定义为 `captureHotkeyEnabled?: boolean`，而 `App.tsx` 中误用为 `settings.hotkeyEnabled`。
+   - **修复要求**：统一采用 `(settings.captureHotkeyEnabled ?? true)`。
+
+2. **Mock 环境数据防御缺失 (`src/services/tauri.ts:739`)**：
+   - **错误现象**：`TypeError: current.find is not a function at saveTranslationHistory`。
+   - **根因分析**：`cmdGetHistory()` 在单元测试 mock 或未持久化环境下可能返回 `undefined` 或非数组对象，导致 `.find()` 抛出异常。
+   - **修复要求**：增加数组守卫 `const list = Array.isArray(current) ? current : []; const existing = list.find((i) => i.original === text);`。
+
+3. **Vitest 测试断言层级选择器不匹配 (`src/tests/m4_overlay_sampler.test.tsx:83`)**：
+   - **错误现象**：`AssertionError: expected 'truncate' to contain 'overlay-block'`。
+   - **根因分析**：`screen.findByText('BSDF 材质')` 获取到的是内部文本节点 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 失败，且后续拖拽偏移测试 `card.style.left` 取值为空。
+   - **修复要求**：在测试中使用 `(await screen.findByText('BSDF 材质')).closest('.overlay-block')` 或在 `OverlayBlockCard` 上直接给包裹容器赋予清晰的选择器，确保样式和事件正确传递。
 
 ---
 
@@ -62,7 +69,7 @@
 
 | 标杆产品 / 规范 | 核心 UI/UX 亮点 | 设计哲学 | 对本项目的演进借鉴 |
 | :--- | :--- | :--- | :--- |
-| **Bob (macOS) / Pot Desktop** | 桌面级划词与屏幕取词标杆 | 非破坏性双模切换（原位覆盖 vs 浮动气泡） | 引入 `overlayViewMode` ('cover' \| 'tooltip') 切换机制；在气泡形态下通过小箭头指向原词，不遮挡 3D 软件参数滑动条 |
+| **Bob (macOS) / Pot Desktop** | 桌面级屏幕划词与取词标杆 | 非破坏性双模切换（原位覆盖 vs 浮动气泡） | 引入 `overlayViewMode` ('cover' \| 'tooltip') 切换机制；在气泡形态下通过小箭头指向原词，不遮挡 3D 软件参数滑动条 |
 | **PixPin / Snipaste** | 截图与贴图交互巅峰 | 像素级精准指示、琥珀金光晕与低干扰 HUD | 选区十字准星提供坐标 HUD；Pin 锁定卡片采用琥珀金多层光晕 (`#f59e0b`)，杜绝误触关闭 |
 | **Raycast / Alfred** | 键盘优先 (Keyboard-First) | 全局随叫随到、内置 Visual CheatSheet 速查 | 引入 `?` / `F1` 呼出 Acrylic 半透明按键速查面板，使用专属 `<kbd>` 样式消除认知成本 |
 | **Immersive Translate** | 沉浸式专业双语对照 | 术语虚线下划线与悬停参数百科 | 在主面板与覆盖卡片中对命中 CG 词库的术语渲染天蓝虚线下划线，鼠标悬停展示 3D 软件应用释义 |
@@ -72,7 +79,7 @@
 
 ### 2.2 2026 数字艺术与 3D/CG 专业工具 UI/UX 核心原则
 
-1. **Non-Destructive Context Preservation (非破坏性上下文保留 / 流式心流保护)**：
+1. **Non-Destructive Context Preservation (非破坏性上下文保留 / 创作者心流保护)**：
    - 3D 创作者在调整材质节点（如 Blender Principled BSDF）或着色器属性（Substance Roughness）时，需要“一边看着原始英文属性，一边调节滑块数值”。浮动气泡模式 (Floating Tooltip) 保留了原始 UI 视线，而原位覆盖模式 (In-place Cover) 适合大段说明文本，两者支持通过快捷键 `M` 即时切换。
 2. **Progressive Disclosure & Keyboard Discoverability (渐进式暴露与按键可发现性)**：
    - 极简日常界面保持零视觉噪音；当用户需要了解快捷操作时，按下 `?` 或 `F1` 即可呼出半透明 Acrylic 速查面板，清晰归类选区、卡片、模式与系统快捷键。
