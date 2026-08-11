@@ -1,6 +1,6 @@
-# Product Evolution Research Report — Round 10: 01/09 UI/UX
+# Product Evolution Research Report — Round 11: 01/09 UI/UX
 
-> **演进轮次**：Round 10 (Product Evolution Mode)  
+> **演进轮次**：Round 11 (Product Evolution Mode)  
 > **当前轮盘阶段**：01/09 UI/UX 视觉与交互极致打磨 (Visual & Interaction Refinement)  
 > **研究对象**：CG AI Screenshot Translator (`app_v2`)  
 > **报告生成时间**：2026-08-11  
@@ -11,9 +11,9 @@
 ## 1. 当前状态分析 (Current State Analysis)
 
 ### 1.1 产品使命与技术架构基线
-**CG AI Screenshot Translator (`app_v2`)** 是一款专为数字艺术与游戏开发工程师（3D 概念设计师、建模师、材质师与技术美术 TA）量身打造的轻量级无感屏幕划词与截图翻译工具，深度适配 Blender、Substance 3D (Painter/Designer)、Unity、Unreal Engine 5、Maya 等专业 DCC 软件的高密度 Dark UI 界面。
+**CG AI Screenshot Translator (`app_v2`)** 是一款面向数字艺术与游戏开发工程师（3D 概念设计师、建模师、材质师与技术美术 TA）量身定制的轻量级无感屏幕划词与截图翻译工具，深度适配 Blender、Substance 3D (Painter/Designer)、Unity、Unreal Engine 5、Maya、Houdini 等专业 DCC 软件的高密度 Dark UI 界面。
 
-- **系统与技术架构基准**：
+- **核心技术栈基准**：
   - **宿主/系统层**：Tauri 2.0 (Rust 2021) + GDI/BitBlt 选区毫秒级截取 + 系统托盘常驻与全局透明置顶遮罩窗口。
   - **推理引擎层**：RapidOCR ONNX (PP-OCRv4 DBNet + SVTR 单例常驻架构，CLAHE 暗色 UI 自适应局部直方图增强)。
   - **前端视图层**：React 19 + TypeScript + Tailwind CSS 4 + Lucide Icons + Zustand 状态管理与数据持久化。
@@ -27,13 +27,13 @@
 
 ---
 
-### 1.2 现有 UI/UX 能力与组件全景审计 (Codebase Audit)
+### 1.2 现有 UI/UX 能力与源码模块审计 (Codebase Audit)
 
-通过对 `app_v2/src` 源码的深入静态分析，当前 UI/UX 模块的实现现状与改进空间如下：
+通过对 `app_v2/src` 源码各组件与服务逻辑的全面静态审计，当前系统现状与进阶空间如下：
 
-| 组件模块 | 文件路径 | 当前已具备的 UI/UX 特性 | 遗留体验断点与进阶空间 |
+| 组件模块 | 文件路径 | 当前已具备的 UI/UX 特性 | 遗留体验断点与进阶打磨空间 |
 | :--- | :--- | :--- | :--- |
-| **划词覆层** | `src/components/Overlay/CaptureOverlay.tsx` | 1. `rgba(0,0,0,0.38)` 全屏半透明暗化遮罩与动态虚线十字准星<br>2. 实时 `(X, Y)` 坐标指示气泡与 `📐 W×H px` 选区尺寸 HUD<br>3. 阶段化文字过渡 (`识别中... -> 翻译中... -> 渲染中...`)<br>4. Pin 锁定 (`Ctrl+P`)、单条复制、TTS 语音 (`Space`)、多语种胶囊 (`1~6`)、AI 模型循环 (`Tab`) | 1. 目前仅支持原位覆盖形态，容易遮挡 3D 界面紧凑的数值输入滑块与拾色器<br>2. 密集多行文本块缺乏纵向 AABB 避让算法与安全边界夹取保护<br>3. 缺少键盘快捷键可视化速查面板 (`?` / `F1`)，高阶功能可发现性低 |
+| **划词覆层** | `src/components/Overlay/CaptureOverlay.tsx` | 1. `rgba(0,0,0,0.38)` 全屏半透明暗化遮罩与动态虚线十字准星<br>2. 实时 `(X, Y)` 坐标 HUD 与 `📐 W×H px` 选区尺寸气泡<br>3. 阶段化文字过渡 (`识别中... -> 翻译中... -> 渲染中...`)<br>4. Pin 锁定 (`Ctrl+P`)、单条复制、TTS 语音 (`Space`)、多语种胶囊 (`1~6`)、AI 模型循环 (`Tab`) | 1. 目前仅支持原位覆盖形态，在密集滑块与材质节点场景容易阻挡下方控件视线<br>2. 密集多行文本块缺乏纵向 AABB 避让算法与安全边界夹取保护<br>3. 缺少键盘快捷键可视化速查面板 (`?` / `F1`)，高阶功能可发现性低 |
 | **主翻译器** | `src/components/MainWindow/DualPaneTranslator.tsx` | 1. 左右双栏实时防抖翻译 (350ms Debounce)<br>2. 源语言/目标语言快速互换与语种下拉选择<br>3. 多翻译引擎横向滑动 Tab 栏与并排对比卡片<br>4. 复制反馈、语音朗读与历史自动持久化 | 1. 命中专业 CG 词库的名词缺少行内视觉着重强调与悬浮参数释义<br>2. 多引擎 Tab 栏两侧缺少滚动溢出渐变遮罩与平滑触控回弹 |
 | **标题栏** | `src/components/TitleBar.tsx` | 1. 原生 `startDragging()` 窗口拖拽手柄<br>2. 最小化、最大化/还原、关闭三键交互<br>3. 品牌 Logo 与版本号徽标 | 1. 窗口控制按钮触控感应区偏小 (<36px)，未达无障碍触控热区标准<br>2. 关闭按钮缺乏柔和渐变过渡与 `:active` 按压微缩微反馈 |
 | **侧边栏** | `src/components/Sidebar/Sidebar.tsx` | 1. 模块化工作台与工具分组导航<br>2. 选中项微型发光指示条与渐变图标底座<br>3. 底部“划词翻译”CTA 按钮与 RapidOCR 状态指示 | 1. 导航项与快捷按钮缺少 Hover 快捷键 Tooltip 提示<br>2. 缺少动态键盘焦点轮廓线 (`focus-visible`) |
@@ -41,15 +41,17 @@
 
 ---
 
-### 1.3 关键工程与测试回归断点分析
+### 1.3 测试工程回归与运行断点诊断
 
-1. **测试断言层级失效 (`m4_overlay_sampler.test.tsx`)**：
-   - **现状**：在 `m4_overlay_sampler.test.tsx:83` 中，`screen.findByText('BSDF 材质')` 获取到了内部 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 导致断言失败（收到的类名为 `truncate`）。
-   - **根因**：卡片根容器为 `<div className="overlay-block ...">`，而文本包裹在子元素 `span` 中。
-   - **解决方案**：在测试中使用 `card.closest('.overlay-block')` 或在组件根节点增加 `data-testid="overlay-card"` 确保断言层级精确。
-2. **Mock 环境数据防御缺失 (`tauri.ts`)**：
-   - **现状**：`tauri.ts:739` 中 `saveTranslationHistory` 调用 `const current = await cmdGetHistory()`，在测试 mock 环境中返回值非数组时抛出 `TypeError: current.find is not a function`。
-   - **解决方案**：加入 `const currentList = Array.isArray(current) ? current : [];` 防御性守卫。
+运行 `npm test` 结果分析：
+1. **测试断言层级失效 (`m4_overlay_sampler.test.tsx:83`)**：
+   - **断言报错**：`AssertionError: expected 'truncate' to contain 'overlay-block'`。
+   - **根因**：`findByText('BSDF 材质')` 获取到了内部包裹文本的 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 导致断言失败。
+   - **修复方案**：在测试中使用 `card.closest('.overlay-block')` 或在根节点补充对应类名。
+2. **Mock 环境数据防御缺失 (`tauri.ts:739`)**：
+   - **警告信息**：`History save failed: TypeError: current.find is not a function`。
+   - **根因**：`saveTranslationHistory` 假定 `cmdGetHistory()` 必返回数组，但在单元测试 mock 环境下可能返回 undefined 或非数组。
+   - **修复方案**：增加 `const currentList = Array.isArray(current) ? current : [];` 防御性判断。
 
 ---
 
