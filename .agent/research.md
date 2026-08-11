@@ -1,6 +1,6 @@
-# Product Evolution Research Report — Round 2: 01/09 UI/UX
+# Product Evolution Research Report — Round 3: 01/09 UI/UX
 
-> **演进轮次**：Round 2 (Product Evolution Mode)  
+> **演进轮次**：Round 3 (Product Evolution Mode)  
 > **当前轮盘阶段**：01/09 UI/UX 视觉与交互极致打磨 (Visual & Interaction Refinement)  
 > **研究对象**：CG AI Screenshot Translator (`app_v2`)  
 > **报告生成时间**：2026-08-11  
@@ -19,9 +19,10 @@
   - 本地 CG 词库毫秒级命中：<1ms (基线 <5ms，评级：🟢 EXCELLENT)
   - 待机内存：~118MB / 峰值内存：~185MB (基线 <300MB，评级：🟢 EXCELLENT)
   - 单文件便携 EXE 体积：~39.8MB (基线 <45MB，评级：🟢 EXCELLENT)
+  - 应用程序冷启动耗时：~151.5ms (基线 <500ms，评级：🟢 EXCELLENT)
 
 ### 1.2 现有 UI/UX 能力与代码审查 (Codebase Audit)
-通过对 `app_v2/src/` 与 `.agent/` 历史记录的深度审查：
+通过对 `app_v2/src/` 与 `.agent/` 历史记录及当前源码的深度审查：
 1. **双层混合覆盖浮层 (`CaptureOverlay.tsx`)**：
    - 实现了全屏 `rgba(0, 0, 0, 0.38)` 半透明遮罩、动态跟随光标的细虚线十字准星与 `(X, Y)` 坐标指示。
    - 具备选区尺寸指示气泡（`📐 W × H px`）与四角 L 型白色角标。
@@ -30,9 +31,11 @@
 2. **主窗口与控制面板 (`DualPaneTranslator.tsx`, `Sidebar.tsx`, `TitleBar.tsx`)**：
    - 采用 Mica/Acrylic 风格毛玻璃质感、极光流光背景与暗色主题。
    - 多源翻译结果横向滚动 Tab 栏，具备弹性滑动与左右渐变遮罩。
+3. **设置与状态管理 (`SettingsDashboard.tsx`, `useSettingsStore.ts`)**：
+   - 采用模块化 Zustand Store 管理，支持热键自定义、外观主题、LLM API 与本地词典配置。
 
 ### 1.3 存在的核心缺陷与体验断点 (Identified UX & Engineering Gaps)
-通过运行现有自动化测试套件 (`npm test`) 与实际用户交互场景推演，发现以下关键缺陷与痛点：
+通过运行自动化测试套件 (`npm test`) 与实际用户交互场景推演，发现以下关键缺陷与痛点：
 1. **测试断言与 DOM 层级耦合问题**：
    - `src/tests/m4_overlay_sampler.test.tsx` 失败：`findByText('BSDF 材质')` 获取到了卡片内部的 `<span className="truncate">`，导致 `expect(card.className).toContain('overlay-block')` 断言失败。需要在测试或组件中规范卡片根容器与文本载体的层级关系。
 2. **IPC 数据防御缺失**：
@@ -42,9 +45,11 @@
 4. **密集文本行卡片 AABB 碰撞挤压重叠**：
    - 多行密集参数同时识别时，邻近卡片在 Y 轴上容易重叠；气泡在屏幕顶部边界容易被截断。缺少独立的 AABB 碰撞避让与边界夹取算法。
 5. **快捷键系统缺少可视化 CheatSheet 速查面板**：
-   - 当前支持十余种高效快捷键（`F4`, `Ctrl+P`, `Space`, `Tab`, `M`, `Enter`, `Ctrl+D`, `Shift+拖拽`, `1~6`, `?`, `F1`），但新手用户缺乏一目了然的速查面板。
+   - 当前支持十余种高效快捷键（`F4`, `Ctrl+P`, `Space`, `Tab`, `M`, `Enter`, `Ctrl+D`, `Shift+拖拽`, `1~6`, `?`, `F1`），但新用户缺乏一目了然的速查面板。
 6. **CG 专属术语缺少行内高亮与释义卡片**：
    - 命中 Blender / Substance 词典的专业术语未在主窗口和覆层中做视觉差异化着重渲染（如天蓝色虚线下划线与 `🧊 CG` 徽标），缺乏悬停专业释义。
+7. **触控与点击热区 (Hit Box) 符合度不足**：
+   - 部分小按钮（如关闭、复制、语音按钮）视觉尺寸仅 16~20px，未满足现代桌面与触控规范推荐的 36px~44px 最小感应热区。
 
 ---
 
@@ -66,7 +71,7 @@
 2. **Instant Discoverability (高可发现性与零学习成本)**：
    - 优秀工具应具备“渐进式暴露”特性——日常使用极简无感，当用户需要帮助时，按下 `?` 或 `F1` 即可立即获得清晰的快捷键全貌。
 3. **Adaptive Contrast & Anti-Halation (自适应对比度与防光晕)**：
-   - 避免使用刺眼的纯黑 (#000000) 或纯白 (#ffffff)，采用深灰底色 (`#121216` ~ `#18181c`) 配合柔和浅灰文字 (`#f1f5f9` / `#e2e8f0`)，符合 WCAG AA 4.5:1 对比度标准，长时间在 3D 暗色界面工作不伤眼。
+   - 避免使用刺眼的纯黑 (`#000000`) 或纯白 (`#ffffff`)，采用深灰底色 (`#121216` ~ `#18181c`) 配合柔和浅灰文字 (`#f1f5f9` / `#e2e8f0`)，符合 WCAG AA 4.5:1 对比度标准，长时间在 3D 暗色界面工作不伤眼。
 
 ---
 
@@ -91,7 +96,7 @@
 
 ---
 
-### 方案 2: AABB 碰撞避让与 Tooltip 浮动定位计算算法
+## 方案 2: AABB 碰撞避让与 Tooltip 浮动定位计算算法
 - **目标**：解决密集 3D 控件遮挡与重叠问题，支持精确计算气泡浮动坐标与多卡片垂直避让。
 - **涉及文件路径**：
   - `app_v2/src/services/overlayLayout.ts` *(新建布局避让与坐标计算库)*
@@ -108,7 +113,7 @@
 
 ---
 
-### 方案 3: Store 配置扩展与全局 UI/UX 设计系统样式
+## 方案 3: Store 配置扩展与全局 UI/UX 设计系统样式
 - **目标**：打磨全局主题微交互，支持视图模式切换与呼吸光晕。
 - **涉及文件路径**：
   - `app_v2/src/services/types.ts`
@@ -128,7 +133,7 @@
 
 ---
 
-### 方案 4: 主翻译窗口 CG 术语高亮与多引擎对照 Tab 体验打磨
+## 方案 4: 主翻译窗口 CG 术语高亮与多引擎对照 Tab 体验打磨
 - **目标**：增强专业 CG 术语辨识度与多翻译引擎横向滑动视觉反馈。
 - **涉及文件路径**：
   - `app_v2/src/components/MainWindow/DualPaneTranslator.tsx`
@@ -140,7 +145,7 @@
 
 ---
 
-### 方案 5: TitleBar 与 Sidebar 触控热区与微交互反馈增强及测试加固
+## 方案 5: TitleBar 与 Sidebar 触控热区与微交互反馈增强及测试加固
 - **目标**：对齐 Fluent 2.0 规范，增强触控热区与微交互，修复历史测试兼容性问题。
 - **涉及文件路径**：
   - `app_v2/src/components/TitleBar.tsx`
@@ -179,4 +184,4 @@
 ---
 
 ## 6. 总结与后续交付展望 (Conclusion)
-本研究报告为 Product Evolution Mode 第 2 轮（阶段：01/09 UI/UX）提供了详尽的现状分析、竞品对标、架构与样式改进方案、技术选型及风险规避策略。下一阶段 Planner Agent 可直接依据本报告的 5 大可执行方案生成具体的拆解任务并分发给 Dev Agents 实施。
+本研究报告为 Product Evolution Mode 第 3 轮（阶段：01/09 UI/UX）提供了详尽的现状分析、竞品对标、架构与样式改进方案、技术选型及风险规避策略。下一阶段 Planner Agent 可直接依据本报告的 5 大可执行方案生成具体的拆解任务并分发给 Dev Agents 实施。
