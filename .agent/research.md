@@ -1,6 +1,6 @@
-# Product Evolution Research Report — Round 17: 01/09 UI/UX
+# Product Evolution Research Report — Round 18: 01/09 UI/UX
 
-> **演进轮次**：Round 17 (Product Evolution Mode)  
+> **演进轮次**：Round 18 (Product Evolution Mode)  
 > **当前轮盘阶段**：01/09 UI/UX 视觉与交互极致打磨 (Visual & Interaction Refinement)  
 > **研究对象**：CG AI Screenshot Translator (`app_v2`)  
 > **报告生成时间**：2026-08-12  
@@ -11,7 +11,7 @@
 ## 1. 当前状态分析 (Current State Analysis)
 
 ### 1.1 产品使命与核心技术基线
-**CG AI Screenshot Translator (`app_v2`)** 是一款专为三维数字艺术与游戏开发工程师（3D 概念设计师、建模师、材质师与技术美术 TA）量身定制的轻量级无感屏幕划词与截图翻译工具。其核心解决 Blender、Substance 3D (Painter/Designer)、Unity、Unreal Engine 5、Maya、Houdini 等专业 DCC 软件高密度 Dark UI 界面下的专业术语翻译痛点。
+**CG AI Screenshot Translator (`app_v2`)** 是一款专为数字艺术与游戏开发工程师（3D 概念设计师、建模师、材质师与技术美术 TA）量身定制的轻量级无感屏幕划词与截图翻译工具。其核心解决 Blender、Substance 3D (Painter/Designer)、Unity、Unreal Engine 5、Maya、Houdini 等专业 DCC 软件高密度 Dark UI 界面下的专业术语翻译痛点。
 
 - **核心技术栈基准**：
   - **宿主/系统层**：Tauri 2.0 (Rust 2021) + GDI/BitBlt 选区毫秒级截取 + 系统托盘常驻与全局透明置顶遮罩窗口。
@@ -44,18 +44,15 @@
 
 ### 1.3 编译与测试工程断点精准诊断
 
-1. **TypeScript 编译类型错误 (`App.tsx:80`)**：
-   - **错误信息**：`Property 'hotkeyEnabled' does not exist on type 'AppSettings'.`
-   - **根因**：`types.ts` 中定义的字段为 `captureHotkeyEnabled?: boolean`，而 `App.tsx` 中误写为 `settings.hotkeyEnabled`。
-   - **修复对策**：统一修改为 `(settings.captureHotkeyEnabled ?? true)`。
-2. **Vitest 测试断言层级失效 (`m4_overlay_sampler.test.tsx:83`)**：
-   - **错误信息**：`AssertionError: expected 'truncate' to contain 'overlay-block'`。
-   - **根因**：`findByText('BSDF 材质')` 获取到了内部包裹文本的 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 导致断言失败。
-   - **修复对策**：在测试中使用 `(await screen.findByText('BSDF 材质')).closest('.overlay-block')` 或在根节点补充对应类名。
-3. **Mock 环境数据防御缺失 (`tauri.ts:739`)**：
-   - **警告信息**：`History save failed: TypeError: current.find is not a function`。
-   - **根因**：`saveTranslationHistory` 假定 `cmdGetHistory()` 必返回数组，但在单元测试 mock 环境下可能返回 undefined 或非数组。
-   - **修复对策**：增加 `const list = Array.isArray(current) ? current : [];` 防御性判断。
+1. **TypeScript 编译类型字段对齐 (`App.tsx:80`)**：
+   - **现状**：`types.ts` 中定义的字段为 `captureHotkeyEnabled?: boolean`，而 `App.tsx` 中误写为 `settings.hotkeyEnabled`。
+   - **对策**：统一修改为 `(settings.captureHotkeyEnabled ?? true)`，保障类型安全与编译无 warning。
+2. **Mock 环境数据防御缺失 (`tauri.ts:739`)**：
+   - **现状**：`saveTranslationHistory` 假定 `cmdGetHistory()` 必返回数组，但在单元测试 mock 环境下可能返回 undefined 或非数组导致 `TypeError: current.find is not a function`。
+   - **对策**：增加 `const list = Array.isArray(current) ? current : [];` 防御性判断。
+3. **Vitest 测试断言层级精准对齐 (`m4_overlay_sampler.test.tsx:83`)**：
+   - **现状**：`findByText('BSDF 材质')` 获取到了内部包裹文本的 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 导致断言失败。
+   - **对策**：在测试中使用 `(await screen.findByText('BSDF 材质')).closest('.overlay-block')` 或在根节点补充对应类名。
 
 ---
 
@@ -98,9 +95,9 @@
 - **可执行细节**：
   1. 创建 `CheatSheetModal.tsx`，采用深色毛玻璃卡片设计（`backdrop-blur-xl`, `bg-slate-950/85`, `border-white/20`, `shadow-2xl`, `rounded-2xl`）。
   2. 结构化四大分组：
-     - **📐 选区操作**：`拖拽` 矩形划词 \| `Shift+拖拽` 多选区划词 \| `Esc / 右键` 退出选区 \| `F4` 划词开关
-     - **🃏 卡片操作**：`Ctrl+P` Pin固定锁定 \| `Enter / Ctrl+C` 复制全部译文 \| `Space` 语音朗读 \| `Ctrl+D` 收藏至生词本
-     - **⚙️ 模式通道**：`M` 原位覆盖/悬浮气泡切换 \| `Tab` 循环切换AI模型 \| `1~6` 快捷切换目标语种
+     - **📐 选区操作**：`拖拽` 矩形划词 | `Shift+拖拽` 多选区划词 | `Esc / 右键` 退出选区 | `F4` 划词开关
+     - **🃏 卡片操作**：`Ctrl+P` Pin固定锁定 | `Enter / Ctrl+C` 复制全部译文 | `Space` 语音朗读 | `Ctrl+D` 收藏至生词本
+     - **⚙️ 模式通道**：`M` 原位覆盖/悬浮气泡切换 | `Tab` 循环切换AI模型 | `1~6` 快捷切换目标语种
      - **💡 帮助指引**：`? / F1` 打开/关闭本速查面板
   3. 采用统一定制 `<kbd>` 标签样式（微阴影、圆角边框、等宽字体），符合 WCAG AA 4.5:1 对比度。
   4. 编写 `cheatsheet_modal.test.tsx`，验证打开/关闭、按键渲染、Esc 与外部遮罩点击响应。
