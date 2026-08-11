@@ -1,6 +1,6 @@
-# Product Evolution Research Report — Round 8: 01/09 UI/UX
+# Product Evolution Research Report — Round 9: 01/09 UI/UX
 
-> **演进轮次**：Round 8 (Product Evolution Mode)  
+> **演进轮次**：Round 9 (Product Evolution Mode)  
 > **当前轮盘阶段**：01/09 UI/UX 视觉与交互极致打磨 (Visual & Interaction Refinement)  
 > **研究对象**：CG AI Screenshot Translator (`app_v2`)  
 > **报告生成时间**：2026-08-11  
@@ -11,7 +11,7 @@
 ## 1. 当前状态分析 (Current State Analysis)
 
 ### 1.1 产品使命与技术架构基线
-**CG AI Screenshot Translator (`app_v2`)** 是一款专为数字艺术概念设计师、3D 建模师、材质师与游戏技术美术 (TA) 打造的轻量级无感屏幕划词与截图翻译工具，深度适配 Blender、Substance 3D (Painter/Designer)、Unity、Unreal Engine 5、Maya、Houdini 等专业 DCC 软件的复杂 Dark UI 界面。
+**CG AI Screenshot Translator (`app_v2`)** 是一款面向数字艺术与游戏开发工程师（3D 概念设计师、建模师、材质师与技术美术 TA）的轻量级无感屏幕划词与截图翻译工具，深度适配 Blender、Substance 3D (Painter/Designer)、Unity、Unreal Engine 5、Maya 等专业 DCC 软件的复杂 Dark UI 界面。
 
 - **系统与技术架构基准**：
   - **宿主/系统层**：Tauri 2.0 (Rust 2021) + GDI/BitBlt 选区毫秒级截取 + 系统托盘常驻与全局透明置顶遮罩窗口。
@@ -31,20 +31,20 @@
 
 | 组件模块 | 文件路径 | 当前已具备的 UI/UX 特性 | 遗留体验断点与进阶空间 |
 | :--- | :--- | :--- | :--- |
-| **划词覆层** | `src/components/Overlay/CaptureOverlay.tsx` | 1. `rgba(0,0,0,0.38)` 全屏半透明暗化遮罩与动态虚线十字准星<br>2. 实时 `(X, Y)` 坐标指示气泡与 `📐 W×H px` 选区尺寸 HUD<br>3. 阶段化文字过渡 (`识别中... -> 翻译中... -> 渲染中...`)<br>4. Pin 锁定 (`Ctrl+P`)、单条复制、TTS 语音 (`Space`)、多语种胶囊 (`1~6`)、AI 模型循环 (`Tab`) | 1. 目前仅支持原位覆盖形态，容易遮挡 3D 界面紧凑的数值输入滑块与拾色器<br>2. 密集多行文本块缺乏纵向 AABB 避让算法与安全边界夹取保护<br>3. 缺少键盘快捷键可视化速查面板 (`?` / `F1`)，功能可发现性有待提升 |
+| **划词覆层** | `src/components/Overlay/CaptureOverlay.tsx` | 1. `rgba(0,0,0,0.38)` 全屏半透明暗化遮罩与动态虚线十字准星<br>2. 实时 `(X, Y)` 坐标指示气泡与 `📐 W×H px` 选区尺寸 HUD<br>3. 阶段化文字过渡 (`识别中... -> 翻译中... -> 渲染中...`)<br>4. Pin 锁定 (`Ctrl+P`)、单条复制、TTS 语音 (`Space`)、多语种胶囊 (`1~6`)、AI 模型循环 (`Tab`) | 1. 目前仅支持原位覆盖形态，容易遮挡 3D 界面紧凑的数值输入滑块与拾色器<br>2. 密集多行文本块缺乏纵向 AABB 避让算法与安全边界夹取保护<br>3. 缺少键盘快捷键可视化速查面板 (`?` / `F1`)，高阶功能可发现性低 |
 | **主翻译器** | `src/components/MainWindow/DualPaneTranslator.tsx` | 1. 左右双栏实时防抖翻译 (350ms Debounce)<br>2. 源语言/目标语言快速互换与语种下拉选择<br>3. 多翻译引擎横向滑动 Tab 栏与并排对比卡片<br>4. 复制反馈、语音朗读与历史自动持久化 | 1. 命中专业 CG 词库的名词缺少行内视觉着重强调与悬浮参数释义<br>2. 多引擎 Tab 栏两侧缺少滚动溢出渐变遮罩与平滑触控回弹 |
 | **标题栏** | `src/components/TitleBar.tsx` | 1. 原生 `startDragging()` 窗口拖拽手柄<br>2. 最小化、最大化/还原、关闭三键交互<br>3. 品牌 Logo 与版本号徽标 | 1. 窗口控制按钮触控感应区偏小 (<36px)，未达无障碍触控热区标准<br>2. 关闭按钮缺乏柔和渐变过渡与 `:active` 按压微缩微反馈 |
 | **侧边栏** | `src/components/Sidebar/Sidebar.tsx` | 1. 模块化工作台与工具分组导航<br>2. 选中项微型发光指示条与渐变图标底座<br>3. 底部“划词翻译”CTA 按钮与 RapidOCR 状态指示 | 1. 导航项与快捷按钮缺少 Hover 快捷键 Tooltip 提示<br>2. 缺少动态键盘焦点轮廓线 (`focus-visible`) |
-| **设置面板** | `src/components/Settings/SettingsDashboard.tsx` | 1. 外观主题、磨砂玻璃模糊度 (0~40px) 调节<br>2. 全局快捷键录制、LLM API 与离线词典配置 | 1. 缺少覆盖模式 (`Cover` vs `Tooltip`) 与 AABB 避让开关项 |
+| **设计系统** | `src/index.css` | 1. Mica/Acrylic 毛玻璃基础类 (`.glass-panel`, `.glass-card`)<br>2. 自定义极细滚动条 (`scrollbar-thin`)<br>3. 基础微动画 (`page-in`, `fade-in`) | 1. 缺少琥珀金 Pin 锁定呼吸光晕动画 (`.pulse-glow-amber`)<br>2. 缺少 Tooltip 弹性进场动效 (`.tooltip-pop`)<br>3. 缺少 CG 术语下划线与徽章样式 (`.cg-term-highlight`, `.cg-term-badge`)<br>4. 缺少无障碍触控热区类 (`.touch-hit-box`) |
 
 ---
 
 ### 1.3 关键工程与测试回归断点分析
 
 1. **测试断言层级失效 (`m4_overlay_sampler.test.tsx`)**：
-   - **现状**：在 `m4_overlay_sampler.test.tsx:83` 中，`screen.findByText('BSDF 材质')` 获取到了内部 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 导致失败。
+   - **现状**：在 `m4_overlay_sampler.test.tsx:83` 中，`screen.findByText('BSDF 材质')` 获取到了内部 `<span className="truncate">`，直接断言 `card.className.toContain('overlay-block')` 导致断言失败（收到的类名为 `truncate`）。
    - **根因**：卡片根容器为 `<div className="overlay-block ...">`，而文本包裹在子元素 `span` 中。
-   - **解决方案**：在测试中使用 `card.closest('.overlay-block')` 或在组件根节点增加 `data-testid="overlay-card"`。
+   - **解决方案**：在测试中使用 `card.closest('.overlay-block')` 或在组件根节点增加 `data-testid="overlay-card"` 确保断言层级精确。
 2. **Mock 环境数据防御缺失 (`tauri.ts`)**：
    - **现状**：`tauri.ts:739` 中 `saveTranslationHistory` 调用 `const current = await cmdGetHistory()`，在测试 mock 环境中返回值非数组时抛出 `TypeError: current.find is not a function`。
    - **解决方案**：加入 `const currentList = Array.isArray(current) ? current : [];` 防御性守卫。
@@ -57,7 +57,7 @@
 
 | 标杆产品 / 规范 | 核心 UI/UX 亮点 | 设计哲学 | 对本项目的演进借鉴 |
 | :--- | :--- | :--- | :--- |
-| **Bob (macOS) / Pot Desktop** | 桌面级划词与屏幕取词标杆 | 非破坏性双模切换（原位覆盖 vs 浮动气泡） | 引入 `overlayViewMode` 切换机制；在气泡形态下通过小箭头指向原词，不遮挡 3D 软件参数滑动条 |
+| **Bob (macOS) / Pot Desktop** | 桌面级划词与屏幕取词标杆 | 非破坏性双模切换（原位覆盖 vs 浮动气泡） | 引入 `overlayViewMode` ('cover' \| 'tooltip') 切换机制；在气泡形态下通过小箭头指向原词，不遮挡 3D 软件参数滑动条 |
 | **PixPin / Snipaste** | 截图与贴图交互巅峰 | 像素级精准指示、琥珀金光晕与低干扰 HUD | 选区十字准星提供坐标 HUD；Pin 锁定卡片采用琥珀金多层光晕，杜绝误触关闭 |
 | **Raycast / Alfred** | 键盘优先 (Keyboard-First) | 全局随叫随到、内置 Visual CheatSheet 速查 | 引入 `?` / `F1` 呼出 Acrylic 半透明按键速查面板，使用专属 `<kbd>` 样式消除认知成本 |
 | **Immersive Translate** | 沉浸式专业双语对照 | 术语虚线下划线与悬停参数百科 | 在主面板与覆盖卡片中对命中 CG 词库的术语渲染天蓝虚线下划线，鼠标悬停展示 3D 软件应用释义 |
@@ -154,39 +154,31 @@
   - `app_v2/src/services/tauri.ts`
   - `app_v2/src/tests/m4_overlay_sampler.test.tsx`
 - **可执行细节**：
-  1. `TitleBar.tsx`：最小化、最大化、关闭按钮触控热区扩展至 36x36px，关闭按钮增加柔和红色背景渐变过渡与 `:active` 按压微缩（`scale(0.95)`）。
-  2. `Sidebar.tsx`：为每个导航 Tab 与快捷划词按钮添加 Hover 快捷键气泡提示（如“快捷划词 (F4)”），Active Tab 增加动态平滑光标条与柔和呼吸背景。
-  3. `tauri.ts`：在 `saveTranslationHistory` 中增加 `Array.isArray(current) ? current : []` 防御性守卫。
-  4. `m4_overlay_sampler.test.tsx`：优化测试中对 `OverlayBlockCard` DOM 容器的选择器查询，确保 `npm test` 100% 通过。
+  1. `TitleBar.tsx`：将最小化、最大化、关闭按钮 Hit Box 扩大至 36x36px；关闭按钮增加柔和红色背景渐变过渡，支持 `:active` 按压微缩（`scale(0.95)`）微动效；Logo 徽标增加 Tooltip 说明。
+  2. `Sidebar.tsx`：为每个导航 Tab 与底部“划词翻译”按钮增加 Hover 快捷键气泡提示；Active 状态增加动态平滑呼吸光束与清晰聚焦轮廓线 (`focus-visible:ring-2`)。
+  3. `tauri.ts`：在 `saveTranslationHistory` 等方法中增加数组安全守卫，杜绝 mock 环境报错。
+  4. `m4_overlay_sampler.test.tsx`：修正卡片元素选择器与类名断言层级，确保测试套件 100% 绿灯。
 
 ---
 
-## 4. 技术选型建议 (Technology Selection Recommendations)
+## 4. 技术选型建议 (Tech Selection & Architecture)
 
-1. **零外部重型依赖原则 (Zero Heavy Dependencies)**：
-   - 坚决杜绝引入 AntD / MUI 等庞大外部 UI 库，纯基于 **React 19 + TypeScript + Tailwind CSS 4 + Lucide Icons + Zustand** 原生实现，维持安装包体积严格控制在 <40MB。
-2. **纯 CSS GPU 合成层硬件加速 (Composite-Only Animations)**：
-   - 浮动 Tooltip、Toast、CheatSheet 弹窗位移动画仅使用 `transform: translate3d(...)` 和 `opacity`，启用 `will-change: transform`，避免引发浏览器重排（Reflow）。
-3. **轻量 AABB 算法时间复杂度**：
-   - 单次截图识别文本块数量通常在 1~30 块之间，AABB 碰撞检测与避让计算时间复杂度为 $O(N \log N)$，单次运算耗时 <0.5ms，完全无感。
-4. **高 DPI 双向精准换算 (High-DPI Coordinate Mapping)**：
-   - 统一采用 `scaleFactor`（`window.devicePixelRatio`）进行逻辑像素与物理像素的双向精准换算，确保 4K 多屏混用时无像素偏移。
+1. **纯函数式屏幕空间几何算法 (Functional Layout Engine)**：
+   - 避让与气泡定位算法置于独立无状态服务 `services/overlayLayout.ts` 中，纯数学矩形重叠与边界 Clamp，运行耗时 <0.1ms，易于 100% 单元测试覆盖。
+2. **Composite-Only GPU 动画与 CSS 变量驱动 (Hardware-Accelerated CSS)**：
+   - 使用 CSS 硬件加速属性（`transform`, `opacity`, `backdrop-filter`），避免触发 DOM Reflow/Relayout，保障 60 FPS 丝滑高刷。
+3. **WCAG 2.2 AA 级无障碍触控体系**：
+   - 交互按钮全面落实 `.touch-hit-box`（>= 36px 物理感应区），按键 `<kbd>` 采用 4.5:1 对比度与高辨识度等宽排版。
+4. **Zustand 轻量持久化与 React 19 并发渲染兼容**：
+   - 配置项扩展直接对齐 `AppSettings` 结构体，向下兼容历史本地缓存，避免由于字段缺省引起运行时异常。
 
 ---
 
-## 5. 风险评估 (Risk Assessment)
+## 5. 风险评估与缓解策略 (Risk Assessment & Mitigation)
 
-| 风险项 | 严重程度 | 触发场景 | 规避与应对措施 |
+| 潜在风险点 | 严重级 | 影响范围 | 缓解策略与技术保障 |
 | :--- | :--- | :--- | :--- |
-| **高 DPI / 多显示器混用导致 Tooltip 气泡坐标偏移** | 中 (Medium) | 4K 主屏 (150% DPI) 与 1080P 副屏混用 | 统一采用 `scaleFactor`（`window.devicePixelRatio`）进行逻辑像素与物理像素的双向精准换算。 |
-| **密集卡片过多时的 DOM 节点渲染压力** | 低 (Low) | 单次框选了包含 40+ 行文本的巨型代码/表格区域 | 对识别结果设置阈值保护（超过 30 块自动聚合提示或提供紧凑滚动容器），确保 60 FPS 渲染帧率。 |
-| **全局快捷键 `?` / `M` 与文本输入框冲突** | 低 (Low) | 用户在主界面的搜索框或输入框中键入字母 | 在所有全局按键监听器头部统一校验 `(e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA'`。 |
-| **测试环境 Mock IPC 返回值类型不一致** | 低 (Low) | `npm test` 运行时 `cmdGetHistory` 返回 undefined 或非数组对象 | 在前端调用链中严格进行 `Array.isArray()` 前置类型守卫与默认空数组兜底。 |
-
----
-
-## 6. 演进阶段推进与后续规划 (Stage Transition & Roadmap Next Steps)
-
-本轮研究为 Stage 01/09 (UI/UX) 的全面收官与向 Stage 02/09 (交互体验) 平滑过渡奠定了坚实的技术方案基础。
-- **本轮交付物**：本研究报告 `/.agent/research.md`。
-- **下阶段指引**：Planner Agent 可直接依据上述 5 大可执行方案拆解生成 `tasks.md` 并指派并行 Dev Agents 实施开发。
+| **屏幕极端边缘气泡溢出** | 中 (P2) | 划词选区在显示器四角极限位置 | 在 `calculateTooltipPosition` 中实现严格的 X 轴 `[8, W-w-8]` 与 Y 轴 `[8, H-h-8]` 双向 Clamp 与智能翻转 |
+| **密集多行文本 AABB 纵向推移超出容器** | 中 (P2) | 属性面板密集数十行英文 | 增加自底向上反向挤压算法与动态字号微调（10px~18px），保证整体可视性 |
+| **多层毛玻璃渲染在集显掉帧** | 低 (P3) | 低配核显笔记本全屏划词 | 仅在激活卡片上启用多层阴影，背景层使用单层 `backdrop-blur-xl`，启用 `will-change: transform` |
+| **测试环境中 Mock 数据防御缺失** | 高 (P1) | CI 自动化测试回归与断言中断 | 在服务层公共函数中强制增加类型安全守卫（`Array.isArray` 与可选链 `?.`），修正测试层级选择器 |
