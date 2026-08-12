@@ -30,8 +30,8 @@ fi
 
 # === 工具函数 ===
 notify() {
-  # timeout 5s 防止 hermes send 网络中断时阻塞整个 loop
-  timeout 5s bash -c "echo '🔄 Loop${ROUND}: $1' | hermes send --to weixin 2>/dev/null" &
+  # 后台化 + stdout/stderr 全重定向，防止 hermes send 的确认消息污染主流程
+  (echo "🔄 Loop${ROUND}: $1" | timeout 5s hermes send --to weixin >/dev/null 2>&1) &
 }
 
 # 解析阶段：从backlog.md的 "## N. In Progress" 标题提取
@@ -491,7 +491,7 @@ sys.exit(1)
       push_screenshot() {
         local file="$1" label="$2"
         if [ -f "$file" ]; then
-          hermes send --to weixin --file "$file" 2>/dev/null
+          (hermes send --to weixin --file "$file" >/dev/null 2>&1) &
           echo "[$(date)] PHASE 2.7: 推送截图 ${label}: ${file}" >> "$LOG"
         fi
       }
