@@ -38,17 +38,39 @@ get_stage() {
   local bl="$STATE_DIR/backlog.md"
   local s=""
   if [ -f "$bl" ]; then
-    # 主解析：从 "In Progress (... - Stage XX ...)" 提取
     s=$(grep "In Progress" "$bl" | head -1 | sed 's/.*In Progress .*- //' | sed 's/).*//' | xargs)
     [ -n "$s" ] && { echo "$s"; return; }
-    # 备选1：匹配 "- Stage: XX" 行
     s=$(grep "^- Stage:" "$bl" | head -1 | cut -d' ' -f3-)
     [ -n "$s" ] && { echo "$s"; return; }
-    # 备选2：匹配 "Stage XX" 出现在任何地方
     s=$(grep -o "Stage [0-9][0-9][^)]*" "$bl" | head -1)
     [ -n "$s" ] && { echo "$s"; return; }
   fi
   echo "01/09 UI/UX"
+}
+
+# Dynamic Priority Wheel：用 priority-engine.py 动态计算优先级
+# 旧 get_stage 保留为 fallback（coverage mechanism）
+get_dynamic_stage() {
+  local engine="$STATE_DIR/priority-engine.py"
+  local domain="${DOMAIN:-translation}"
+
+  if [ ! -f "$engine" ]; then
+    notify "⚠️ priority-engine.py 不存在，回退到 backlog Stage"
+    get_stage
+    return
+  fi
+
+  # 用 priority-engine.py 计算推荐阶段
+  local result
+  result=$(python "$engine" recommend "$STATE_DIR" "$domain" 2>&1)
+  local recommended
+  recommended=$(echo "$result" | grep -o "推荐下一阶段: [^ ]*" | head -1 | sed 's/推荐下一阶段: //')
+  if [ -n "$recommended" ]; then
+    echo "$recommended"
+  else
+    notify "⚠️ priority-engine 计算失败，回退到 backlog Stage"
+    get_stage
+  fi
 }
 
 # 写触发切号文件 + 立即停止，等切号完成后才恢复
@@ -184,8 +206,8 @@ while true; do
   ROUND_START_TIME=$(date +%s)
   echo "[$(date)] MAIN_LOOP: 第 ${ROUND} 轮开始" >> "$LOG"
 
-  # 解析阶段
-  STAGE=$(get_stage)
+  # 解析阶段：优先用 Dynamic Priority Wheel，失败才回退到 backlog Stage
+  STAGE=$(get_dynamic_stage)
   echo "{\"round\":${ROUND},\"stage\":\"${STAGE}\",\"phase\":\"P0\",\"status\":\"RUNNING\"}" > "$STATE_DIR/state.json"
 
   # Phase 0: Research
