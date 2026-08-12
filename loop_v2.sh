@@ -30,8 +30,8 @@ fi
 
 # === 工具函数 ===
 notify() {
-  # 后台化 + stdout/stderr 全重定向，防止 hermes send 的确认消息污染主流程
-  (echo "🔄 Loop${ROUND}: $1" | timeout 5s hermes send --to weixin >/dev/null 2>&1) &
+  # 同步调用（非后台），stdout/stderr 全重定向防污染；去掉 timeout 避免消息被提前 kill
+  echo "🔄 Loop${ROUND}: $1" | hermes send --to weixin >/dev/null 2>&1
 }
 
 # 解析阶段：从backlog.md的 "## N. In Progress" 标题提取
@@ -220,7 +220,7 @@ while true; do
   # 推送研究摘要（前300字符）
   if [ -f "$STATE_DIR/research.md" ]; then
     SUMMARY=$(head -c 300 "$STATE_DIR/research.md" 2>/dev/null)
-    (echo "📖 R${ROUND} 研究摘要：${SUMMARY}" | timeout 5s hermes send --to weixin >/dev/null 2>&1) &
+    (echo "📖 R${ROUND} 研究摘要：${SUMMARY}" | hermes send --to weixin >/dev/null 2>&1) &
   fi
 
   # Phase 1: Planner
@@ -496,7 +496,7 @@ sys.exit(1)
       push_screenshot() {
         local file="$1" label="$2"
         if [ -f "$file" ]; then
-          (hermes send --to weixin --file "$file" >/dev/null 2>&1) &
+          hermes send --to weixin --file "$file" >/dev/null 2>&1
           echo "[$(date)] PHASE 2.7: 推送截图 ${label}: ${file}" >> "$LOG"
         fi
       }
