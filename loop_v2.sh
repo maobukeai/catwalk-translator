@@ -29,36 +29,49 @@ if [ -f "$STATE_DIR/verify-cron.py" ]; then
 fi
 
 # === 工具函数 ===
-# 微信 API 有 30 秒速率限制，notify 队列化：收集消息，30秒合并推送一次
+# 微信 API 有 30 秒速率限制，notify 队列化：收集消息，限流时重试直到成功
 NOTIFY_QUEUE="$STATE_DIR/.notify_queue"
-NOTIFY_LAST_SENT=0
+NOTIFY_STATE="$STATE_DIR/.notify_state"
 NOTIFY_INTERVAL=30
 
 notify() {
   echo "$1" >> "$NOTIFY_QUEUE" 2>/dev/null
-  # 检查是否到期推送
-  local now; now=$(date +%s)
-  if [ $((now - NOTIFY_LAST_SENT)) -ge $NOTIFY_INTERVAL ]; then
-    _flush_notify
-  fi
+  _flush_notify
+}
+
+_notify_send() {
+  local msg="$1"
+  # 非阻塞单次发送，限流时立即返回1（不清队列，下次自动重试）
+  echo "$msg" | hermes send --to weixin >/dev/null 2>&1
+  return $?
 }
 
 _flush_notify() {
   [ ! -f "$NOTIFY_QUEUE" ] && return
-  local now; now=$(date +%s)
-  [ $((now - NOTIFY_LAST_SENT)) -lt $NOTIFY_INTERVAL ] && return
   local msg; msg=$(cat "$NOTIFY_QUEUE" 2>/dev/null)
   [ -z "$msg" ] && return
-  # 合并为一条消息
-  echo "🔄 Loop${ROUND} 通知汇总：
 
-$(echo "$msg" | head -20)" | hermes send --to weixin >/dev/null 2>&1
-  : > "$NOTIFY_QUEUE"
-  NOTIFY_LAST_SENT=$now
+  local now; now=$(date +%s)
+  local last_sent=0
+  [ -f "$NOTIFY_STATE" ] && last_sent=$(cat "$NOTIFY_STATE" 2>/dev/null || echo 0)
+
+  # 冷却期未到，保留队列等待
+  if [ $((now - last_sent)) -lt $NOTIFY_INTERVAL ]; then
+    return
+  fi
+
+  local payload="🔄 Loop${ROUND} 通知汇总：
+
+$(echo "$msg" | head -20)"
+
+  # 发送失败则不清空队列，等待下次重试
+  if _notify_send "$payload"; then
+    date +%s > "$NOTIFY_STATE"
+    : > "$NOTIFY_QUEUE"
+  fi
 }
 
 notify_done() {
-  # 轮结束前强制 flush
   _flush_notify
 }
 
@@ -246,11 +259,12 @@ while true; do
   fi
   notify "📖 第${ROUND}轮 Phase0 研究完成"
   _flush_notify
-  # 推送研究摘要（前300字符）
+  # 推送研究摘要（前300字符）— 加入队列，不直接 hermes send（限流保护）
   if [ -f "$STATE_DIR/research.md" ]; then
-    SUMMARY=$(head -c 300 "$STATE_DIR/research.md" 2>/dev/null)
-    (echo "📖 R${ROUND} 研究摘要：${SUMMARY}" | hermes send --to weixin >/dev/null 2>&1) &
+    SUMMARY=$(head -c 500 "$STATE_DIR/research.md" 2>/dev/null)
+    echo "📖 R${ROUND} 研究摘要：${SUMMARY}" >> "$NOTIFY_QUEUE" 2>/dev/null
   fi
+  _flush_notify
 
   # Phase 1: Planner
   if ! agy_run "Phase1-Planner" /tmp/ev_r${ROUND}_planner.log agy -p "Product Evolution R${ROUND}，阶段：${STAGE}。你是【规划Agent】，只拆任务。读 /.agent/research.md 和 backlog.md，拆 N>=2 个并行任务，每个任务文件名不重叠。输出格式：
