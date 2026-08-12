@@ -1,0 +1,10 @@
+{
+  "max_iterations": 10,
+  "max_cost_usd": 20.0,
+  "max_tokens": 2000000,
+  "max_files_changed": 20,
+  "max_risk_level": "medium",
+  "max_failed_gates": 3,
+  "min_improvement_value": 0.3,
+  "default_expected_benefit": 0.6
+}

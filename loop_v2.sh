@@ -517,6 +517,99 @@ sys.exit(1)
   echo "[$(date)] $ROUND_REPORT" >> "$LOG"
   notify "$ROUND_REPORT"
 
+  # === Budget Check: 有预算的连续进化 ===
+  BUDGET_TOOL="$STATE_DIR/budget.py"
+  BUDGET_JSON="$STATE_DIR/budget.json"
+  if [ -f "$BUDGET_TOOL" ]; then
+    # 估算本轮数据
+    LOCAL_APPROVED=$(python -c "import json,sys; raw=open('/tmp/ev_r${ROUND}_review.log').read() if __import__('os').path.exists('/tmp/ev_r${ROUND}_review.log') else '{}'; meta=json.loads(raw); resp=meta.get('response',''); print(sum(1 for l in resp.split('\n') if '\"decision\":\"APPROVED\"' in l) or 0)" 2>/dev/null || echo 0)
+    # Expected Benefit: 合并数/总数 + Regression Score 加权
+    if [ "$N" -gt 0 ]; then
+      BENEFIT=$(python -c "
+m=${MERGED_COUNT}; n=${N}; rs=${REGRESSION_SCORE:-1.0}
+merged_score = m/n if n>0 else 0
+expected_benefit = round((merged_score * 0.5 + float(rs) * 0.5), 2)
+expected_benefit = max(0.0, min(1.0, expected_benefit))
+print(expected_benefit)")
+    else
+      BENEFIT=0.0
+    fi
+
+    # Risk Level: 基于 Regression Verdict + QA fail 数
+    QA_FAIL_COUNT=0
+    for i in $(seq 1 "$N"); do
+      [ "${QA_DECISION[$i]:-}" = "FAIL" ] && QA_FAIL_COUNT=$((QA_FAIL_COUNT + 1))
+    done
+    if [ "$REGRESSION_VERDICT" = "FAIL" ] || [ "$QA_FAIL_COUNT" -ge 3 ]; then
+      RISK_LEVEL="high"
+    elif [ "$REGRESSION_VERDICT" = "WARN" ] || [ "$QA_FAIL_COUNT" -ge 1 ]; then
+      RISK_LEVEL="medium"
+    else
+      RISK_LEVEL="low"
+    fi
+
+    # Cost: 基于 agy 调用次数估算（每轮约 2+3+N = N+5 次 agy，每次 ~$0.05 估算）
+    ESTIMATED_COST=$(python -c "
+calls = ${N} + 5
+cost_per_call = 0.03  # 估算每 call 成本
+round_cost = round(calls * cost_per_call, 2)
+print(round_cost)")
+
+    # 累加总成本（从 state.json 读取上轮累计）
+    PREV_COST=$(python -c "import json,sys; d=json.load(open(sys.argv[1])) if __import__('os').path.exists(sys.argv[1]) else {}; print(d.get('cost_usd',0))" "$STATE_DIR/budget_usage.json" 2>/dev/null || echo 0)
+    TOTAL_COST=$(python -c "print(round(${PREV_COST:-0} + ${ESTIMATED_COST}, 2))")
+    TOTAL_TOKENS=$(python -c "
+prev = 0
+import json,os
+p = '$STATE_DIR/budget_usage.json'
+if os.path.exists(p): prev = json.load(open(p)).get('tokens_used', 0)
+# 每 agy call ~5000 tokens
+print(prev + (${N} + 5) * 5000)")
+
+    # 累计失败门
+    PREV_FAILED=$(python -c "import json,sys; d=json.load(open(sys.argv[1])) if __import__('os').path.exists(sys.argv[1]) else {}; print(d.get('failed_gates',0))" "$STATE_DIR/budget_usage.json" 2>/dev/null || echo 0)
+    TOTAL_FAILED=$((PREV_FAILED + QA_FAIL_COUNT))
+
+    # 文件改动数
+    FILES_CHANGED=$(git diff HEAD~1 --shortstat 2>/dev/null | grep -o '[0-9]* file' | cut -d' ' -f1 || echo 1)
+    FILES_CHANGED=${FILES_CHANGED:-1}
+
+    # 写本轮 usage JSON
+    USAGE_JSON="/tmp/budget_r${ROUND}_usage.json"
+    python -c "
+import json
+json.dump({
+    'iteration': ${ROUND},
+    'cost_usd': ${TOTAL_COST},
+    'tokens_used': ${TOTAL_TOKENS},
+    'files_changed': ${FILES_CHANGED},
+    'risk_level': '${RISK_LEVEL}',
+    'expected_benefit': ${BENEFIT},
+    'failed_gates': ${TOTAL_FAILED},
+    'improvement_value': 0  # budget.py 会计算
+}, open('$USAGE_JSON','w'), indent=2)"
+
+    # 跑 budget check
+    BUDGET_RESULT=$(python "$BUDGET_TOOL" check "$BUDGET_JSON" "$USAGE_JSON" 2>&1)
+    BUDGET_CONTINUE=$(echo "$BUDGET_RESULT" | python -c "import json,sys; print(json.load(sys.stdin).get('continue','true'))" 2>/dev/null)
+    BUDGET_REASON=$(echo "$BUDGET_RESULT" | python -c "import json,sys; print(json.load(sys.stdin).get('reason',''))" 2>/dev/null)
+
+    # 保存累计数据
+    python -c "
+import json
+json.dump({'cost_usd': ${TOTAL_COST}, 'tokens_used': ${TOTAL_TOKENS}, 'failed_gates': ${TOTAL_FAILED}}, open('$STATE_DIR/budget_usage.json','w'), indent=2)"
+
+    if [ "$BUDGET_CONTINUE" = "False" ]; then
+      echo "[$(date)] BUDGET: ${BUDGET_REASON}" >> "$LOG"
+      notify "🛑 预算耗尽/价值不足，循环自动停止: ${BUDGET_REASON}"
+      notify "📊 IV=${BENEFIT} Risk=${RISK_LEVEL} Cost=\$${TOTAL_COST} FailedGates=${TOTAL_FAILED}"
+      echo "BUDGET_STOPPED=true" >> "$LOG"
+      break
+    else
+      echo "[$(date)] BUDGET: ${BUDGET_REASON} (IV=${BENEFIT} Risk=${RISK_LEVEL})" >> "$LOG"
+    fi
+  fi
+
   # 全局配额检查
   QUOTA_COUNT=0
   for f in /tmp/ev_r${ROUND}_*.log; do
