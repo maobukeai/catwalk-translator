@@ -23,6 +23,11 @@ ROUND=0
 
 mkdir -p "$STATE_DIR"
 
+# 启动时自动校验 + 修复 cron（保证 cron 就绪）
+if [ -f "$STATE_DIR/verify-cron.py" ]; then
+  python "$STATE_DIR/verify-cron.py" >> "$LOG" 2>&1
+fi
+
 # === 工具函数 ===
 notify() {
   echo "🔄 Loop${ROUND}: $1" | hermes send --to weixin 2>/dev/null
