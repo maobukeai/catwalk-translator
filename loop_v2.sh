@@ -447,6 +447,21 @@ sys.exit(1)
         done
         notify "❌ Regression FAIL，已通过 QA 的分支自动降级为 FAIL"
       fi
+
+      # 推送所有截图到微信（baseline + after，每张推送一次）
+      push_screenshot() {
+        local file="$1" label="$2"
+        if [ -f "$file" ]; then
+          hermes send --to weixin --file "$file" 2>/dev/null
+          echo "[$(date)] PHASE 2.7: 推送截图 ${label}: ${file}" >> "$LOG"
+        fi
+      }
+      for scene in home translate; do
+        bfile=$(python -c "import json,sys; print(json.load(open(sys.argv[1])).get('screenshots',{}).get(sys.argv[2],''))" "$BASELINE_DIR/baseline.json" "$scene" 2>/dev/null)
+        afile=$(python -c "import json,sys; print(json.load(open(sys.argv[1])).get('screenshots',{}).get(sys.argv[2],''))" "$AFTER_DIR/after.json" "$scene" 2>/dev/null)
+        push_screenshot "$bfile" "R${ROUND}-${scene}-baseline"
+        push_screenshot "$afile" "R${ROUND}-${scene}-after"
+      done
     fi
   fi
 
