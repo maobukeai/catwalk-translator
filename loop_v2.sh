@@ -96,7 +96,8 @@ agy_run() {
       notify "⚠️ ${label}: 状态异常 (${status:-未识别})"
       ;;
   esac
-  return 0
+  # ERROR/UNKNOWN 返回 1，让调用方决定跳过本轮；SUCCESS 返回 0
+  [ "${status:-UNKNOWN}" = "SUCCESS" ] && return 0 || return 1
 }
 
 # 解析Reviewer输出：宽松匹配，不要求严格格式
