@@ -29,9 +29,37 @@ if [ -f "$STATE_DIR/verify-cron.py" ]; then
 fi
 
 # === 工具函数 ===
+# 微信 API 有 30 秒速率限制，notify 队列化：收集消息，30秒合并推送一次
+NOTIFY_QUEUE="$STATE_DIR/.notify_queue"
+NOTIFY_LAST_SENT=0
+NOTIFY_INTERVAL=30
+
 notify() {
-  # 同步调用（非后台），stdout/stderr 全重定向防污染；去掉 timeout 避免消息被提前 kill
-  echo "🔄 Loop${ROUND}: $1" | hermes send --to weixin >/dev/null 2>&1
+  echo "$1" >> "$NOTIFY_QUEUE" 2>/dev/null
+  # 检查是否到期推送
+  local now; now=$(date +%s)
+  if [ $((now - NOTIFY_LAST_SENT)) -ge $NOTIFY_INTERVAL ]; then
+    _flush_notify
+  fi
+}
+
+_flush_notify() {
+  [ ! -f "$NOTIFY_QUEUE" ] && return
+  local now; now=$(date +%s)
+  [ $((now - NOTIFY_LAST_SENT)) -lt $NOTIFY_INTERVAL ] && return
+  local msg; msg=$(cat "$NOTIFY_QUEUE" 2>/dev/null)
+  [ -z "$msg" ] && return
+  # 合并为一条消息
+  echo "🔄 Loop${ROUND} 通知汇总：
+
+$(echo "$msg" | head -20)" | hermes send --to weixin >/dev/null 2>&1
+  : > "$NOTIFY_QUEUE"
+  NOTIFY_LAST_SENT=$now
+}
+
+notify_done() {
+  # 轮结束前强制 flush
+  _flush_notify
 }
 
 # 解析阶段：从backlog.md的 "## N. In Progress" 标题提取
@@ -217,6 +245,7 @@ while true; do
     continue
   fi
   notify "📖 第${ROUND}轮 Phase0 研究完成"
+  _flush_notify
   # 推送研究摘要（前300字符）
   if [ -f "$STATE_DIR/research.md" ]; then
     SUMMARY=$(head -c 300 "$STATE_DIR/research.md" 2>/dev/null)
@@ -239,6 +268,7 @@ prompt: 详细任务描述
     continue
   fi
   notify "📋 第${ROUND}轮 Phase1 规划完成"
+  _flush_notify
 
   TASKS="$STATE_DIR/tasks.md"
   [ ! -f "$TASKS" ] && { notify "⚠️ 第${ROUND}轮 tasks.md 缺失，跳过"; sleep 30; continue; }
@@ -296,6 +326,7 @@ prompt: 详细任务描述
     continue
   fi
   notify "👷 第${ROUND}轮 Phase2 开发完成（${N}个分支）"
+  _flush_notify
 
   # === Phase 2.3: Runtime Verifier（强制独立验证，Agent说谎也无用） ===
   VERIFIER="$STATE_DIR/runtime-verify.sh"
@@ -318,6 +349,7 @@ prompt: 详细任务描述
       fi
     done
     notify "🔬 第${ROUND}轮 Runtime Verifier 完成"
+  _flush_notify
   fi
 
   # Phase 2.5: Reviewer — 注入Runtime Verifier结果
@@ -372,6 +404,7 @@ ${REVIEW_INPUT}
     continue
   fi
   notify "🔍 第${ROUND}轮 Reviewer 审查完成"
+  _flush_notify
 
   unset REVIEW_DECISION; declare -A REVIEW_DECISION
   ALL_REJECTED=0
@@ -424,6 +457,7 @@ ${QA_TARGETS}
       continue
     fi
     notify "🧪 第${ROUND}轮 QA 测试完成"
+  _flush_notify
     for i in $(seq 1 "$N"); do
       [ "${REVIEW_DECISION[$i]}" != "APPROVED" ] && continue
       QA_PY=python; command -v python3 >/dev/null 2>&1 && QA_PY=python3
@@ -559,6 +593,8 @@ sys.exit(1)
 🔍 Review: $(python -c "import json,sys; raw=open('/tmp/ev_r${ROUND}_review.log').read() if __import__('os').path.exists('/tmp/ev_r${ROUND}_review.log') else '{}'; meta=json.loads(raw); resp=meta.get('response',''); print(sum(1 for l in resp.split('\n') if '\"decision\":\"APPROVED\"' in l) or 0)" 2>/dev/null || echo 0)/${N} approved
 🧪 QA: $(python -c "import json,sys; raw=open('/tmp/ev_r${ROUND}_qa.log').read() if __import__('os').path.exists('/tmp/ev_r${ROUND}_qa.log') else '{}'; meta=json.loads(raw); resp=meta.get('response',''); print(sum(1 for l in resp.split('\n') if '\"result\":\"PASS\"' in l) or 0)" 2>/dev/null || echo 0)/${N} passed"
   echo "[$(date)] $ROUND_REPORT" >> "$LOG"
+  # 强制 flush 所有通知队列（避免限流丢消息）
+  notify_done
   notify "$ROUND_REPORT"
 
   # === Budget Check: 有预算的连续进化 ===
@@ -646,6 +682,7 @@ json.dump({'cost_usd': ${TOTAL_COST}, 'tokens_used': ${TOTAL_TOKENS}, 'failed_ga
     if [ "$BUDGET_CONTINUE" = "False" ]; then
       echo "[$(date)] BUDGET: ${BUDGET_REASON}" >> "$LOG"
       notify "🛑 预算耗尽/价值不足，循环自动停止: ${BUDGET_REASON}"
+  _flush_notify
       notify "📊 IV=${BENEFIT} Risk=${RISK_LEVEL} Cost=\$${TOTAL_COST} FailedGates=${TOTAL_FAILED}"
       echo "BUDGET_STOPPED=true" >> "$LOG"
       break
