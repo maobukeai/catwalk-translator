@@ -255,8 +255,19 @@ prompt: 详细任务描述
     ) > "/tmp/ev_r${ROUND}_t${i}.log" 2>&1 &
     PIDS+=($!)
   done
-  echo "[$(date)] MAIN_LOOP: 启动${N}个Dev Agent PIDs: ${PIDS[*]}" >> "$LOG"
-  wait "${PIDS[@]}"
+  echo "[$(date)] MAIN_LOOP: 启动${N}个Dev Agent PIDS: ${PIDS[*]}" >> "$LOG"
+
+  # 逐个 wait（非 `wait "${PIDS[@]}"`），防止单 agent 崩溃导致整轮丢弃
+  # 已完成的任务保留，崩溃的任务标记为 FAILED 跳过
+  ANY_AGENT_FAILED=0
+  for i in $(seq 1 "$N"); do
+    idx=$((i-1))
+    if ! wait "${PIDS[$idx]}"; then
+      ANY_AGENT_FAILED=1
+      notify "⚠️ t${i} agent 崩溃（exit code=$?），跳过该任务"
+      echo "[$(date)] MAIN_LOOP: t${i} FAILED exit=$?" >> "$LOG"
+    fi
+  done
 
   # 汇总Dev Agent结果，检测额度耗尽
   ANY_QUOTA_FAIL=0
