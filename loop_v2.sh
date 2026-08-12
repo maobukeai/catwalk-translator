@@ -456,8 +456,8 @@ sys.exit(1)
 ✅ 合并: ${MERGED_COUNT}/${N}
 ⏱ 耗时: ${DURATION}s
 📝 研究: $(tail -3 "$STATE_DIR/research.md" 2>/dev/null | tr '\n' ' ' | head -c 150)
-🔍 Review: $(grep -c "APPROVED" /tmp/ev_r${ROUND}_review.log 2>/dev/null || echo 0)/${N} approved
-🧪 QA: $(grep -c "PASS" /tmp/ev_r${ROUND}_qa.log 2>/dev/null || echo 0)/${N} passed"
+🔍 Review: $(python -c "import json,sys; raw=open('/tmp/ev_r${ROUND}_review.log').read() if __import__('os').path.exists('/tmp/ev_r${ROUND}_review.log') else '{}'; meta=json.loads(raw); resp=meta.get('response',''); print(sum(1 for l in resp.split('\n') if '\"decision\":\"APPROVED\"' in l) or 0)" 2>/dev/null || echo 0)/${N} approved
+🧪 QA: $(python -c "import json,sys; raw=open('/tmp/ev_r${ROUND}_qa.log').read() if __import__('os').path.exists('/tmp/ev_r${ROUND}_qa.log') else '{}'; meta=json.loads(raw); resp=meta.get('response',''); print(sum(1 for l in resp.split('\n') if '\"result\":\"PASS\"' in l) or 0)" 2>/dev/null || echo 0)/${N} passed"
   echo "[$(date)] $ROUND_REPORT" >> "$LOG"
   notify "$ROUND_REPORT"
 
