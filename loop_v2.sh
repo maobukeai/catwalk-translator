@@ -30,7 +30,8 @@ fi
 
 # === 工具函数 ===
 notify() {
-  echo "🔄 Loop${ROUND}: $1" | hermes send --to weixin 2>/dev/null
+  # timeout 5s 防止 hermes send 网络中断时阻塞整个 loop
+  timeout 5s bash -c "echo '🔄 Loop${ROUND}: $1' | hermes send --to weixin 2>/dev/null" &
 }
 
 # 解析阶段：从backlog.md的 "## N. In Progress" 标题提取
@@ -368,15 +369,20 @@ ${REVIEW_INPUT}
   notify "🔍 第${ROUND}轮 Reviewer 审查完成"
 
   unset REVIEW_DECISION; declare -A REVIEW_DECISION
+  ALL_REJECTED=0
   for i in $(seq 1 "$N"); do
     DECISION=$(parse_review_decision_json "$i" /tmp/ev_r${ROUND}_review.log)
     if [ -z "$DECISION" ] || [ "${DECISION}" = "0" ]; then
-      REVIEW_DECISION[$i]="APPROVED"
-    else
+      # JSON 解析失败 → REJECTED（非 APPROVED！Reviewer失败不可全通过）
       REVIEW_DECISION[$i]="REJECTED"
-      notify "❌ Reviewer 驳回 t${i}: ${DECISION:0:80}"
+      notify "❌ Reviewer JSON 解析失败 t${i}，默认驳回"
+    else
+      REVIEW_DECISION[$i]="${DECISION}"
     fi
   done
+  # 统计驳回数
+  ALL_REJECTED=0
+  for i in $(seq 1 "$N"); do [ "${REVIEW_DECISION[$i]}" = "REJECTED" ] && ALL_REJECTED=$((ALL_REJECTED+1)); done
 
   # Phase 2.8: QA（仅对APPROVED分支）
   unset QA_DECISION; declare -A QA_DECISION
