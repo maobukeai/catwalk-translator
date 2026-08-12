@@ -409,6 +409,47 @@ sys.exit(1)
     done
   fi
 
+  # === Phase 2.7: Regression Diff (Baseline → After 对比) ===
+  BASELINE_DIR="$STATE_DIR/baseline"
+  AFTER_DIR="/tmp/regression_r${ROUND}"
+  REGRESSION_TOOL="$STATE_DIR/baseline-tool.py"
+  REGRESSION_SCORE=1.0
+  REGRESSION_VERDICT="SKIP"
+
+  # 首次运行：创建 baseline（如果不存在）
+  if [ -f "$REGRESSION_TOOL" ] && [ ! -f "$BASELINE_DIR/baseline.json" ]; then
+    mkdir -p "$BASELINE_DIR"
+    python "$REGRESSION_TOOL" baseline "$BASELINE_DIR" > /dev/null 2>&1
+    if [ -f "$BASELINE_DIR/baseline.json" ]; then
+      notify "📸 Baseline 已创建（初始状态）"
+      REGRESSION_VERDICT="SKIP"
+    fi
+  fi
+
+  if [ -f "$REGRESSION_TOOL" ] && [ -f "$BASELINE_DIR/baseline.json" ]; then
+    mkdir -p "$AFTER_DIR"
+    python "$REGRESSION_TOOL" after "$AFTER_DIR" "$BASELINE_DIR" > /dev/null 2>&1
+    if [ -f "$AFTER_DIR/diff_result.json" ]; then
+      REGRESSION_SCORE=$(python -c "import json,sys; print(json.load(open(sys.argv[1])).get('regression_score',1.0))" "$AFTER_DIR/diff_result.json" 2>/dev/null)
+      REGRESSION_VERDICT=$(python -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','SKIP'))" "$AFTER_DIR/diff_result.json" 2>/dev/null)
+      REGRESSION_SCORE=${REGRESSION_SCORE:-1.0}
+      REGRESSION_VERDICT=${REGRESSION_VERDICT:-SKIP}
+      if [ "$REGRESSION_VERDICT" = "PASS" ]; then
+        notify "📊 Regression Score: ${REGRESSION_SCORE} | ✅ PASS"
+      elif [ "$REGRESSION_VERDICT" = "WARN" ]; then
+        notify "📊 Regression Score: ${REGRESSION_SCORE} | ⚠️ WARN"
+      elif [ "$REGRESSION_VERDICT" = "FAIL" ]; then
+        notify "📊 Regression Score: ${REGRESSION_SCORE} | ❌ FAIL"
+        for i in $(seq 1 "$N"); do
+          [ "${REVIEW_DECISION[$i]}" != "APPROVED" ] && continue
+          [ "${QA_DECISION[$i]:-}" != "PASS" ] && continue
+          QA_DECISION[$i]="FAIL"
+        done
+        notify "❌ Regression FAIL，已通过 QA 的分支自动降级为 FAIL"
+      fi
+    fi
+  fi
+
   # P0: Stall Detection
   unset STALLED_THIS_ROUND; declare -A STALLED_THIS_ROUND
   for i in $(seq 1 "$N"); do
