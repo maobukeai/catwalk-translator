@@ -10,8 +10,15 @@
 cd /c/Users/20269/Desktop/项目文件夹/翻译软件
 WORKDIR=$(pwd)
 STATE_DIR="$WORKDIR/.agent"
-LOG="$STATE_DIR/evolution.log"
-TRIGGER="$STATE_DIR/.quota_switch"
+CONFIG="$STATE_DIR/project.json"
+
+# 从 project.json 读取配置（单一配置源）
+if [ -f "$CONFIG" ]; then
+  LOG=$(grep '"log_file"' "$CONFIG" | sed 's/.*"\([^"]*\)"/\1/')
+  TRIGGER=$(grep '"quota_trigger"' "$CONFIG" | sed 's/.*"\([^"]*\)"/\1/')
+fi
+LOG="${LOG:-$STATE_DIR/evolution.log}"
+TRIGGER="${TRIGGER:-$STATE_DIR/.quota_switch}"
 ROUND=0
 
 mkdir -p "$STATE_DIR"

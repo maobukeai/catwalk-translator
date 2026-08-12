@@ -1,0 +1,21 @@
+{
+  "project_dir": "/c/Users/20269/Desktop/项目文件夹/翻译软件",
+  "log_file": "/c/Users/20269/Desktop/项目文件夹/翻译软件/.agent/evolution.log",
+  "state_file": "/c/Users/20269/Desktop/项目文件夹/翻译软件/.agent/state.json",
+  "quota_trigger": "/c/Users/20269/Desktop/项目文件夹/翻译软件/.agent/.quota_switch",
+  "loop_script": "/c/Users/20269/Desktop/项目文件夹/翻译软件/loop_v2.sh",
+  "cron_jobs": {
+    "quota-switcher": {
+      "job_id": "98d68ce68ae9",
+      "schedule": "every 1m",
+      "deliver": "weixin",
+      "purpose": "额度耗尽时自动切换Antigravity账号"
+    },
+    "loop-progress-check": {
+      "job_id": "4452f1c5d521",
+      "schedule": "every 5m",
+      "deliver": "weixin",
+      "purpose": "每5分钟推送evolution.log最新80行到微信"
+    }
+  }
+}
