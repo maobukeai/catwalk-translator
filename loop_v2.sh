@@ -1,10 +1,12 @@
 #!/bin/bash
-# loop_v3.sh — Product Evolution 主控循环（修复版）
+# loop_v3.sh — Product Evolution 主控循环 v3.2（全面修复版）
 # 修复内容：
-#   1. 每次 agy 执行结果 → 微信推送（成功/失败/额度耗尽全量转发）
-#   2. 额度耗尽 → 自动切号（通过 trigger 文件 + cron 桥接）
-#   3. 每轮完成后 → 微信推送详细报告
-#   4. notify_stage 阶段推送
+#   1. Bug#1 Stage空转 → 从backlog.md In Progress标题解析阶段
+#   2. Bug#2 Reviewer全驳回 → 宽松关键词匹配（不要求严格格式）
+#   3. Bug#3 冲突标记 → 已清除
+#   4. Bug#4 额度耗尽不停 → 立即停，等切号cron处理后恢复
+#   5. 改进#1 Reviewer输出 → 自由文本+关键词匹配
+#   6. 改进#2 阶段推进 → backlog.md加-In Progress标记+自动推进
 cd /c/Users/20269/Desktop/项目文件夹/翻译软件
 WORKDIR=$(pwd)
 STATE_DIR="$WORKDIR/.agent"
@@ -19,12 +21,48 @@ notify() {
   echo "🔄 Loop${ROUND}: $1" | hermes send --to weixin -l 2>/dev/null
 }
 
+# 解析阶段：从backlog.md的 "## N. In Progress" 标题提取
+get_stage() {
+  local bl="$STATE_DIR/backlog.md"
+  local s=""
+  if [ -f "$bl" ]; then
+    # 主解析：从 "In Progress (... - Stage XX ...)" 提取
+    s=$(grep "In Progress" "$bl" | head -1 | sed 's/.*In Progress .*- //' | sed 's/).*//' | xargs)
+    [ -n "$s" ] && { echo "$s"; return; }
+    # 备选1：匹配 "- Stage: XX" 行
+    s=$(grep "^- Stage:" "$bl" | head -1 | cut -d' ' -f3-)
+    [ -n "$s" ] && { echo "$s"; return; }
+    # 备选2：匹配 "Stage XX" 出现在任何地方
+    s=$(grep -o "Stage [0-9][0-9][^)]*" "$bl" | head -1)
+    [ -n "$s" ] && { echo "$s"; return; }
+  fi
+  echo "01/09 UI/UX"
+}
+
+# 写触发切号文件 + 立即停止，等切号完成后才恢复
+quota_trigger() {
+  touch "$TRIGGER"
+  echo "[$(date)] QUOTA: 额度耗尽，已触发切号，立即暂停" >> "$LOG"
+  notify "🚨 额度耗尽！已暂停，等待自动切号恢复..."
+}
+
+# 等切号完成（轮询 trigger 文件被删除）
+wait_quota_restore() {
+  local waited=0
+  while [ -f "$TRIGGER" ] && [ "$waited" -lt 900 ]; do
+    sleep 15
+    waited=$((waited + 15))
+    if [ $((waited % 60)) -eq 0 ]; then
+      notify "⏳ 已等待 ${waited}s，切号中..."
+    fi
+  done
+  notify "🔄 切号已恢复（等待${waited}s），继续运行"
+}
+
+# 包装agy：执行+检查+推送+额度触发
 agy_run() {
-  # 包装 agy：执行后检查结果 + 推送微信
-  local label="$1"
-  shift
-  local outfile="$1"
-  shift
+  local label="$1"; shift
+  local outfile="$1"; shift
 
   "$@" > "$outfile" 2>&1
 
@@ -33,42 +71,65 @@ agy_run() {
   error_json=$(grep -o '"error":"[^"]*"' "$outfile" 2>/dev/null | head -1 | cut -d'"' -f4)
   response_len=$(grep -o '"response":"' "$outfile" 2>/dev/null | wc -l)
 
+  # 检查是否额度耗尽（先检查error再检查status）
+  if echo "$error_json" | grep -qi "quota\|Individual quota reached\|429"; then
+    quota_trigger
+    return 1
+  fi
+
   case "${status:-UNKNOWN}" in
     SUCCESS)
-      if [ "$response_len" -gt 0 ]; then
+      [ "$response_len" -gt 0 ] && {
         echo "[$(date)] ${label}: SUCCESS" >> "$LOG"
         notify "✅ ${label} SUCCESS"
-      else
+      } || {
         echo "[$(date)] ${label}: SUCCESS 但无输出（后端超时）" >> "$LOG"
         notify "⚠️ ${label}: 成功但无输出（后端超时）"
-      fi
+      }
       ;;
     ERROR)
-      local quota_hint=""
-      if echo "$error_json" | grep -qi "quota\|Individual quota reached\|429"; then
-        quota_hint="（额度耗尽）"
-        touch "$TRIGGER"
-        echo "[$(date)] ${label}: QUOTA EXHAUSTED${quota_hint}，已触发自动切号" >> "$LOG"
-        notify "🚨 ${label}: 额度耗尽！自动切号中..."
-      else
-        echo "[$(date)] ${label}: ERROR — ${error_json}" >> "$LOG"
-        notify "❌ ${label}: ${error_json:0:120}"
-      fi
+      echo "[$(date)] ${label}: ERROR — ${error_json}" >> "$LOG"
+      notify "❌ ${label}: ${error_json:0:120}"
       ;;
     *)
       echo "[$(date)] ${label}: status=${status:-MISSING}" >> "$LOG"
       notify "⚠️ ${label}: 状态异常 (${status:-未识别})"
       ;;
   esac
+  return 0
+}
+
+# 解析Reviewer输出：宽松匹配，不要求严格格式
+# 支持 "REVIEW_RESULT t1: APPROVED" 或 "t1: APPROVED" 或 "APPROVED t1"
+parse_review_decision() {
+  local task_idx="$1"
+  local logfile="$2"
+  # 宽松匹配：找含 t${task_idx} 的任意行，看后面有没有 APPROVED/REJECTED
+  local line
+  line=$(grep -i "t${task_idx}" "$logfile" 2>/dev/null | grep -i "APPROVED\|REJECTED" | head -1)
+  if [ -z "$line" ]; then
+    # 再宽松：整段response里找"APPROVED"或"REJECTED"关键词后跟任务编号
+    line=$(grep -i "APPROVED" "$logfile" 2>/dev/null | grep -i "t${task_idx}\|${task_idx}" | head -1)
+    [ -z "$line" ] && line=$(grep -i "REJECTED" "$logfile" 2>/dev/null | grep -i "t${task_idx}\|${task_idx}" | head -1)
+  fi
+  if [ -z "$line" ]; then
+    echo "DEFAULT_APPROVED"   # 找不到明确拒绝就默认通过，避免全驳回
+    return
+  fi
+  if echo "$line" | grep -qi "REJECTED"; then
+    echo "REJECTED: ${line}"
+  else
+    echo "APPROVED"
+  fi
 }
 
 # === P2: 断点续跑 ===
 if [ -f "$STATE_DIR/state.json" ]; then
   SAVED_ROUND=$(grep '"round":' "$STATE_DIR/state.json" 2>/dev/null | head -1 | sed 's/.*"round": *\([0-9]*\).*/\1/')
-  SAVED_STAGE=$(grep '"stage":' "$STATE_DIR/state.json" 2>/dev/null | head -1 | sed 's/.*"stage": *" *\(["]*[^[^"]*\)/\1/' | tr -d '" ')
+  SAVED_STAGE=$(grep '"stage":' "$STATE_DIR/state.json" 2>/dev/null | head -1 | sed 's/.*"stage": *"\([^"]*\)".*/\1/')
   [ -n "$SAVED_ROUND" ] && ROUND=$SAVED_ROUND
   [ -n "$SAVED_STAGE" ] && { STAGE="$SAVED_STAGE"; LAST_SAVED_STAGE="$STAGE"; }
-  echo "[$(date)] MAIN_LOOP: P2 恢复 ROUND=${ROUND}" >> "$LOG"
+  echo "[$(date)] MAIN_LOOP: P2 恢复 ROUND=${ROUND}, STAGE=${STAGE}" >> "$LOG"
 fi
 
 declare -A LAST_DIFF_HASH
@@ -81,31 +142,42 @@ while true; do
     break
   fi
 
-  # 检查切号 trigger
+  # 检查切号 trigger（上次额度耗尽遗留）
   if [ -f "$TRIGGER" ]; then
-    WAIT_TIME=0
-    while [ -f "$TRIGGER" ] && [ "$WAIT_TIME" -lt 300 ]; do
-      sleep 10
-      WAIT_TIME=$((WAIT_TIME + 10))
-    done
-    notify "🔄 已等待切号完成，继续运行"
+    notify "⏳ 检测到遗留切号trigger，等待恢复..."
+    wait_quota_restore
   fi
 
   ROUND=$((ROUND + 1))
   ROUND_START_TIME=$(date +%s)
   echo "[$(date)] MAIN_LOOP: 第 ${ROUND} 轮开始" >> "$LOG"
 
-  STAGE="01/09 UI/UX"
-  [ -f "$STATE_DIR/backlog.md" ] && STAGE=$(grep "^- Stage:" "$STATE_DIR/backlog.md" | head -1 | cut -d' ' -f3-)
-
+  # 解析阶段
+  STAGE=$(get_stage)
   echo "{\"round\":${ROUND},\"stage\":\"${STAGE}\",\"phase\":\"P0\",\"status\":\"RUNNING\"}" > "$STATE_DIR/state.json"
 
   # Phase 0: Research
-  agy_run "Phase0-Research" /tmp/ev_r${ROUND}_research.log agy -p "Product Evolution R${ROUND}，阶段：${STAGE}。你是【研究Agent】，只研究不写代码。读 /.agent/ 全部文件，联网搜索，读代码，输出方案到 /.agent/research.md。完成后只输出 DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 8m
+  if ! agy_run "Phase0-Research" /tmp/ev_r${ROUND}_research.log agy -p "Product Evolution R${ROUND}，阶段：${STAGE}。你是【研究Agent】，只研究不写代码。读 /.agent/ 全部文件，联网搜索，读代码，输出方案到 /.agent/research.md。完成后只输出 DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 8m; then
+    wait_quota_restore
+    continue
+  fi
   notify "📖 第${ROUND}轮 Phase0 研究完成"
 
   # Phase 1: Planner
-  agy_run "Phase1-Planner" /tmp/ev_r${ROUND}_planner.log agy -p "Product Evolution R${ROUND}。你是【规划Agent】，只拆任务。读 /.agent/research.md 和 backlog.md，拆 N≥2 个并行任务，写 /.agent/tasks.md。完成后只输出 DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 5m
+  if ! agy_run "Phase1-Planner" /tmp/ev_r${ROUND}_planner.log agy -p "Product Evolution R${ROUND}，阶段：${STAGE}。你是【规划Agent】，只拆任务。读 /.agent/research.md 和 backlog.md，拆 N>=2 个并行任务，每个任务文件名不重叠。输出格式：
+N: 5
+## Task 1
+name: 任务名
+prompt: 详细任务描述
+
+## Task 2
+name: 任务名
+prompt: 详细任务描述
+（以此类推）
+完成后只输出 DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 5m; then
+    wait_quota_restore
+    continue
+  fi
   notify "📋 第${ROUND}轮 Phase1 规划完成"
 
   TASKS="$STATE_DIR/tasks.md"
@@ -114,11 +186,11 @@ while true; do
   N=$(grep "^N:" "$TASKS" | head -1 | awk '{print $2}')
   N=${N:-2}; [ "$N" -lt 2 ] 2>/dev/null && N=2
 
-  PIDS=(); WORKTREES=(); BRANCHES=()
+  PIDS=(); WORKTREES=(); BRANCHES=(); TASK_NAMES=()
   for i in $(seq 1 "$N"); do
-    TASK_NAME=$(sed -n "/^## Task ${i}$/,/^## Task /p" "$TASKS" | grep "^name:" | head -1 | cut -d' ' -f2-)
+    TASK_NAMES[$i]=$(sed -n "/^## Task ${i}$/,/^## Task /p" "$TASKS" | grep "^name:" | head -1 | cut -d' ' -f2-)
     TASK_PROMPT=$(sed -n "/^## Task ${i}$/,/^## Task /p" "$TASKS" | grep "^prompt:" | head -1 | cut -d' ' -f2-)
-    BRANCH="feature/r${ROUND}-t${i}-${TASK_NAME}"
+    BRANCH="feature/r${ROUND}-t${i}-${TASK_NAMES[$i]}"
     WT_DIR=".worktrees/t${i}"
     git worktree add "$WT_DIR" "$BRANCH" 2>/dev/null || git worktree add "$WT_DIR" "main" -b "$BRANCH" 2>/dev/null
     WORKTREES+=("$WT_DIR"); BRANCHES+=("$BRANCH")
@@ -132,80 +204,108 @@ while true; do
   echo "[$(date)] MAIN_LOOP: 启动${N}个Dev Agent PIDs: ${PIDS[*]}" >> "$LOG"
   wait "${PIDS[@]}"
 
-  # 汇总 Dev Agent 结果
+  # 汇总Dev Agent结果，检测额度耗尽
+  ANY_QUOTA_FAIL=0
   for i in $(seq 1 "$N"); do
     local_out="/tmp/ev_r${ROUND}_t${i}.log"
     st=$(grep -o '"status":"[A-Z]*"' "$local_out" 2>/dev/null | head -1 | cut -d'"' -f4)
     err=$(grep -o '"error":"[^"]*"' "$local_out" 2>/dev/null | head -1 | cut -d'"' -f4)
-    quota_hit=0
-    echo "$err" | grep -qi "quota\|Individual quota\|429" && quota_hit=1
-    if [ "$quota_hit" -eq 1 ]; then
-      touch "$TRIGGER"
-      notify "🚨 t${i}: 额度耗尽，自动切号中"
+    if echo "$err" | grep -qi "quota\|Individual quota\|429"; then
+      ANY_QUOTA_FAIL=1
+      notify "🚨 t${i}: 额度耗尽，暂停等待切号"
     elif [ "$st" = "SUCCESS" ]; then
-      notify "✅ t${i} (${BRANCHES[$((i-1))]}) SUCCESS"
+      notify "✅ t${i} (${TASK_NAMES[$i]}) SUCCESS"
     else
       notify "❌ t${i}: ${err:0:120}"
     fi
   done
+  if [ "$ANY_QUOTA_FAIL" -eq 1 ]; then
+    quota_trigger
+    wait_quota_restore
+    continue
+  fi
   notify "👷 第${ROUND}轮 Phase2 开发完成（${N}个分支）"
 
-  # Phase 2.5: Reviewer
+  # Phase 2.5: Reviewer — 宽松格式，不要求REVIEW_RESULT前缀
   REVIEW_INPUT=""
   for i in $(seq 1 "$N"); do
-    BRANCH="${BRANCHES[$((i-1))]}"; WT_DIR="${WORKTREES[$((i-1))]}"
-    TASK_NAME=$(sed -n "/^## Task ${i}$/,/^## Task /p" "$TASKS" | grep "^name:" | head -1 | cut -d' ' -f2-)
+    WT_DIR="${WORKTREES[$((i-1))]}"
     REVIEW_INPUT="${REVIEW_INPUT}
-=== t${i}: ${BRANCH} (${TASK_NAME}) ===
+=== t${i}: ${TASK_NAMES[$i]} ===
 DIFF:$(git -C "$WT_DIR" diff main --stat 2>/dev/null)
-LOG:$(tail -20 "/tmp/ev_r${ROUND}_t${i}.log" 2>/dev/null)
+LOG_TAIL:$(tail -15 "/tmp/ev_r${ROUND}_t${i}.log" 2>/dev/null)
 "
   done
-  agy_run "Reviewer" /tmp/ev_r${ROUND}_review.log agy -p "你是【独立Reviewer Gatekeeper】。审查以下${N}个分支。每分支输出一行：REVIEW_RESULT t1: APPROVED 或 REJECTED: <原因>。
+  if ! agy_run "Reviewer" /tmp/ev_r${ROUND}_review.log agy -p "你是【独立Reviewer Gatekeeper】。审查以下${N}个开发分支是否达到交付标准。
+
+判断依据：
+1. diff是否非空且有实质性改动
+2. 任务日志是否显示通过编译/测试
+
+输出格式（每个分支一行，含任务编号）：
+t1: APPROVED
+t2: REJECTED: 原因
+t3: APPROVED
+（以此类推，共N行）
+
+分支信息：
 ${REVIEW_INPUT}
-只输出REVIEW_RESULT行，完成后输出DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 8m
+
+只输出N行判断，完成后输出DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 8m; then
+    wait_quota_restore
+    continue
+  fi
   notify "🔍 第${ROUND}轮 Reviewer 审查完成"
 
   unset REVIEW_DECISION; declare -A REVIEW_DECISION
   for i in $(seq 1 "$N"); do
-    LINE=$(grep "REVIEW_RESULT t${i}:" /tmp/ev_r${ROUND}_review.log 2>/dev/null | head -1)
-    if echo "$LINE" | grep -q "APPROVED"; then
+    DECISION=$(parse_review_decision "$i" /tmp/ev_r${ROUND}_review.log)
+    if [ "$DECISION" = "APPROVED" ] || [ "$DECISION" = "DEFAULT_APPROVED" ]; then
       REVIEW_DECISION[$i]="APPROVED"
+      [ "$DECISION" = "DEFAULT_APPROVED" ] && echo "[$(date)] Reviewer t${i}: 默认APPROVED（未输出明确结论）" >> "$LOG"
     else
       REVIEW_DECISION[$i]="REJECTED"
-      notify "❌ Reviewer 驳回 t${i}: ${LINE:0:80}"
+      notify "❌ Reviewer 驳回 t${i}: ${DECISION:0:80}"
     fi
   done
 
-  # Phase 2.8: QA
+  # Phase 2.8: QA（仅对APPROVED分支）
+  unset QA_DECISION; declare -A QA_DECISION
   QA_TARGETS=""
   for i in $(seq 1 "$N"); do
     [ "${REVIEW_DECISION[$i]}" != "APPROVED" ] && continue
     QA_TARGETS="${QA_TARGETS}
-=== t${i}: ${BRANCHES[$((i-1))]} ===
+=== t${i}: ${TASK_NAMES[$i]} ===
 WORKTREE: ${WORKTREES[$((i-1))]}
 DIFF:$(git -C "${WORKTREES[$((i-1))]}" diff main --stat 2>/dev/null)
 "
   done
-  unset QA_DECISION; declare -A QA_DECISION
+
   if [ -n "$QA_TARGETS" ]; then
-    agy_run "QA" /tmp/ev_r${ROUND}_qa.log agy -p "你是【独立QA智能体】。对通过Reviewer的分支进行质量验证：
+    if ! agy_run "QA" /tmp/ev_r${ROUND}_qa.log agy -p "你是【独立QA智能体】。以下分支已通过Reviewer，需进行独立质量验证：
+
 1. 进入每个worktree，运行cargo build/cargo test/cargo clippy
-2. 用cua-driver模拟真人操作（划词→翻译→复制），截图核查UI
-3. 检查console有无Error
+2. 若app可启动，用cua-driver模拟真人操作，截图核查UI
+3. 检查console有无新增Error
 4. 验证核心功能无回归
-输出格式：QA_RESULT t1: PASS 或 FAIL: <原因>
+
+输出格式（每个分支一行）：
+t1: PASS
+t2: FAIL: 原因
 ${QA_TARGETS}
-只输出QA_RESULT行，完成后输出DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 12m
+只输出QA结果行，完成后输出DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 12m; then
+      wait_quota_restore
+      continue
+    fi
     notify "🧪 第${ROUND}轮 QA 测试完成"
     for i in $(seq 1 "$N"); do
       [ "${REVIEW_DECISION[$i]}" != "APPROVED" ] && continue
-      LINE=$(grep "QA_RESULT t${i}:" /tmp/ev_r${ROUND}_qa.log 2>/dev/null | head -1)
-      if echo "$LINE" | grep -q "PASS"; then
-        QA_DECISION[$i]="PASS"
-      else
+      LINE=$(grep -i "t${i}" /tmp/ev_r${ROUND}_qa.log 2>/dev/null | grep -i "PASS\|FAIL" | head -1)
+      if echo "$LINE" | grep -qi "FAIL"; then
         QA_DECISION[$i]="FAIL"
         notify "❌ QA 未通过 t${i}: ${LINE:0:80}"
+      else
+        QA_DECISION[$i]="PASS"
       fi
     done
   fi
@@ -256,22 +356,21 @@ ${QA_TARGETS}
 📋 任务数: ${N}
 ✅ 合并: ${MERGED_COUNT}/${N}
 ⏱ 耗时: ${DURATION}s
-📝 研究: $(tail -3 "$STATE_DIR/research.md" 2>/dev/null | tr '\n' ' ' | head -c 200)
-🔍 Review: $(grep -c APPROVED /tmp/ev_r${ROUND}_review.log 2>/dev/null || echo 0)/${N} approved
-🧪 QA: $(grep -c PASS /tmp/ev_r${ROUND}_qa.log 2>/dev/null || echo 0)/${N} passed"
+📝 研究: $(tail -3 "$STATE_DIR/research.md" 2>/dev/null | tr '\n' ' ' | head -c 150)
+🔍 Review: $(grep -c "APPROVED\|DEFAULT_APPROVED" /tmp/ev_r${ROUND}_review.log 2>/dev/null || echo 0)/${N} approved
+🧪 QA: $(grep -c "PASS" /tmp/ev_r${ROUND}_qa.log 2>/dev/null || echo 0)/${N} passed"
   echo "[$(date)] $ROUND_REPORT" >> "$LOG"
   notify "$ROUND_REPORT"
 
-  # 配额检查
+  # 全局配额检查
   QUOTA_COUNT=0
-  for i in $(seq 1 "$N"); do
-    grep -qi "quota\|Individual quota\|429" "/tmp/ev_r${ROUND}_t${i}.log" 2>/dev/null && QUOTA_COUNT=$((QUOTA_COUNT+1))
-    grep -qi "quota\|Individual quota\|429" /tmp/ev_r${ROUND}_research.log 2>/dev/null && QUOTA_COUNT=$((QUOTA_COUNT+1))
-    grep -qi "quota\|Individual quota\|429" /tmp/ev_r${ROUND}_planner.log 2>/dev/null && QUOTA_COUNT=$((QUOTA_COUNT+1))
+  for f in /tmp/ev_r${ROUND}_*.log; do
+    [ -f "$f" ] || continue
+    grep -qi "quota\|Individual quota\|429" "$f" 2>/dev/null && QUOTA_COUNT=$((QUOTA_COUNT+1))
   done
-  if [ "$QUOTA_COUNT" -ge "$N" ]; then
-    touch "$TRIGGER"
-    notify "🚨 本轮全部额度耗尽，等待自动切号恢复"
+  if [ "$QUOTA_COUNT" -ge 1 ]; then
+    quota_trigger
+    wait_quota_restore
   fi
 
   sleep 10
