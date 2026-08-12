@@ -18,7 +18,7 @@ mkdir -p "$STATE_DIR"
 
 # === 工具函数 ===
 notify() {
-  echo "🔄 Loop${ROUND}: $1" | hermes send --to weixin -l 2>/dev/null
+  echo "🔄 Loop${ROUND}: $1" | hermes send --to weixin 2>/dev/null
 }
 
 # 解析阶段：从backlog.md的 "## N. In Progress" 标题提取
@@ -113,7 +113,7 @@ parse_review_decision() {
     [ -z "$line" ] && line=$(grep -i "REJECTED" "$logfile" 2>/dev/null | grep -i "t${task_idx}\|${task_idx}" | head -1)
   fi
   if [ -z "$line" ]; then
-    echo "DEFAULT_APPROVED"   # 找不到明确拒绝就默认通过，避免全驳回
+    echo "REJECTED: Reviewer 未输出该分支结论（默认驳回，避免空分支合并）"
     return
   fi
   if echo "$line" | grep -qi "REJECTED"; then
@@ -188,8 +188,8 @@ prompt: 详细任务描述
 
   PIDS=(); WORKTREES=(); BRANCHES=(); TASK_NAMES=()
   for i in $(seq 1 "$N"); do
-    TASK_NAMES[$i]=$(sed -n "/^## Task ${i}$/,/^## Task /p" "$TASKS" | grep "^name:" | head -1 | cut -d' ' -f2-)
-    TASK_PROMPT=$(sed -n "/^## Task ${i}$/,/^## Task /p" "$TASKS" | grep "^prompt:" | head -1 | cut -d' ' -f2-)
+    TASK_NAMES[$i]=$(sed -n "/^## Task ${i}$/,/^## Task /p" "$TASKS" | grep "^name:" | head -1 | cut -d' ' -f2- | tr -d '\r')
+    TASK_PROMPT=$(sed -n "/^## Task ${i}$/,/^## Task /p" "$TASKS" | grep "^prompt:" | head -1 | cut -d' ' -f2- | tr -d '\r')
     BRANCH="feature/r${ROUND}-t${i}-${TASK_NAMES[$i]}"
     WT_DIR=".worktrees/t${i}"
     git worktree add "$WT_DIR" "$BRANCH" 2>/dev/null || git worktree add "$WT_DIR" "main" -b "$BRANCH" 2>/dev/null
@@ -260,9 +260,8 @@ ${REVIEW_INPUT}
   unset REVIEW_DECISION; declare -A REVIEW_DECISION
   for i in $(seq 1 "$N"); do
     DECISION=$(parse_review_decision "$i" /tmp/ev_r${ROUND}_review.log)
-    if [ "$DECISION" = "APPROVED" ] || [ "$DECISION" = "DEFAULT_APPROVED" ]; then
+    if echo "$DECISION" | grep -q "^APPROVED$"; then
       REVIEW_DECISION[$i]="APPROVED"
-      [ "$DECISION" = "DEFAULT_APPROVED" ] && echo "[$(date)] Reviewer t${i}: 默认APPROVED（未输出明确结论）" >> "$LOG"
     else
       REVIEW_DECISION[$i]="REJECTED"
       notify "❌ Reviewer 驳回 t${i}: ${DECISION:0:80}"
@@ -357,7 +356,7 @@ ${QA_TARGETS}
 ✅ 合并: ${MERGED_COUNT}/${N}
 ⏱ 耗时: ${DURATION}s
 📝 研究: $(tail -3 "$STATE_DIR/research.md" 2>/dev/null | tr '\n' ' ' | head -c 150)
-🔍 Review: $(grep -c "APPROVED\|DEFAULT_APPROVED" /tmp/ev_r${ROUND}_review.log 2>/dev/null || echo 0)/${N} approved
+🔍 Review: $(grep -c "APPROVED" /tmp/ev_r${ROUND}_review.log 2>/dev/null || echo 0)/${N} approved
 🧪 QA: $(grep -c "PASS" /tmp/ev_r${ROUND}_qa.log 2>/dev/null || echo 0)/${N} passed"
   echo "[$(date)] $ROUND_REPORT" >> "$LOG"
   notify "$ROUND_REPORT"
