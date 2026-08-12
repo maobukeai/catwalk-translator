@@ -404,8 +404,8 @@ ${QA_TARGETS}
     notify "🧪 第${ROUND}轮 QA 测试完成"
     for i in $(seq 1 "$N"); do
       [ "${REVIEW_DECISION[$i]}" != "APPROVED" ] && continue
-      local PY=python; command -v python3 >/dev/null 2>&1 && PY=python3
-      RESULT=$($PY -c "
+      QA_PY=python; command -v python3 >/dev/null 2>&1 && QA_PY=python3
+      RESULT=$($QA_PY -c "
 import json,sys
 raw=open(sys.argv[1]).read()
 meta=json.loads(raw)
