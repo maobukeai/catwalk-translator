@@ -112,28 +112,47 @@ agy_run() {
   [ "${status:-UNKNOWN}" = "SUCCESS" ] && return 0 || return 1
 }
 
-# 解析Reviewer输出：宽松匹配，不要求严格格式
-# 支持 "REVIEW_RESULT t1: APPROVED" 或 "t1: APPROVED" 或 "APPROVED t1"
-parse_review_decision() {
+# Schema Validator：严格解析 Reviewer 输出的 JSON
+# 不再用宽松关键词匹配，防止 "APPROVED is not recommended" 被误判
+parse_review_decision_json() {
   local task_idx="$1"
   local logfile="$2"
-  # 宽松匹配：找含 t${task_idx} 的任意行，看后面有没有 APPROVED/REJECTED
-  local line
-  line=$(grep -i "t${task_idx}" "$logfile" 2>/dev/null | grep -i "APPROVED\|REJECTED" | head -1)
-  if [ -z "$line" ]; then
-    # 再宽松：整段response里找"APPROVED"或"REJECTED"关键词后跟任务编号
-    line=$(grep -i "APPROVED" "$logfile" 2>/dev/null | grep -i "t${task_idx}\|${task_idx}" | head -1)
-    [ -z "$line" ] && line=$(grep -i "REJECTED" "$logfile" 2>/dev/null | grep -i "t${task_idx}\|${task_idx}" | head -1)
-  fi
-  if [ -z "$line" ]; then
-    echo "REJECTED: Reviewer 未输出该分支结论（默认驳回，避免空分支合并）"
-    return
-  fi
-  if echo "$line" | grep -qi "REJECTED"; then
-    echo "REJECTED: ${line}"
-  else
-    echo "APPROVED"
-  fi
+  # 检测 python 可用性
+  local PY=python
+  command -v python3 >/dev/null 2>&1 && PY=python3
+  $PY -c "
+import json, sys
+try:
+    # 从 agy 的 json 输出提取 response 字段
+    raw = open(sys.argv[1]).read()
+    meta = json.loads(raw)
+    resp = meta.get('response', raw)
+    # 响应可能包含多行 JSON，尝试每行解析
+    for line in resp.strip().split('\n'):
+        line = line.strip()
+        if not line or line == 'DONE':
+            continue
+        try:
+            obj = json.loads(line)
+            if obj.get('task_id') == 't${task_idx}' or obj.get('task_id') == '${task_idx}':
+                d = obj.get('decision', '').strip().upper()
+                r = obj.get('reason', '无原因')
+                if d == 'APPROVED':
+                    sys.exit(0)
+                elif d == 'REJECTED':
+                    sys.stderr.write(f'REJECTED: {r}')
+                    sys.exit(1)
+                else:
+                    sys.stderr.write(f'REJECTED: 无效decision={d}')
+                    sys.exit(1)
+        except json.JSONDecodeError:
+            continue
+    sys.stderr.write('REJECTED: Reviewer 未输出该任务的有效JSON')
+    sys.exit(1)
+except Exception as e:
+    sys.stderr.write(f'REJECTED: JSON解析失败 {str(e)[:80]}')
+    sys.exit(1)
+" "$logfile" 2>&1
 }
 
 # === P2: 断点续跑 ===
@@ -294,16 +313,22 @@ LOG_TAIL:$(tail -15 "/tmp/ev_r${ROUND}_t${i}.log" 2>/dev/null)
 2. Runtime Verifier 各检查是否PASS（看RUNTIME行）
 3. 任务日志是否显示Agent完成了工作（看LOG_TAIL行）
 
-输出格式（每个分支一行，含任务编号）：
-t1: APPROVED
-t2: REJECTED: 原因
-t3: APPROVED
-（以此类推，共N行）
+**输出格式（必须是合法的 JSON，每个分支一行，严格如下）：**
+{"task_id":"t1","decision":"APPROVED","reason":"简短理由","tests":{"build":true,"unit":true,"ui":true}}
+{"task_id":"t2","decision":"REJECTED","reason":"diff 为空","tests":{"build":false,"unit":false,"ui":false}}
+{"task_id":"t3","decision":"APPROVED","reason":"","tests":{"build":true,"unit":true,"ui":true}}
+（以此类推，共N行，每行一个独立JSON对象）
+
+**决策规则：**
+- decision 只能是 "APPROVED" 或 "REJECTED"（大写）
+- reason 必须是字符串
+- tests 必须包含 build/unit/ui 三个布尔字段
+- 不允许 "APPROVED is not recommended" 等否定语境
 
 分支信息：
 ${REVIEW_INPUT}
 
-只输出N行判断，完成后输出DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 8m; then
+只输出N行JSON，不要任何其他文字。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 8m; then
     wait_quota_restore
     continue
   fi
@@ -311,8 +336,8 @@ ${REVIEW_INPUT}
 
   unset REVIEW_DECISION; declare -A REVIEW_DECISION
   for i in $(seq 1 "$N"); do
-    DECISION=$(parse_review_decision "$i" /tmp/ev_r${ROUND}_review.log)
-    if echo "$DECISION" | grep -q "^APPROVED$"; then
+    DECISION=$(parse_review_decision_json "$i" /tmp/ev_r${ROUND}_review.log)
+    if [ -z "$DECISION" ] || [ "${DECISION}" = "0" ]; then
       REVIEW_DECISION[$i]="APPROVED"
     else
       REVIEW_DECISION[$i]="REJECTED"
@@ -340,23 +365,46 @@ DIFF:$(git -C "${WORKTREES[$((i-1))]}" diff main --stat 2>/dev/null)
 3. 检查console有无新增Error
 4. 验证核心功能无回归
 
-输出格式（每个分支一行）：
-t1: PASS
-t2: FAIL: 原因
+**输出格式（必须是合法JSON，每个分支一行，严格如下）：**
+{"task_id":"t1","result":"PASS","reason":""}
+{"task_id":"t2","result":"FAIL","reason":"编译失败"}
+{"task_id":"t3","result":"PASS","reason":""}
+
+**规则：**
+- result 只能是 "PASS" 或 "FAIL"（大写）
+- reason 必须是字符串
+
 ${QA_TARGETS}
-只输出QA结果行，完成后输出DONE。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 12m; then
+只输出N行JSON，不要任何其他文字。" --model gemini-3.6-flash-high --output-format json --dangerously-skip-permissions --print-timeout 12m; then
       wait_quota_restore
       continue
     fi
     notify "🧪 第${ROUND}轮 QA 测试完成"
     for i in $(seq 1 "$N"); do
       [ "${REVIEW_DECISION[$i]}" != "APPROVED" ] && continue
-      LINE=$(grep -i "t${i}" /tmp/ev_r${ROUND}_qa.log 2>/dev/null | grep -i "PASS\|FAIL" | head -1)
-      if echo "$LINE" | grep -qi "FAIL"; then
-        QA_DECISION[$i]="FAIL"
-        notify "❌ QA 未通过 t${i}: ${LINE:0:80}"
-      else
+      local PY=python; command -v python3 >/dev/null 2>&1 && PY=python3
+      RESULT=$($PY -c "
+import json,sys
+raw=open(sys.argv[1]).read()
+meta=json.loads(raw)
+resp=meta.get('response',raw)
+for line in resp.strip().split('\n'):
+    line=line.strip()
+    if not line or line=='DONE': continue
+    try:
+        obj=json.loads(line)
+        if obj.get('task_id')=='t${i}':
+            r=obj.get('result','').strip().upper()
+            sys.stderr.write(r if r in ('PASS','FAIL') else f'FAIL:{r}')
+            sys.exit(1 if r=='FAIL' else 0)
+    except: continue
+sys.exit(1)
+" /tmp/ev_r${ROUND}_qa.log 2>&1)
+      if [ "$RESULT" = "PASS" ] || [ -z "$RESULT" ]; then
         QA_DECISION[$i]="PASS"
+      else
+        QA_DECISION[$i]="FAIL"
+        notify "❌ QA 未通过 t${i}: ${RESULT:0:80}"
       fi
     done
   fi
