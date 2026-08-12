@@ -217,6 +217,11 @@ while true; do
     continue
   fi
   notify "📖 第${ROUND}轮 Phase0 研究完成"
+  # 推送研究摘要（前300字符）
+  if [ -f "$STATE_DIR/research.md" ]; then
+    SUMMARY=$(head -c 300 "$STATE_DIR/research.md" 2>/dev/null)
+    (echo "📖 R${ROUND} 研究摘要：${SUMMARY}" | timeout 5s hermes send --to weixin >/dev/null 2>&1) &
+  fi
 
   # Phase 1: Planner
   if ! agy_run "Phase1-Planner" /tmp/ev_r${ROUND}_planner.log agy -p "Product Evolution R${ROUND}，阶段：${STAGE}。你是【规划Agent】，只拆任务。读 /.agent/research.md 和 backlog.md，拆 N>=2 个并行任务，每个任务文件名不重叠。输出格式：
