@@ -239,21 +239,60 @@ prompt: 详细任务描述
   fi
   notify "👷 第${ROUND}轮 Phase2 开发完成（${N}个分支）"
 
-  # Phase 2.5: Reviewer — 宽松格式，不要求REVIEW_RESULT前缀
+  # === Phase 2.3: Runtime Verifier（强制独立验证，Agent说谎也无用） ===
+  VERIFIER="$STATE_DIR/runtime-verify.sh"
+  if [ ! -f "$VERIFIER" ]; then
+    notify "⚠️ Runtime Verifier 不存在，跳过独立验证"
+  else
+    for i in $(seq 1 "$N"); do
+      WT_DIR="${WORKTREES[$((i-1))]}"
+      VERIFY_OUT="/tmp/ev_r${ROUND}_verify_t${i}.json"
+      if [ -d "$WT_DIR" ]; then
+        bash "$VERIFIER" "$WT_DIR" "$i" "$VERIFY_OUT" > /dev/null 2>&1
+        V_STATUS=$(grep -o '"status":"[A-Z]*"' "$VERIFY_OUT" 2>/dev/null | head -1 | cut -d'"' -f4)
+        V_PASS=$(grep -o '"passed":[0-9]*' "$VERIFY_OUT" 2>/dev/null | head -1 | cut -d: -f2)
+        V_FAIL=$(grep -o '"failed":[0-9]*' "$VERIFY_OUT" 2>/dev/null | head -1 | cut -d: -f2)
+        if [ "$V_STATUS" = "PASS" ]; then
+          notify "✅ Runtime t${i}: ${V_PASS} PASS / ${V_FAIL} FAIL"
+        else
+          notify "❌ Runtime t${i}: ${V_PASS} PASS / ${V_FAIL} FAIL"
+        fi
+      fi
+    done
+    notify "🔬 第${ROUND}轮 Runtime Verifier 完成"
+  fi
+
+  # Phase 2.5: Reviewer — 注入Runtime Verifier结果
   REVIEW_INPUT=""
   for i in $(seq 1 "$N"); do
     WT_DIR="${WORKTREES[$((i-1))]}"
+    VERIFY_JSON="/tmp/ev_r${ROUND}_verify_t${i}.json"
+    if [ -f "$VERIFY_JSON" ]; then
+      V_SUMMARY=$(grep -o '"status":"[A-Z]*","passed":[0-9]*,"failed":[0-9]*' "$VERIFY_JSON" 2>/dev/null | head -1)
+      V_CHECKS=$(grep -o '"name":"[^"]*","status":"[A-Z]*"' "$VERIFY_JSON" 2>/dev/null | tr '\n' ' ')
+    else
+      V_SUMMARY="N/A（Runtime Verifier未执行）"
+      V_CHECKS=""
+    fi
     REVIEW_INPUT="${REVIEW_INPUT}
 === t${i}: ${TASK_NAMES[$i]} ===
 DIFF:$(git -C "$WT_DIR" diff main --stat 2>/dev/null)
+RUNTIME: ${V_SUMMARY}
+CHECKS: ${V_CHECKS}
 LOG_TAIL:$(tail -15 "/tmp/ev_r${ROUND}_t${i}.log" 2>/dev/null)
 "
   done
   if ! agy_run "Reviewer" /tmp/ev_r${ROUND}_review.log agy -p "你是【独立Reviewer Gatekeeper】。审查以下${N}个开发分支是否达到交付标准。
 
+**关键：每个分支的 RUNTIME 行是 Runtime Verifier 独立执行的真实结果（cargo check/test/clippy/fmt/diff/commit 命令实际跑过），不是 Agent 自报。**
+- RUNTIME 含 PASS → 该检查真实通过
+- RUNTIME 含 FAIL → 该检查真实失败（Agent 自报PASS也不可信）
+- 只看 RUNTIME + CHECKS 行做最终决策
+
 判断依据：
-1. diff是否非空且有实质性改动
-2. 任务日志是否显示通过编译/测试
+1. diff是否非空且有实质性改动（看DIFF行）
+2. Runtime Verifier 各检查是否PASS（看RUNTIME行）
+3. 任务日志是否显示Agent完成了工作（看LOG_TAIL行）
 
 输出格式（每个分支一行，含任务编号）：
 t1: APPROVED
