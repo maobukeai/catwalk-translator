@@ -17,6 +17,8 @@ screenshot_*.png
 test_*.png
 m4_test_image.png
 test_inpainting.py
+release_dist/
+release_notes.md
 
 # Node / Tauri（app_v2 内已有独立规则）
 node_modules/
