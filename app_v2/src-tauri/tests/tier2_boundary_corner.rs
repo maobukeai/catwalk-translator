@@ -30,7 +30,7 @@ mod category_1_empty_text_dict_extremes {
                 width: 0,
                 height: 0,
             };
-            let ocr_res = cmd_capture_and_ocr(zero_rect, None)
+            let ocr_res = cmd_capture_and_ocr(zero_rect, None, None, None)
                 .await
                 .expect("OCR command failed");
             assert_eq!(

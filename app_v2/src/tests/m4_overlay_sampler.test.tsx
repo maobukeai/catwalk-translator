@@ -21,6 +21,8 @@ async function mouseSelection() {
   fireEvent.mouseDown(container, { clientX: 100, clientY: 100, button: 0 });
   fireEvent.mouseMove(container, { clientX: 400, clientY: 200 });
   fireEvent.mouseUp(container);
+  // v2.4: release freezes the rect into adjust mode — confirm with Enter
+  fireEvent(window, new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
 }
 
 describe('M4 overlay and sampler coverage', () => {
@@ -36,31 +38,37 @@ describe('M4 overlay and sampler coverage', () => {
     (window as any).__TAURI_INTERNALS__ = {};
 
     render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
-    expect(await screen.findByText(/猫步划词翻译/)).toBeInTheDocument();
-    expect(screen.getByText(/按住鼠标左键划框/)).toBeInTheDocument();
-    expect(screen.getByText(/右键 .*Esc 退出/)).toBeInTheDocument();
+    expect(await screen.findByText(/猫步划词/)).toBeInTheDocument();
+    expect(screen.getByTitle(/按住鼠标左键划框/)).toBeInTheDocument();
+    expect(screen.getByTitle(/退出划词/)).toBeInTheDocument();
   });
 
   it('shows processing state after a selection completes', async () => {
     createMockIpcHarness();
-    wireMock(() => Promise.resolve({
-      blocks: [], selectionX: 0, selectionY: 0, selectionW: 400, selectionH: 100,
-    }));
+    // Simulate a stage-1 OCR that takes a moment so the processing UI is observable
+    wireMock((cmd: string) => {
+      if (cmd === 'cmd_region_ocr_layout') {
+        return new Promise((res) => setTimeout(() => res({
+          blocks: [], selectionX: 0, selectionY: 0, selectionW: 400, selectionH: 100,
+        }), 300));
+      }
+      return Promise.resolve(undefined);
+    });
     (window as any).__TAURI_INTERNALS__ = {};
 
     render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
-    await screen.findByText(/猫步划词翻译/);
+    await screen.findByText(/猫步划词/);
     await mouseSelection();
     await waitFor(() => {
-      expect(screen.getByText(/正在提取与翻译/i)).toBeInTheDocument();
+      expect(screen.getByTestId('processing-label')).toBeInTheDocument();
     }, { timeout: 2000 });
   });
 
   it('renders overlay blocks at in-place coordinates and supports drag repositioning', async () => {
-    const block: OverlayBlock = {
+    const layoutBlock: OverlayBlock = {
       original: 'BSDF',
-      translated: 'BSDF 材质',
-      sourceTier: 'preset',
+      translated: '',
+      sourceTier: 'OCR',
       logicalX: 100,
       logicalY: 80,
       logicalW: 120,
@@ -70,20 +78,34 @@ describe('M4 overlay and sampler coverage', () => {
     };
 
     createMockIpcHarness();
-    wireMock(() => Promise.resolve({
-      blocks: [block], selectionX: 0, selectionY: 0, selectionW: 400, selectionH: 200,
-    }));
+    wireMock((cmd: string) => {
+      if (cmd === 'cmd_region_ocr_layout') {
+        return Promise.resolve({
+          blocks: [layoutBlock], selectionX: 0, selectionY: 0, selectionW: 400, selectionH: 200,
+        });
+      }
+      if (cmd === 'cmd_translate_phrases_styled' || cmd === 'cmd_translate_phrases') {
+        return Promise.resolve([
+          { original: 'BSDF', translated: 'BSDF 材质', sourceTier: 'preset' },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
     (window as any).__TAURI_INTERNALS__ = {};
 
     render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
-    await screen.findByText(/猫步划词翻译/);
+    await screen.findByText(/猫步划词/);
     await mouseSelection();
-    const card = await screen.findByText('BSDF 材质');
-    expect(card).toBeInTheDocument();
+    const cardText = await screen.findByText('BSDF 材质');
+    expect(cardText).toBeInTheDocument();
+    const card = cardText.closest('.overlay-block') as HTMLElement;
+    expect(card).not.toBeNull();
     expect(card.className).toContain('overlay-block');
-    // left/top are fixed relative to logicalX/logicalY (pos.x - 3 / pos.y - 2)
+    // left/top are directly aligned with logicalX/logicalY (pos.x / pos.y) without extra offset
     const beforeLeft = (card as HTMLElement).style.left;
     const beforeTop = (card as HTMLElement).style.top;
+    expect(beforeLeft).toBe('100px');
+    expect(beforeTop).toBe('80px');
     fireEvent.mouseDown(card, { clientX: 200, clientY: 200, button: 0 });
     fireEvent.mouseMove(card, { clientX: 260, clientY: 240 });
     fireEvent.mouseUp(card);
@@ -105,26 +127,35 @@ describe('M4 overlay and sampler coverage', () => {
     (window as any).__TAURI_INTERNALS__ = {};
 
     render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
-    await screen.findByText(/猫步划词翻译/);
+    await screen.findByText(/猫步划词/);
     await mouseSelection();
     await waitFor(() => {}, { timeout: 2600 });
     expect(await screen.findByText(/未在选区内识别到清晰文本/)).toBeInTheDocument();
   });
 
   it('uses dark and light text colors for sampled block backgrounds', async () => {
-    const blocks: OverlayBlock[] = [
-      { original: 'dark', translated: '白字', sourceTier: 'mock', logicalX: 10, logicalY: 10, logicalW: 80, logicalH: 20, bgCss: 'rgb(20,24,30)', fgCss: '#FFFFFF' },
-      { original: 'light', translated: '黑字', sourceTier: 'mock', logicalX: 120, logicalY: 10, logicalW: 80, logicalH: 20, bgCss: 'rgb(230,232,236)', fgCss: '#000000' },
+    const layoutBlocks: OverlayBlock[] = [
+      { original: 'dark', translated: '', sourceTier: 'OCR', logicalX: 10, logicalY: 10, logicalW: 80, logicalH: 20, bgCss: 'rgb(20,24,30)', fgCss: '#FFFFFF' },
+      { original: 'light', translated: '', sourceTier: 'OCR', logicalX: 120, logicalY: 10, logicalW: 80, logicalH: 20, bgCss: 'rgb(230,232,236)', fgCss: '#000000' },
     ];
 
     createMockIpcHarness();
-    wireMock(() => Promise.resolve({
-      blocks, selectionX: 0, selectionY: 0, selectionW: 400, selectionH: 200,
-    }));
+    wireMock((cmd: string) => {
+      if (cmd === 'cmd_region_ocr_layout') {
+        return Promise.resolve({ blocks: layoutBlocks, selectionX: 0, selectionY: 0, selectionW: 400, selectionH: 200 });
+      }
+      if (cmd === 'cmd_translate_phrases_styled' || cmd === 'cmd_translate_phrases') {
+        return Promise.resolve([
+          { original: 'dark', translated: '白字', sourceTier: 'mock' },
+          { original: 'light', translated: '黑字', sourceTier: 'mock' },
+        ]);
+      }
+      return Promise.resolve(undefined);
+    });
     (window as any).__TAURI_INTERNALS__ = {};
 
     render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
-    await screen.findByText(/猫步划词翻译/);
+    await screen.findByText(/猫步划词/);
     await mouseSelection();
     expect(await screen.findByText('白字')).toBeInTheDocument();
     expect(await screen.findByText('黑字')).toBeInTheDocument();

@@ -8,8 +8,7 @@
 use app_v2_lib::{
     capture::set_latest_capture,
     commands::{cmd_capture_and_ocr, cmd_sample_colors_core_logic, cmd_translate_phrases},
-    models::{BoundingBox, LlmConfig, OcrResult, PhysicalRect, TextBlock},
-    sampler::ColorSampler,
+    models::{BoundingBox, LlmConfig, PhysicalRect, TextBlock},
     translator::{CgDictionaryEngine, MultiTierPipeline},
 };
 
@@ -292,7 +291,7 @@ fn e2e_begin_capture_then_ocr_flow() {
             width: 400,
             height: 200,
         };
-        let ocr = cmd_capture_and_ocr(selection, None)
+        let ocr = cmd_capture_and_ocr(selection, None, None, None)
             .await
             .expect("capture_and_ocr must not panic and must return a structured result");
         assert!(

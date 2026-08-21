@@ -154,9 +154,9 @@ fn test_app_state_concurrent_thread_safety() {
             let mut lock = state_clone.settings.lock().unwrap();
             lock.hotkey = format!("Ctrl+Alt+F{}", i);
             lock.theme = if i % 2 == 0 {
-                "fluent-dark".to_string()
+                "dark".to_string()
             } else {
-                "fluent-light".to_string()
+                "light".to_string()
             };
         });
         handles.push(handle);
@@ -168,7 +168,7 @@ fn test_app_state_concurrent_thread_safety() {
 
     let final_lock = app_state.settings.lock().unwrap();
     assert!(final_lock.hotkey.starts_with("Ctrl+Alt+F"));
-    assert!(final_lock.theme == "fluent-dark" || final_lock.theme == "fluent-light");
+    assert!(final_lock.theme == "dark" || final_lock.theme == "light");
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn test_ipc_cmd_capture_and_ocr_stub() {
             width: 100,
             height: 100,
         };
-        let result = cmd_capture_and_ocr(selection, None).await;
+        let result = cmd_capture_and_ocr(selection, None, None, None).await;
         assert!(result.is_ok());
         let ocr = result.unwrap();
         assert!(!ocr.blocks.is_empty());
@@ -264,7 +264,7 @@ fn test_async_tokio_concurrency_stress_test() {
                     width: 100,
                     height: 100,
                 };
-                let ocr_res = cmd_capture_and_ocr(rect, None).await;
+                let ocr_res = cmd_capture_and_ocr(rect, None, None, None).await;
                 assert!(ocr_res.is_ok());
 
                 let phrases = vec![format!("Phrase {}", i)];

@@ -1,6 +1,25 @@
 import '@testing-library/jest-dom';
-import { beforeEach, vi } from 'vitest';
+import { beforeEach, afterEach, vi } from 'vitest';
 import { createMockIpcHarness } from './tauriIpcMock';
+import { __clearTranslationMemoForTests } from '../../components/Overlay/CaptureOverlay';
+
+// JSDOM does not implement window.matchMedia (used by useAppTheme and theme
+// detection) — provide the standard minimal mock.
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(), // legacy API
+      removeListener: vi.fn(), // legacy API
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }),
+  });
+}
 
 // Mock Canvas 2D Context for JSDOM
 if (typeof HTMLCanvasElement !== 'undefined') {
@@ -42,4 +61,9 @@ if (typeof HTMLCanvasElement !== 'undefined') {
 beforeEach(() => {
   vi.clearAllMocks();
   createMockIpcHarness();
+});
+
+afterEach(() => {
+  // Module-level translation memo would otherwise leak between test cases
+  __clearTranslationMemoForTests();
 });

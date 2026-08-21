@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { ChevronDown, Check, Globe } from "lucide-react";
 import type { LanguageCode, LanguageOption } from "../../services/types";
-import { useSettingsStore } from "../../stores/useSettingsStore";
+import { useAppTheme } from "../../hooks/useAppTheme";
 
 interface LanguageDropdownProps {
   label: string;
@@ -27,10 +27,7 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const { settings } = useSettingsStore();
-  const activeTheme = settings.appearance?.theme || 'fluent-dark';
-  const isSystemLight = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches;
-  const isLight = activeTheme === 'light' || (activeTheme === 'system' && isSystemLight);
+  const { isLight } = useAppTheme();
 
   const selectedOption = options.find((opt) => opt.code === value) || options[0];
 

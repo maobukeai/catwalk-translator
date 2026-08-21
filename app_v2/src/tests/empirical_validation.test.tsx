@@ -20,8 +20,8 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
     // Reset Zustand store state before each test
     useSettingsStore.setState({
       settings: {
-        theme: 'fluent-dark',
-        hotkey: 'Ctrl+Alt+D',
+        theme: 'system',
+        hotkey: 'F4',
         defaultPreset: 'blender',
         llmConfig: {
           provider: 'DeepSeek',
@@ -40,8 +40,8 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
         },
       },
       initialSettings: {
-        theme: 'fluent-dark',
-        hotkey: 'Ctrl+Alt+D',
+        theme: 'system',
+        hotkey: 'F4',
         defaultPreset: 'blender',
         llmConfig: {
           provider: 'DeepSeek',
@@ -117,7 +117,7 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
 
       // Revert hotkey back to initial value
       act(() => {
-        useSettingsStore.getState().setHotkey('Ctrl+Alt+D');
+        useSettingsStore.getState().setHotkey('F4');
       });
       expect(useSettingsStore.getState().isDirty).toBe(false);
     });
@@ -226,7 +226,7 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
       });
 
       const state = useSettingsStore.getState();
-      expect(state.settings.hotkey).toBe('Ctrl+Alt+D');
+      expect(state.settings.hotkey).toBe('F4');
       expect(state.settings.llmConfig!.provider).toBe('DeepSeek');
       expect(state.isDirty).toBe(false);
     });
@@ -245,7 +245,7 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
 
     it('EV-2.2: cmdGetSettings & cmdSaveSettings browser fallback localStorage round-trip', async () => {
       const testSettings = {
-        theme: 'fluent-dark',
+        theme: 'system',
         hotkey: 'Alt+Shift+D',
         defaultPreset: 'blender',
         llmConfig: {
@@ -272,8 +272,8 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
 
       const settings = await cmdGetSettings();
       expect(settings).toBeDefined();
-      expect(settings.hotkey).toBe('Ctrl+Alt+D');
-      expect(settings.theme).toBe('fluent-dark');
+      expect(settings.hotkey).toBe('F4');
+      expect(settings.theme).toBe('system');
     });
 
     it('EV-2.4: cmdTranslatePhrases browser fallback translation dictionary matching & fallback formatting', async () => {
@@ -412,7 +412,7 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
 
       fireEvent.click(screen.getByText('快捷键与 AI 模型'));
       expect(screen.getByText(/系统设置|翻译器设置/i)).toBeInTheDocument();
-      expect(screen.getByText('Ctrl+Alt+D')).toBeInTheDocument();
+      expect(screen.getByText('F4')).toBeInTheDocument();
       expect(screen.getAllByRole('combobox').length).toBeGreaterThan(0);
       expect(screen.getByDisplayValue('https://api.deepseek.com/v1')).toBeInTheDocument();
     });

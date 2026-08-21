@@ -3,17 +3,19 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
+from PIL import Image
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QWidget, QMainWindow,
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame
 )
 from PyQt6.QtCore import pyqtSignal, QObject, Qt
-from PyQt6.QtGui import QIcon, QAction, QPixmap, QColor, QPainter
+from PyQt6.QtGui import QIcon, QAction, QPixmap, QColor, QPainter, QImage
 from pynput import keyboard
 
 # Ensure Windows Taskbar displays custom icon instead of generic Python icon
 if sys.platform == 'win32':
     try:
+        import ctypes
         myappid = 'maobu.catwalk.translator.v2'
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except Exception as e:
@@ -22,15 +24,15 @@ if sys.platform == 'win32':
 from core.capture import ScreenCaptureWidget
 from core.ocr import OCREngine
 from core.reconstruction import TextReconstructor
-from core.sampler import BackgroundSampler
+from core.inpainting import ImageInpainter
 from core.translator import Translator, TranslationPreset
 from core.overlay import OverlayWidget
 
 class SignalBus(QObject):
     trigger_capture_signal = pyqtSignal()
     # seq 用于丢弃过期结果：防止上一轮 OCR 的迟到结果覆盖新一轮浮层
-    ocr_finish_signal = pyqtSignal(int, list, int, int)  # seq, items, offset_x, offset_y
-    ocr_update_signal = pyqtSignal(int, list)            # seq, items（逐项渐进更新）
+    ocr_finish_signal = pyqtSignal(int, object, int, int)  # seq, result_dict, offset_x, offset_y
+    translation_progress_signal = pyqtSignal(int, object)  # seq, updated_result_dict
 
 class MainWindow(QMainWindow):
     def __init__(self, app_instance):
@@ -107,7 +109,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_capture)
 
         # Status Bar
-        status_lbl = QLabel("🟢 状态：RapidOCR ONNX 引擎已就绪 | 按 F4 随时截屏")
+        status_lbl = QLabel("🟢 状态：RapidOCR ONNX + Inpainting 引擎已就绪 | 按 F4 随时截屏")
         status_lbl.setStyleSheet("font-size: 11px; color: #4ADE80;")
         layout.addWidget(status_lbl)
 
@@ -138,14 +140,14 @@ class MainApplication:
         self.bus = SignalBus()
         self.bus.trigger_capture_signal.connect(self.start_capture)
         self.bus.ocr_finish_signal.connect(self.show_overlay)
-        self.bus.ocr_update_signal.connect(self.update_overlay)
+        self.bus.translation_progress_signal.connect(self.update_overlay)
 
         print("[系统] 正在初始化 猫步翻译软件 高级引擎...")
         self.ocr_engine = OCREngine()
         self.reconstructor = TextReconstructor()
-        self.sampler = BackgroundSampler()
+        self.inpainter = ImageInpainter(dilation_pixels=2)
         self.translator = Translator(default_preset=TranslationPreset.GENERAL)
-        print("[系统] 引擎加载完毕 (合并重构器 + 背景采样器 + 动态布局器已就绪)!")
+        print("[系统] 引擎加载完毕 (OCR + 智能行重构 + 图像修复Inpainting + 译文渲染)!")
 
         self.capture_widget = None
         self.current_overlay = None
@@ -158,6 +160,8 @@ class MainApplication:
         if self.app_icon and not self.app_icon.isNull():
             self.main_window.setWindowIcon(self.app_icon)
         self.main_window.show()
+        self.main_window.raise_()
+        self.main_window.activateWindow()
 
         self.init_tray_icon()
         self.init_hotkey()
@@ -271,71 +275,117 @@ class MainApplication:
                 merged_items = self.reconstructor.merge_nearby_boxes(raw_ocr_items)
                 print(f"[2. 行重构] 智能短语合并后: {len(merged_items)} 项")
 
-                items = [{
-                    'box': item['box'],
-                    'text': item['text'],
-                    'score': item['score'],
-                    'translated_text': '',
-                    # 占位样式：翻译完成前先显示半透明底 + 白字
-                    'bg_color': QColor(38, 40, 46, 190),
-                    'text_color': QColor(255, 255, 255),
-                } for item in merged_items]
-
-                # 3. 立即上屏（渐进式：先显示原文框，翻译完成一项刷新一项）
-                self.bus.ocr_finish_signal.emit(seq, items, offset_x, offset_y)
-
                 if not merged_items:
+                    print("[警告] 未检测到任何文字")
+                    self.bus.ocr_finish_signal.emit(seq, None, offset_x, offset_y)
                     return
 
-                # 整张截图只转换一次 ndarray，供所有短语采样复用
+                # 转换为numpy数组供后续处理
                 np_img = np.array(pil_image.convert('RGB'))
 
+                # 3. 为每个文字项估计文字属性
+                items = []
+                boxes_for_inpainting = []
+                for merged in merged_items:
+                    props = self.inpainter.estimate_text_properties(np_img, merged['box'])
+                    item = {
+                        'box': merged['box'],
+                        'text': merged['text'],
+                        'score': merged['score'],
+                        'translated_text': '',
+                        'props': props,
+                        'translated': False
+                    }
+                    items.append(item)
+                    boxes_for_inpainting.append(merged['box'])
+
+                # 4. 图像修复：一次性抹除所有原文区域
+                print("[3. Inpainting] 正在抹除原文并修复背景...")
+                inpainted_pil, _ = self.inpainter.inpaint_image(pil_image, boxes_for_inpainting)
+                
+                # 准备结果数据结构
+                result = {
+                    'original_image': pil_image,
+                    'inpainted_image': inpainted_pil,
+                    'items': items,
+                    'current_image': inpainted_pil.copy()
+                }
+
+                # 5. 立即上屏（先显示抹除原文后的干净背景）
+                self.bus.ocr_finish_signal.emit(seq, result, offset_x, offset_y)
+
+                # 6. 并行翻译，每完成一项就更新图像
+                translation_lock = threading.Lock()
+                completed_count = [0]
+                total_count = len(items)
+
                 def translate_index(i):
+                    item = items[i]
+                    orig_text = item['text']
                     try:
-                        item = items[i]
-                        orig_text = item['text']
-                        item['translated_text'] = self.translator.translate_text(orig_text)
-
-                        # 4. 背景与字体色彩边缘采样
-                        sample_res = self.sampler.sample_background_color(np_img, item['box'])
-                        item['bg_color'] = sample_res['bg_color']
-                        item['text_color'] = sample_res['text_color']
-                        print(f" -> 短语: '{orig_text}' => 译文: '{item['translated_text']}' | RGB: {sample_res['median_rgb']}")
+                        translated = self.translator.translate_text(orig_text)
                     except Exception as e:
-                        print(f"[翻译采样失败] {e}")
-                    finally:
-                        # 每完成一项就推送一次增量更新，主线程重绘即可
-                        self.bus.ocr_update_signal.emit(seq, list(items))
+                        print(f"[翻译失败] '{orig_text}': {e}")
+                        translated = orig_text  # 失败时显示原文
+                    
+                    with translation_lock:
+                        item['translated_text'] = translated
+                        item['translated'] = True
+                        completed_count[0] += 1
+                        
+                        # 渲染当前已翻译的所有项到修复后的图像上
+                        current_img = self.inpainter.render_text_on_image(
+                            inpainted_pil, 
+                            [it for it in items if it['translated']]
+                        )
+                        result['current_image'] = current_img
+                        
+                        print(f" -> [{completed_count[0]}/{total_count}] '{orig_text}' => '{translated}'")
+                    
+                    # 推送增量更新
+                    self.bus.translation_progress_signal.emit(seq, result)
 
-                # 5. 并行翻译（网络 IO 密集 → 线程池并发，替代原串行等待）
+                # 使用线程池并行翻译
                 with ThreadPoolExecutor(max_workers=5) as executor:
-                    list(executor.map(translate_index, range(len(items))))
+                    futures = [executor.submit(translate_index, i) for i in range(len(items))]
+                    for f in futures:
+                        try:
+                            f.result()  # 等待每个任务完成，捕获可能的异常
+                        except Exception as e:
+                            print(f"[Worker异常] {e}")
+                            import traceback
+                            traceback.print_exc()
+
+                print(f"[完成] 全部 {total_count} 项翻译渲染完毕!")
 
             except Exception as e:
                 print(f"[OCR Worker Error] {e}")
-                self.bus.ocr_finish_signal.emit(seq, [], offset_x, offset_y)
+                import traceback
+                traceback.print_exc()
+                self.bus.ocr_finish_signal.emit(seq, None, offset_x, offset_y)
 
         t = threading.Thread(target=worker, daemon=True)
         t.start()
 
-    def show_overlay(self, seq, items, offset_x, offset_y):
+    def show_overlay(self, seq, result, offset_x, offset_y):
         if seq != self.current_seq:
             return  # 过期结果，丢弃
-        if not items:
+        
+        if result is None:
             print("[警告] 未检测到任何文字")
             return
 
         if self.current_overlay:
             self.current_overlay.close()
 
-        self.current_overlay = OverlayWidget(offset_x, offset_y, items)
+        self.current_overlay = OverlayWidget(offset_x, offset_y, result)
         self.current_overlay.show()
         self.current_overlay.raise_()
 
-    def update_overlay(self, seq, items):
+    def update_overlay(self, seq, result):
         if seq != self.current_seq or not self.current_overlay:
             return
-        self.current_overlay.update_items(items)
+        self.current_overlay.update_result(result)
 
     def quit_app(self):
         self.tray_icon.hide()

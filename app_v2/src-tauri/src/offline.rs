@@ -12,8 +12,8 @@
 use crate::models::OfflineModelStatus;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 const EMBEDDED_DICT: &str = include_str!("../assets/offline/general_ui_dict.json");
 pub const MODEL_ID: &str = "offline-phrase-dict-v1";
@@ -120,7 +120,7 @@ fn manifest_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("manifest.json"))
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OfflineManifest {
     model_id: String,
     model_name: String,
@@ -362,4 +362,4 @@ mod tests {
     }
 }
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};

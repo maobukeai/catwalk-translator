@@ -471,3 +471,87 @@ pub fn capture_region_bmp(rect: PhysicalRect) -> Result<(Vec<u8>, u32, u32, f64)
 pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
     Err("Screen capture only supported on Windows".to_string())
 }
+
+/// Dimensions + scale of the stored full-desktop BMP (without cloning pixels).
+pub fn latest_capture_dims() -> Option<(u32, u32, f64)> {
+    LATEST_CAPTURE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|c| (c.1, c.2, c.3)))
+}
+
+/// Region-watch support: re-read a physical rect of the LIVE screen into the
+/// stored full-desktop BMP without hiding/showing the overlay window (the old
+/// hide → capture → show dance caused a visible flash every tick).
+///
+/// The overlay window is made fully transparent (WS_EX_LAYERED + alpha 0) for
+/// the duration of one BitBlt so we never capture our own translated cards.
+/// If anything fails the caller can fall back to the legacy refresh path.
+#[cfg(target_os = "windows")]
+pub fn refresh_capture_region_quietly(hwnd_raw: isize, rect: PhysicalRect) -> Result<(), String> {
+    use windows::Win32::Foundation::{COLORREF, HWND};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA,
+        WS_EX_LAYERED,
+    };
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmFlush() -> i32;
+    }
+
+    let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+    unsafe {
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let had_layered = (ex_style & WS_EX_LAYERED.0 as isize) != 0;
+        if !had_layered {
+            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize);
+        }
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA);
+        // Give the compositor a frame or two to apply the alpha before BitBlt
+        let _ = DwmFlush();
+        let _ = DwmFlush();
+
+        let result = (|| -> Result<(), String> {
+            let (region_bmp, rw, rh, _sf) = capture_region_bmp(rect)?;
+            let (mut full_bmp, bmp_w, bmp_h, stored_scale) = get_latest_capture()
+                .ok_or_else(|| "No desktop capture available in memory".to_string())?;
+
+            let rx = (rect.x.max(0) as u32).min(bmp_w);
+            let ry = (rect.y.max(0) as u32).min(bmp_h);
+            let copy_w = rw.min(bmp_w.saturating_sub(rx));
+
+            // Patch rows in place — both BMPs are top-down 32bpp with a 54-byte header
+            for row in 0..rh {
+                if ry + row >= bmp_h {
+                    break;
+                }
+                let src_start = 54usize + ((row * rw) as usize) * 4;
+                let src_end = src_start + (copy_w as usize) * 4;
+                let dst_start =
+                    54usize + ((((ry + row) * bmp_w) + rx) as usize) * 4;
+                let dst_end = dst_start + (copy_w as usize) * 4;
+                if src_end <= region_bmp.len() && dst_end <= full_bmp.len() {
+                    full_bmp[dst_start..dst_end].copy_from_slice(&region_bmp[src_start..src_end]);
+                }
+            }
+
+            set_latest_capture(full_bmp, bmp_w, bmp_h, stored_scale);
+            Ok(())
+        })();
+
+        // Restore visibility no matter what happened above
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
+        if !had_layered {
+            let s2 = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, s2 & !(WS_EX_LAYERED.0 as isize));
+        }
+        let _ = DwmFlush();
+        result
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn refresh_capture_region_quietly(_hwnd_raw: isize, _rect: PhysicalRect) -> Result<(), String> {
+    Err("Quiet region refresh only supported on Windows".to_string())
+}

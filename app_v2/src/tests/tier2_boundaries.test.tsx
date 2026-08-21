@@ -19,8 +19,8 @@ describe('Tier 2 Boundary & Corner Case Test Suite', () => {
     createMockIpcHarness();
     useSettingsStore.setState({
       settings: {
-        theme: 'fluent-dark',
-        hotkey: 'Ctrl+Alt+D',
+        theme: 'system',
+        hotkey: 'F4',
         defaultPreset: 'blender',
         llmConfig: {
           provider: 'DeepSeek',
@@ -39,8 +39,8 @@ describe('Tier 2 Boundary & Corner Case Test Suite', () => {
         },
       },
       initialSettings: {
-        theme: 'fluent-dark',
-        hotkey: 'Ctrl+Alt+D',
+        theme: 'system',
+        hotkey: 'F4',
         defaultPreset: 'blender',
         llmConfig: {
           provider: 'DeepSeek',
@@ -89,7 +89,7 @@ describe('Tier 2 Boundary & Corner Case Test Suite', () => {
       act(() => {
         useSettingsStore.getState().resetSettings();
       });
-      expect(useSettingsStore.getState().settings.theme).toBe('fluent-dark');
+      expect(useSettingsStore.getState().settings.theme).toBe('system');
       expect(useSettingsStore.getState().isDirty).toBe(false);
     });
 
@@ -128,7 +128,7 @@ describe('Tier 2 Boundary & Corner Case Test Suite', () => {
       act(() => {
         useSettingsStore.getState().resetSettings();
       });
-      expect(useSettingsStore.getState().settings.hotkey).toBe('Ctrl+Alt+D');
+      expect(useSettingsStore.getState().settings.hotkey).toBe('F4');
       expect(useSettingsStore.getState().isDirty).toBe(false);
     });
 

@@ -23,8 +23,8 @@ mod feature_1_container_ui {
     fn test_f1_01_tray_menu_initialization() {
         let state = AppState::default();
         let settings = state.settings.lock().unwrap();
-        assert_eq!(settings.theme, "fluent-dark");
-        assert_eq!(settings.hotkey, "Ctrl+Alt+D");
+        assert_eq!(settings.theme, "system");
+        assert_eq!(settings.hotkey, "F4");
         assert_eq!(settings.default_preset, "blender");
         assert!(settings.preset_dicts.blender);
         assert!(settings.preset_dicts.substance);
@@ -34,26 +34,22 @@ mod feature_1_container_ui {
     #[test]
     fn test_f1_02_hotkey_binding_registration() {
         let settings = AppSettings::default();
-        assert!(!settings.hotkey.is_empty());
-        let parts: Vec<&str> = settings.hotkey.split('+').collect();
-        assert!(parts.contains(&"Ctrl"));
-        assert!(parts.contains(&"Alt"));
-        assert!(parts.contains(&"D"));
+        assert_eq!(settings.hotkey, "F4");
+        assert!(app_v2_lib::parse_hotkey(&settings.hotkey).is_ok());
     }
 
     #[test]
     fn test_f1_03_fluent_theme_switching() {
         let mut settings = AppSettings::default();
-        assert_eq!(settings.theme, "fluent-dark");
-        settings.theme = "fluent-light".to_string();
-        assert_eq!(settings.theme, "fluent-light");
-        assert!(settings.theme.starts_with("fluent-"));
+        assert_eq!(settings.theme, "system");
+        settings.theme = "light".to_string();
+        assert_eq!(settings.theme, "light");
     }
 
     #[test]
     fn test_f1_04_settings_persistence() {
         let settings = AppSettings {
-            theme: "fluent-dark".to_string(),
+            theme: "system".to_string(),
             hotkey: "Ctrl+Shift+T".to_string(),
             default_preset: "blender".to_string(),
             llm_config: Some(LlmConfig {
@@ -89,21 +85,22 @@ mod feature_1_container_ui {
         let state_clone = Arc::clone(&state);
         let handle = std::thread::spawn(move || {
             let mut settings = state_clone.settings.lock().unwrap();
-            settings.theme = "fluent-light".to_string();
+            settings.theme = "light".to_string();
         });
         handle.join().expect("Thread panicked");
         let settings = state.settings.lock().unwrap();
-        assert_eq!(settings.theme, "fluent-light");
+        assert_eq!(settings.theme, "light");
     }
 
     #[test]
     fn test_f1_06_dark_light_theme_style_application() {
         let mut settings = AppSettings::default();
-        assert!(settings.theme.contains("dark"));
-        let is_dark_active = settings.theme == "fluent-dark";
+        assert_eq!(settings.theme, "system");
+        settings.theme = "dark".to_string();
+        let is_dark_active = settings.theme == "dark";
         assert!(is_dark_active);
-        settings.theme = "fluent-light".to_string();
-        let is_light_active = settings.theme == "fluent-light";
+        settings.theme = "light".to_string();
+        let is_light_active = settings.theme == "light";
         assert!(is_light_active);
     }
 }
@@ -231,7 +228,7 @@ mod feature_3_rapidocr_reconstruction {
                 width: 200,
                 height: 100,
             };
-            let res = cmd_capture_and_ocr(selection, None).await;
+            let res = cmd_capture_and_ocr(selection, None, None, None).await;
             assert!(res.is_ok());
             let ocr_res = res.unwrap();
             assert_eq!(ocr_res.blocks.len(), 1);
@@ -542,7 +539,7 @@ mod feature_6_test_harness_integration {
                 width: 500,
                 height: 300,
             };
-            let res = cmd_capture_and_ocr(selection, None).await;
+            let res = cmd_capture_and_ocr(selection, None, None, None).await;
             assert!(res.is_ok());
         });
     }
@@ -551,9 +548,9 @@ mod feature_6_test_harness_integration {
     fn test_f6_02_test_report_formatter() {
         let settings = AppSettings::default();
         let summary = app_v2_lib::commands::TestReportFormatter::format_summary(&settings);
-        assert!(summary.contains("fluent-dark"));
+        assert!(summary.contains("system"));
         assert!(summary.contains("blender"));
-        assert!(summary.contains("Ctrl+Alt+D"));
+        assert!(summary.contains("F4"));
     }
 
     #[test]

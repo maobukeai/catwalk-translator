@@ -3,6 +3,7 @@ import { Search, Volume2, Star, Copy, X, Sparkles, BookOpen, Layers, Check } fro
 import { cmdQueryText, cmdGetHistory, cmdAddHistory } from '../services/tauri';
 import type { TextQueryResponse, AppSettings, HistoryItem } from '../services/types';
 import { useSettingsStore } from '../stores/useSettingsStore';
+import { useAppTheme } from '../hooks/useAppTheme';
 
 interface SpotlightModalProps {
   isOpen: boolean;
@@ -18,10 +19,7 @@ export const SpotlightModal: React.FC<SpotlightModalProps> = ({ isOpen, onClose,
   const [isFavorite, setIsFavorite] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const { settings: globalSettings } = useSettingsStore();
-  const activeTheme = globalSettings.appearance?.theme || 'fluent-dark';
-  const isSystemLight = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches;
-  const isLight = activeTheme === 'light' || (activeTheme === 'system' && isSystemLight);
+  const { isLight } = useAppTheme();
 
   useEffect(() => {
     if (isOpen) {
@@ -90,11 +88,11 @@ export const SpotlightModal: React.FC<SpotlightModalProps> = ({ isOpen, onClose,
       onClick={onClose}
     >
       <div
-        className={`w-full max-w-2xl rounded-2xl border p-5 space-y-4 shadow-2xl transition-all animate-in zoom-in-95 duration-150 ${
-          isLight
-            ? 'bg-white text-slate-900 border-slate-300 shadow-slate-900/20'
-            : 'bg-[#181824]/95 text-zinc-100 border-white/15 shadow-[0_25px_60px_rgba(0,0,0,0.8)]'
-        }`}
+        className="lg-surface w-full max-w-2xl p-5 space-y-4 shadow-2xl transition-all animate-in zoom-in-95 duration-150"
+        style={{
+          background: isLight ? 'rgba(255,255,255,0.82)' : 'rgba(24,25,34,0.92)',
+          borderRadius: 'var(--g-radius-lg)',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search Header */}
@@ -134,7 +132,7 @@ export const SpotlightModal: React.FC<SpotlightModalProps> = ({ isOpen, onClose,
             type="button"
             onClick={() => handleSearch()}
             disabled={loading || !query.trim()}
-            className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 transition shadow-md cursor-pointer shrink-0"
+            className="lg-btn lg-btn-primary !px-3.5 !py-1.5 !text-xs"
           >
             {loading ? '检索中...' : '查词'}
           </button>

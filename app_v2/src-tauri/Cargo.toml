@@ -1,6 +1,6 @@
 [package]
 name = "app_v2"
-version = "0.1.0"
+version = "0.0.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -19,17 +19,22 @@ tauri-build = { version = "2", features = [] }
 tauri-winres = "0.3"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "wry", "custom-protocol"] }
+tauri = { version = "2", features = ["tray-icon", "wry", "custom-protocol", "image-png", "image-ico"] }
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream", "cookies"] }
+md5 = "0.7"
+futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
 ort = { version = "2.0.0-rc.13", default-features = false, features = ["download-binaries", "ndarray", "std", "tls-rustls"] }
 ndarray = "0.17"
 
 [target.'cfg(windows)'.dependencies]
+winreg = "0.55"
 windows = { version = "0.58", features = [
     "Media_Ocr",
     "Graphics_Imaging",
@@ -41,6 +46,10 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Gdi",
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_DataExchange",
+    "Win32_System_SystemServices",
+    "Win32_System_Memory",
 ] }
 
 

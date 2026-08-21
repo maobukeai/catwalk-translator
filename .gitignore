@@ -9,14 +9,21 @@ venv/
 models/
 *.onnx
 
-# 临时产物
+# 临时产物与测试截图
 scratch/
 temp/
 *.tmp
+screenshot_*.png
+test_*.png
+m4_test_image.png
+test_inpainting.py
 
 # Node / Tauri（app_v2 内已有独立规则）
 node_modules/
 dist/
+npm
+tauri
+app_v2@*
 
 # 系统文件
 .DS_Store
@@ -27,7 +34,16 @@ desktop.ini
 .env
 .env.*
 
-# AGY 调试残留
+# AGY / Agent 调试残留与工作区
 AGY_WRITE_TEST.txt
 agy_*.json
 agy_*.log
+.agents/
+.worktrees/
+.superpowers/
+.zcode/
+.codegraph/
+.agent/.notify_*
+.agent/*.log*
+.agent/*.json
+loop*.sh

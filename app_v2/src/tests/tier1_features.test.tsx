@@ -20,8 +20,8 @@ describe('Tier 1 Feature Coverage Test Suite', () => {
     createMockIpcHarness();
     useSettingsStore.setState({
       settings: {
-        theme: 'fluent-dark',
-        hotkey: 'Ctrl+Alt+D',
+        theme: 'system',
+        hotkey: 'F4',
         defaultPreset: 'blender',
         llmConfig: {
           provider: 'DeepSeek',
@@ -40,8 +40,8 @@ describe('Tier 1 Feature Coverage Test Suite', () => {
         },
       },
       initialSettings: {
-        theme: 'fluent-dark',
-        hotkey: 'Ctrl+Alt+D',
+        theme: 'system',
+        hotkey: 'F4',
         defaultPreset: 'blender',
         llmConfig: {
           provider: 'DeepSeek',
@@ -119,7 +119,7 @@ describe('Tier 1 Feature Coverage Test Suite', () => {
 
       fireEvent.click(resetBtn);
 
-      expect(useSettingsStore.getState().settings.hotkey).toBe('Ctrl+Alt+D');
+      expect(useSettingsStore.getState().settings.hotkey).toBe('F4');
       expect(useSettingsStore.getState().isDirty).toBe(false);
     });
 
@@ -164,7 +164,7 @@ describe('Tier 1 Feature Coverage Test Suite', () => {
       render(<SettingsDashboard />);
       await screen.findByText(/系统设置|翻译器设置/i);
 
-      expect(useSettingsStore.getState().settings.theme).toBe('fluent-dark');
+      expect(useSettingsStore.getState().settings.theme).toBe('system');
       document.documentElement.classList.remove('dark');
     });
   });
@@ -495,7 +495,7 @@ describe('Tier 1 Feature Coverage Test Suite', () => {
       const harness = getActiveHarness()!;
 
       const settings: AppSettings = await cmdGetSettings();
-      expect(settings.hotkey).toBe('Ctrl+Alt+D');
+      expect(settings.hotkey).toBe('F4');
 
       const updatedSettings: AppSettings = {
         ...settings,
@@ -520,7 +520,7 @@ describe('Tier 1 Feature Coverage Test Suite', () => {
       });
 
       const state = useSettingsStore.getState();
-      expect(state.settings.hotkey).toBe('Ctrl+Alt+D');
+      expect(state.settings.hotkey).toBe('F4');
       expect(state.settings.presetDicts.blender).toBe(true);
       expect(state.isDirty).toBe(false);
     });

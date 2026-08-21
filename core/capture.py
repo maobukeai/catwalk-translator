@@ -1,7 +1,8 @@
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QRect, pyqtSignal, QPoint
-from PyQt6.QtGui import QPainter, QColor, QPen, QPixmap, QGuiApplication
+from PyQt6.QtCore import Qt, QRect, pyqtSignal, QPoint, QSize
+from PyQt6.QtGui import QPainter, QColor, QPen, QPixmap, QGuiApplication, QImage
 from PIL import Image
+import numpy as np
 
 class ScreenCaptureWidget(QWidget):
     # 截图完成信号：传出 (PIL.Image, x_offset, y_offset)
@@ -22,54 +23,61 @@ class ScreenCaptureWidget(QWidget):
         self.end_point = QPoint()
         self.is_selecting = False
         self.full_screen_pixmap = None
+        self.virtual_geom = None
 
-    def _grab_virtual_desktop(self) -> QPixmap:
+    def _grab_virtual_desktop(self) -> tuple:
         """
-        将每个物理屏幕的截图按【逻辑坐标】合成到一张虚拟桌面大小的画布上。
-
-        关键：grabWindow 返回的是物理像素（高 DPI 下等于逻辑尺寸 × scale_factor），
-        直接贴到逻辑尺寸窗口会导致图片只覆盖部分区域，其余区域全黑。
-        这里把每张图缩放绘制到其逻辑 rect，最终画布 DPR 为 1，
-        保证 paintEvent 绘制、选区高亮、裁剪切图全部使用同一套逻辑坐标。
+        抓取虚拟桌面并返回 (pixmap, virtual_geometry)
+        确保pixmap的坐标系统和widget逻辑坐标完全一致。
         """
         screens = QGuiApplication.screens()
         virtual = QGuiApplication.primaryScreen().virtualGeometry()
+        self.virtual_geom = virtual
+        
+        # 创建和虚拟桌面逻辑尺寸相同的画布
         canvas = QPixmap(virtual.size())
         canvas.fill(QColor(0, 0, 0))
+        
         painter = QPainter(canvas)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        
         for screen in screens:
             geom = screen.geometry()
             try:
                 shot = screen.grabWindow(0)
             except Exception:
                 continue
+            
+            # 目标位置：相对于画布左上角（虚拟桌面左上角）
             target = QRect(
                 geom.x() - virtual.x(),
                 geom.y() - virtual.y(),
                 geom.width(),
                 geom.height(),
             )
+            
+            # 将物理像素截图绘制到逻辑位置（Qt自动处理DPI缩放）
             painter.drawPixmap(target, shot)
+        
         painter.end()
         return canvas
 
     def start_capture(self):
-        # 1. 抓取完整虚拟桌面（多显示器 + 高 DPI 兼容）
         if not QGuiApplication.screens():
             return
 
         self.full_screen_pixmap = self._grab_virtual_desktop()
 
-        # 适应虚拟桌面全屏尺寸
-        geometry = QGuiApplication.primaryScreen().virtualGeometry()
-        self.setGeometry(geometry)
+        # 设置窗口为虚拟桌面大小（逻辑坐标）
+        self.setGeometry(self.virtual_geom)
 
         self.start_point = QPoint()
         self.end_point = QPoint()
         self.is_selecting = False
 
-        self.showFullScreen()
+        # show() 而不是 showFullScreen()，确保窗口大小严格等于 virtual_geom
+        # showFullScreen() 在某些平台/多屏设置下可能改变窗口大小
+        self.show()
         self.raise_()
         self.activateWindow()
 
@@ -79,16 +87,38 @@ class ScreenCaptureWidget(QWidget):
         
         painter = QPainter(self)
         
-        # 绘制全亮原始桌面背景（不叠加变黑变暗遮罩，保持屏幕正常显示）
+        # 绘制完整桌面截图
+        # 注意：widget的(0,0)对应virtualGeom.topLeft()，
+        # 但canvas的(0,0)也是virtualGeom.topLeft()，所以直接绘制到(0,0)
         painter.drawPixmap(0, 0, self.full_screen_pixmap)
         
-        # 如果正在选取或选区有效，绘制选取框线
+        # 绘制选区
         selection_rect = QRect(self.start_point, self.end_point).normalized()
         if not selection_rect.isEmpty():
-            # 绘制显眼的青色选区框线
             pen = QPen(QColor(0, 200, 255), 2, Qt.PenStyle.SolidLine)
             painter.setPen(pen)
             painter.drawRect(selection_rect)
+
+    def _qpixmap_to_pil(self, pixmap: QPixmap) -> Image.Image:
+        """安全地将QPixmap转换为PIL Image（RGB格式）"""
+        image = pixmap.toImage()
+        
+        # 确保格式是RGB32（每个像素4字节，BGRA顺序在内存中）
+        if image.format() != QImage.Format.Format_RGB32:
+            image = image.convertToFormat(QImage.Format.Format_RGB32)
+        
+        width = image.width()
+        height = image.height()
+        
+        ptr = image.bits()
+        ptr.setsize(height * width * 4)
+        
+        # Format_RGB32在内存中是0xFFRRGGBB（小端序为BBGGRR），即BGRA但A总是0xFF
+        arr = np.frombuffer(ptr, np.uint8).reshape(height, width, 4)
+        # arr是[B, G, R, A]，转换为RGB
+        rgb_arr = arr[:, :, :3][:, :, ::-1].copy()  # BGR->RGB，并复制以确保内存连续
+        
+        return Image.fromarray(rgb_arr, 'RGB')
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -114,18 +144,19 @@ class ScreenCaptureWidget(QWidget):
             self.close()
             
             if selection_rect.width() > 10 and selection_rect.height() > 10:
-                # 裁剪选择的 QPixmap 区域并转换为 PIL Image
+                # 裁剪选区
                 cropped_pixmap = self.full_screen_pixmap.copy(selection_rect)
                 
-                buffer = cropped_pixmap.toImage()
-                ptr = buffer.bits()
-                ptr.setsize(buffer.height() * buffer.width() * 4)
+                # 转换为PIL Image
+                pil_img = self._qpixmap_to_pil(cropped_pixmap)
                 
-                pil_img = Image.frombuffer('RGBA', (buffer.width(), buffer.height()), ptr, 'raw', 'BGRA', 0, 1)
+                # 计算选区左上角的全局屏幕坐标
+                # widget坐标 + virtualGeom.topLeft() = 全局坐标
+                # 因为widget.setGeometry(virtualGeom)，所以widget(0,0) = global(virtualGeom.x(), virtualGeom.y())
+                global_x = self.virtual_geom.x() + selection_rect.x()
+                global_y = self.virtual_geom.y() + selection_rect.y()
                 
-                # 绝对坐标偏移 (x, y)
-                screen_pos = self.mapToGlobal(selection_rect.topLeft())
-                self.captured.emit(pil_img, screen_pos.x(), screen_pos.y())
+                self.captured.emit(pil_img, global_x, global_y)
             else:
                 self.cancelled.emit()
 

@@ -37,14 +37,15 @@ pub fn onnx_available() -> bool {
 
 /// Human-readable runtime status of the OCR engines (ONNX / WinRT / RapidOCR).
 pub fn runtime_status() -> crate::models::OcrEngineStatus {
+    let active_ver = crate::onnx_ocr::get_active_version().to_uppercase();
     #[cfg(target_os = "windows")]
     {
         let rapid_state = OCR_RUNTIME_STATE.load(Ordering::SeqCst);
         let onnx_state = ONNX_RUNTIME_STATE.load(Ordering::SeqCst);
         let onnx_note = match onnx_state {
-            2 => "· Rust 原生 PP-OCRv3 引擎已就绪 (纯离线推理)",
-            3 => "· Rust 原生 ONNX 引擎加载失败",
-            _ => "· Rust 原生 ONNX 引擎待命",
+            2 => format!("· Rust 原生 PP-OCR{} 引擎已就绪 (纯离线推理)", active_ver),
+            3 => "· Rust 原生 ONNX 引擎加载失败".to_string(),
+            _ => "· Rust 原生 ONNX 引擎待命".to_string(),
         };
         let detail = if rapid_state == 2 {
             format!(
@@ -66,8 +67,9 @@ pub fn runtime_status() -> crate::models::OcrEngineStatus {
     #[cfg(not(target_os = "windows"))]
     {
         let onnx_state = ONNX_RUNTIME_STATE.load(Ordering::SeqCst);
+        let ready_msg = format!("Rust 原生 PP-OCR{} ONNX 引擎已就绪 (纯离线推理)", active_ver);
         let (status, detail) = match (onnx_state, OCR_RUNTIME_STATE.load(Ordering::SeqCst)) {
-            (2, _) => ("ready", "Rust 原生 PP-OCRv3 ONNX 引擎已就绪 (纯离线推理)"),
+            (2, _) => ("ready", ready_msg.as_str()),
             (3, _) => ("failed", "Rust ONNX 引擎加载失败，检查 models/ 目录"),
             (_, 2) => ("ready", "RapidOCR ONNX 引擎已就绪"),
             (_, 1) => ("warming", "OCR 引擎正在后台预热..."),
@@ -429,7 +431,7 @@ fn clean_ocr_text(raw: &str) -> String {
 /// Run OCR on a cropped BMP byte slice.
 /// Engine priority: Rust-native ONNX (PP-OCRv3, offline) → WinRT → RapidOCR daemon.
 pub fn execute_native_ocr(crop_bmp_bytes: &[u8]) -> Result<OcrResult, String> {
-    // 0: Rust 原生 ONNX 引擎 — 零 Python 依赖的纯 Rust 推理 (模型存在时优先)
+    // 0: Rust 原生 ONNX 引擎 (PP-OCRv3) 优先 — 纯离线推理，中文/混合场景精度高
     if onnx_available() {
         let engine = crate::onnx_ocr::get_engine();
         match engine.recognize_bmp(crop_bmp_bytes) {
@@ -438,26 +440,27 @@ pub fn execute_native_ocr(crop_bmp_bytes: &[u8]) -> Result<OcrResult, String> {
                 return Ok(res);
             }
             Ok(_) => {
-                eprintln!("[OCR] ONNX OCR returned empty result, trying fallback...");
+                eprintln!("[OCR] ONNX OCR 返回空结果，尝试降级 WinRT...");
             }
             Err(e) => {
-                eprintln!("[OCR] ONNX OCR error ({}). Falling back...", e);
+                eprintln!("[OCR] ONNX OCR 错误 ({})，降级 WinRT...", e);
             }
         }
     }
 
+    // 1: Windows 平台 WinRT 降级
     #[cfg(target_os = "windows")]
     {
         match execute_winrt_ocr(crop_bmp_bytes) {
             Ok(res) if !res.blocks.is_empty() => {
-                eprintln!("[OCR] Windows Native WinRT OCR executed in ~15ms (Instant!)");
+                eprintln!("[OCR] WinRT OCR 降级执行成功");
                 return Ok(res);
             }
             Ok(_) => {
-                eprintln!("[OCR] WinRT OCR returned empty result, trying RapidOCR fallback...");
+                eprintln!("[OCR] WinRT OCR 返回空结果，尝试 RapidOCR daemon...");
             }
             Err(e) => {
-                eprintln!("[OCR] WinRT OCR fallback triggered: {}", e);
+                eprintln!("[OCR] WinRT OCR 失败: {}，降级 RapidOCR daemon...", e);
             }
         }
     }
@@ -616,6 +619,40 @@ fn execute_native_ocr_oneshot(path: &str) -> Result<OcrResult, String> {
     }
 
     Ok(OcrResult { blocks: vec![] })
+}
+
+/// 按用户设置路由到指定 OCR 引擎。
+/// engine: "auto" | "onnx" | "winrt"，None 等同 "auto"
+pub fn execute_native_ocr_with_engine(
+    crop_bmp_bytes: &[u8],
+    engine: Option<&str>,
+) -> Result<OcrResult, String> {
+    match engine.unwrap_or("auto") {
+        "winrt" => {
+            #[cfg(target_os = "windows")]
+            {
+                match execute_winrt_ocr(crop_bmp_bytes) {
+                    Ok(res) if !res.blocks.is_empty() => return Ok(res),
+                    Ok(_) => eprintln!("[OCR] WinRT 返回空结果，降级到 auto"),
+                    Err(e) => eprintln!("[OCR] WinRT 错误: {}，降级到 auto", e),
+                }
+            }
+            execute_native_ocr(crop_bmp_bytes)
+        }
+        "onnx" => {
+            if onnx_available() {
+                let eng = crate::onnx_ocr::get_engine();
+                match eng.recognize_bmp(crop_bmp_bytes) {
+                    Ok(res) if !res.blocks.is_empty() => return Ok(res),
+                    Ok(_) => eprintln!("[OCR] ONNX 返回空结果，降级"),
+                    Err(e) => eprintln!("[OCR] ONNX 错误: {}，降级", e),
+                }
+            }
+            execute_native_ocr(crop_bmp_bytes)
+        }
+        // "auto" 及其他未知值 → 现有多层降级链
+        _ => execute_native_ocr(crop_bmp_bytes),
+    }
 }
 
 // ─── Test stubs ─────────────────────────────────────────────────────────────────

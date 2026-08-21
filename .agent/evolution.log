@@ -687,3 +687,17 @@ warning: in the working copy of '.agent/evolution.log', LF will be replaced by C
 [2026年08月12日  0:54:04] MAIN_LOOP: 分支 feature/r6-t3-Store 配置扩展与全局 UI/UX 设计系统样式 REJECTED/STALLED，跳过合并
 [2026年08月12日  0:54:04] MAIN_LOOP: 分支 feature/r6-t4-主翻译窗口 CG 术语高亮与多引擎对照 Tab 体验打磨 REJECTED/STALLED，跳过合并
 [2026年08月12日  0:54:04] MAIN_LOOP: 分支 feature/r6-t5-TitleBar 与 Sidebar 触控热区与微交互反馈增强 REJECTED/STALLED，跳过合并
+[2026年08月12日  8:10:05] MAIN_LOOP: P2 恢复 ROUND=6
+[2026年08月12日  8:10:05] MAIN_LOOP: 第 7 轮开始
+[2026年08月12日  8:13:39] Phase0-Research: SUCCESS
+STOP_REQUESTED=false
+[2026年08月12日 11:33:24] TEST: can write to log
+[2026年08月12日 11:33:54] 重新启动 loop from terminal
+[2026年08月12日 11:39:47] CLEAN START
+[2026年08月12日 11:52:40] MAIN_LOOP: test
+[2026年08月12日 11:52:41] MAIN_LOOP: notify done
+HEAD is now at b68a82a fix: Bug#12 限流时不清空通知队列，确保消息不丢；研究摘要走队列
+HEAD is now at b68a82a fix: Bug#12 限流时不清空通知队列，确保消息不丢；研究摘要走队列
+HEAD is now at b68a82a fix: Bug#12 限流时不清空通知队列，确保消息不丢；研究摘要走队列
+HEAD is now at b68a82a fix: Bug#12 限流时不清空通知队列，确保消息不丢；研究摘要走队列
+HEAD is now at b68a82a fix: Bug#12 限流时不清空通知队列，确保消息不丢；研究摘要走队列

@@ -15,6 +15,7 @@ import {
 import { cmdQueryText, cmdGetHistory, cmdAddHistory, cmdToggleFavorite } from "../../services/tauri";
 import type { TextQueryResponse, AppSettings, HistoryItem } from "../../services/types";
 import { useSettingsStore } from "../../stores/useSettingsStore";
+import { useAppTheme } from "../../hooks/useAppTheme";
 
 interface SearchPanelProps {
   settings: AppSettings;
@@ -28,10 +29,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
   const [isFavorite, setIsFavorite] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
-  const { settings: globalSettings } = useSettingsStore();
-  const activeTheme = globalSettings.appearance?.theme || 'fluent-dark';
-  const isSystemLight = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches;
-  const isLight = activeTheme === 'light' || (activeTheme === 'system' && isSystemLight);
+  const { isLight } = useAppTheme();
 
   const handleSearch = async (textToSearch?: string) => {
     const q = textToSearch !== undefined ? textToSearch : query;
@@ -114,12 +112,27 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Page Header */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className={`flex h-9 w-9 items-center justify-center rounded-xl border shadow-sm ${
+            isLight
+              ? 'bg-gradient-to-br from-sky-500 to-blue-600 border-sky-400/50 text-white'
+              : 'bg-gradient-to-br from-cyan-500 via-sky-600 to-blue-600 border-sky-400/40 text-white shadow-sky-500/25'
+          }`}>
+            <Search className="h-5 w-5" />
+          </span>
+          <div>
+            <h1 className={`text-base font-bold tracking-tight ${isLight ? 'text-slate-900' : 'text-white'}`}>划词查词</h1>
+            <p className={`text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+              单词 · 短语 · CG 术语即时释义与多源对照
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* 精致 Spotlight 风格搜索框 */}
-      <div className={`flex items-center rounded-2xl p-1.5 backdrop-blur-xl shadow-md transition-all duration-200 border ${
-        isLight
-          ? "bg-white border-slate-300 focus-within:border-blue-500 shadow-slate-300/40"
-          : "bg-white/[0.05] border-white/12 focus-within:border-blue-500/50 focus-within:bg-white/[0.08]"
-      }`}>
+      <div className="lg-panel flex items-center !rounded-2xl p-1.5 transition-all duration-200">
         <Search className="h-4.5 w-4.5 text-blue-500 ml-3 shrink-0" />
         <input
           type="text"

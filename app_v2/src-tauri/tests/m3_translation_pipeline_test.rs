@@ -294,3 +294,193 @@ fn test_m3_ipc_cmd_translate_phrases_invalid_preset_resilience() {
         assert_eq!(list[0].source_tier, "blender");
     });
 }
+
+#[test]
+fn test_m3_universal_translate_forced_engine_dict_routing() {
+    tauri::async_runtime::block_on(async {
+        let req = app_v2_lib::models::UniversalTranslationRequest {
+            text: "Principled BSDF".to_string(),
+            source_lang: "auto".to_string(),
+            target_lang: "zh-CN".to_string(),
+            preset: Some("blender".to_string()),
+            llm_config: None,
+            preset_dicts: Some(app_v2_lib::models::PresetDicts {
+                blender: true,
+                substance: true,
+                unity: true,
+                unreal: true,
+                maya: true,
+                houdini: true,
+            }),
+            online_engines: Some(app_v2_lib::models::OnlineEngines {
+                google: Some(false),
+                bing: Some(false),
+                youdao: Some(false),
+                deepl: Some(false),
+                my_memory: Some(false),
+                baidu: Some(false),
+                tencent: Some(false),
+            }),
+            translation_tiers: None,
+            style: None,
+            forced_engine: Some("blender".to_string()),
+            baidu_app_id: None,
+            baidu_secret: None,
+            deepl_api_key: None,
+            deepl_custom_url: None,
+        };
+
+        let res = app_v2_lib::translator::execute_universal_translate(req).await;
+        assert!(res.is_ok());
+        let resp = res.unwrap();
+        assert_eq!(resp.main_translation, "原理化 BSDF");
+        assert!(!resp.engines.is_empty());
+        assert_eq!(resp.engines[0].source_tier, "Preset Dictionary");
+    });
+}
+
+#[test]
+fn test_m3_universal_translate_forced_engine_substance_routing() {
+    tauri::async_runtime::block_on(async {
+        let req = app_v2_lib::models::UniversalTranslationRequest {
+            text: "AO Mixing Mode".to_string(),
+            source_lang: "auto".to_string(),
+            target_lang: "zh-CN".to_string(),
+            preset: Some("substance".to_string()),
+            llm_config: None,
+            preset_dicts: Some(app_v2_lib::models::PresetDicts {
+                blender: false,
+                substance: true,
+                unity: false,
+                unreal: false,
+                maya: false,
+                houdini: false,
+            }),
+            online_engines: Some(app_v2_lib::models::OnlineEngines {
+                google: Some(false),
+                bing: Some(false),
+                youdao: Some(false),
+                deepl: Some(false),
+                my_memory: Some(false),
+                baidu: Some(false),
+                tencent: Some(false),
+            }),
+            translation_tiers: None,
+            style: None,
+            forced_engine: Some("substance".to_string()),
+            baidu_app_id: None,
+            baidu_secret: None,
+            deepl_api_key: None,
+            deepl_custom_url: None,
+        };
+
+        let res = app_v2_lib::translator::execute_universal_translate(req).await;
+        assert!(res.is_ok());
+        let resp = res.unwrap();
+        assert_eq!(resp.main_translation, "AO混合模式");
+        assert!(!resp.engines.is_empty());
+        assert_eq!(resp.engines[0].engine_name, "本地专业词库 (substance)");
+    });
+}
+
+#[test]
+fn test_m3_is_valid_translation_guard_rules() {
+    use app_v2_lib::translator::is_valid_translation;
+
+    // 1. Normal translations
+    assert!(is_valid_translation("Roughness", "粗糙度"));
+    assert!(is_valid_translation("Base Color", "基础颜色"));
+
+    // 2. Empty / whitespace
+    assert!(!is_valid_translation("", ""));
+    assert!(!is_valid_translation("test", "   "));
+
+    // 3. DeepL rate-limit linux.do poisoned links
+    assert!(!is_valid_translation("Roughness", "https://linux.do/t/topic/111737"));
+    assert!(!is_valid_translation("Normal", "http://linux.do/t/9999"));
+    assert!(!is_valid_translation("Metallic", "https://t.me/deeplx_channel"));
+    assert!(!is_valid_translation("Specular", "www.linux.do"));
+
+    // 4. HTML error pages
+    assert!(!is_valid_translation("Light", "<html><body>502 Bad Gateway</body></html>"));
+    assert!(!is_valid_translation("Camera", "<!DOCTYPE html><head></head><body>Rate Limit</body>"));
+
+    // 5. JSON errors
+    assert!(!is_valid_translation("Node", "{\"code\": 429, \"message\": \"Too Many Requests\"}"));
+    assert!(!is_valid_translation("Mesh", "{\"error\": \"Rate limit exceeded\"}"));
+
+    // 6. Error keywords
+    assert!(!is_valid_translation("Shader", "Too Many Requests"));
+    assert!(!is_valid_translation("Texture", "Rate limit exceeded"));
+    assert!(!is_valid_translation("Curve", "请求过于频繁，请稍后再试"));
+    assert!(!is_valid_translation("Grid", "IP has been blocked"));
+}
+
+#[test]
+fn test_m3_is_retry_status_helpers() {
+    use app_v2_lib::translator::{is_retry_status, is_retry_translation};
+    use app_v2_lib::models::MultiEngineTranslation;
+
+    let retry_engine = MultiEngineTranslation {
+        engine_name: "DeepL 极速通道".to_string(),
+        translated: "[网络连接超时 / 点击重试]".to_string(),
+        source_tier: "Online (Retry)".to_string(),
+    };
+    assert!(is_retry_status(&retry_engine));
+    assert!(is_retry_translation(&retry_engine.translated));
+
+    let ok_engine = MultiEngineTranslation {
+        engine_name: "DeepL 极速通道".to_string(),
+        translated: "原理化 BSDF".to_string(),
+        source_tier: "Online Fallback".to_string(),
+    };
+    assert!(!is_retry_status(&ok_engine));
+    assert!(!is_retry_translation(&ok_engine.translated));
+}
+
+#[test]
+fn test_m3_universal_translate_100_percent_cards_retained() {
+    tauri::async_runtime::block_on(async {
+        let req = app_v2_lib::models::UniversalTranslationRequest {
+            text: "Principled BSDF".to_string(),
+            source_lang: "auto".to_string(),
+            target_lang: "zh-CN".to_string(),
+            preset: Some("blender".to_string()),
+            llm_config: None,
+            preset_dicts: Some(app_v2_lib::models::PresetDicts {
+                blender: true,
+                substance: false,
+                unity: false,
+                unreal: false,
+                maya: false,
+                houdini: false,
+            }),
+            online_engines: Some(app_v2_lib::models::OnlineEngines {
+                google: Some(true),
+                bing: Some(true),
+                youdao: Some(true),
+                deepl: Some(true),
+                my_memory: Some(true),
+                baidu: Some(true),
+                tencent: Some(true),
+            }),
+            translation_tiers: None,
+            style: None,
+            forced_engine: None,
+            baidu_app_id: None,
+            baidu_secret: None,
+            deepl_api_key: None,
+            deepl_custom_url: None,
+        };
+
+        let res = app_v2_lib::translator::execute_universal_translate(req).await;
+        assert!(res.is_ok());
+        let resp = res.unwrap();
+        // 字典命中有效词条，主译文自动优先挑选非重试态结果
+        assert_eq!(resp.main_translation, "原理化 BSDF");
+        // 开启的 1 个本地词库 + 7 个在线引擎共 8 个结果 100% 完整保留在 engines 列表中，绝不被丢弃
+        assert_eq!(resp.engines.len(), 8);
+    });
+}
+
+

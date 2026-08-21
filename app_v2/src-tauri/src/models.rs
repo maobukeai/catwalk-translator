@@ -138,6 +138,32 @@ pub struct HistoryItem {
     pub is_favorite: bool,
 }
 
+/// One in-place card of a saved capture session (positions are overlay-logical px).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureSessionBlock {
+    pub original: String,
+    pub translated: String,
+    pub source_tier: String,
+    pub logical_x: f64,
+    pub logical_y: f64,
+    pub logical_w: f64,
+    pub logical_h: f64,
+    pub bg_css: String,
+    pub fg_css: String,
+}
+
+/// A full screen-capture translation session, replayable in the main window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureSession {
+    pub id: String,
+    pub timestamp: String,
+    pub target_lang: String,
+    pub engine: String,
+    pub blocks: Vec<CaptureSessionBlock>,
+}
+
 /// Runtime status of the native RapidOCR daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +171,21 @@ pub struct OcrEngineStatus {
     /// idle | warming | ready | failed
     pub status: String,
     pub detail: String,
+}
+
+/// Filesystem-backed status of the offline phrase-dictionary engine
+/// (see `offline.rs`). Every field reflects real on-disk state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfflineModelStatus {
+    pub installed: bool,
+    pub model_id: String,
+    pub model_name: String,
+    pub version: String,
+    pub dict_entries: usize,
+    pub storage_bytes: u64,
+    pub engine_kind: String,
+    pub path: String,
 }
 
 /// A single translated text block for the in-place overlay.
@@ -165,8 +206,23 @@ pub struct OverlayBlock {
     pub logical_h: f64,
     /// Sampled background colour as CSS rgba() string, e.g. "rgba(30,32,38,0.94)"
     pub bg_css: String,
-    /// Foreground (text) colour: "#ffffff" or "#141417"
+    /// Foreground (text) colour: real sampled ink colour or "#ffffff"/"#141417" fallback
     pub fg_css: String,
+    /// Base64-encoded PNG patch: the padded OCR box with its glyphs erased by
+    /// background interpolation, so the overlay card can "remove" the original
+    /// text and blend into the real screen pixels. None when patch building
+    /// failed (frontend falls back to the solid bg_css rectangle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch_png: Option<String>,
+    /// Logical (CSS) rect of the patch on screen (padded OCR box, absolute).
+    #[serde(default)]
+    pub patch_x: f64,
+    #[serde(default)]
+    pub patch_y: f64,
+    #[serde(default)]
+    pub patch_w: f64,
+    #[serde(default)]
+    pub patch_h: f64,
 }
 
 /// Full result of one region-OCR-translate pass
@@ -179,6 +235,32 @@ pub struct OverlayResult {
     pub selection_y: f64,
     pub selection_w: f64,
     pub selection_h: f64,
+}
+
+/// One translated text line of a pasted/dropped image.
+/// Coordinates are pixels in the source image's own space.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageTranslateBlock {
+    pub original: String,
+    pub translated: String,
+    pub source_tier: String,
+    pub confidence: f32,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub bg_css: String,
+    pub fg_css: String,
+}
+
+/// Result of translating a user-supplied image (paste or drag-drop).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageTranslateResponse {
+    pub image_width: u32,
+    pub image_height: u32,
+    pub blocks: Vec<ImageTranslateBlock>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,7 +300,26 @@ pub struct UniversalTranslationRequest {
     pub preset_dicts: Option<PresetDicts>,
     pub online_engines: Option<OnlineEngines>,
     pub translation_tiers: Option<Vec<String>>,
+    /// Translation style hint for LLM tiers: "literal" | "free" | "terminology".
+    #[serde(default)]
+    pub style: Option<String>,
+    #[serde(default)]
+    pub forced_engine: Option<String>,
+    /// 百度翻译开放平台 AppID（官方免费 API，每月 100 万字符）
+    #[serde(default)]
+    pub baidu_app_id: Option<String>,
+    /// 百度翻译开放平台密钥（与 AppID 配合使用）
+    #[serde(default)]
+    pub baidu_secret: Option<String>,
+    /// DeepL 官方免费 API Key（deepl.com 注册，每月 50 万字符）
+    #[serde(default)]
+    pub deepl_api_key: Option<String>,
+    /// 自定义 DeepLX 自建服务地址（如 http://localhost:1188/translate）
+    #[serde(default)]
+    pub deepl_custom_url: Option<String>,
 }
+
+pub type UniversalTranslateParams = UniversalTranslationRequest;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -258,7 +359,7 @@ fn default_window_opacity() -> u8 {
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
-            theme: "fluent-dark".to_string(),
+            theme: "system".to_string(),
             enable_blur: true,
             blur_amount: 24,
             enable_transparency: true,
@@ -290,13 +391,56 @@ pub struct AppSettings {
     pub preset_dicts: PresetDicts,
     pub online_engines: Option<OnlineEngines>,
     pub appearance: Option<AppearanceSettings>,
+    /// Capture-overlay engine choice persisted from the frontend selector.
+    #[serde(default)]
+    pub capture_engine: Option<String>,
+    /// 'cover' | 'panel' overlay result presentation.
+    #[serde(default)]
+    pub overlay_view_mode: Option<String>,
+    #[serde(default)]
+    pub enable_aabb_avoidance: Option<bool>,
+    /// 'literal' | 'free' | 'terminology'.
+    #[serde(default)]
+    pub translation_style: Option<String>,
+    #[serde(default)]
+    pub sidebar_collapsed: Option<bool>,
+    /// Selection release behaviour: 'adjust' (resize before recognising) | 'auto'.
+    #[serde(default)]
+    pub capture_release_action: Option<String>,
+    /// Region-watch refresh interval in ms (1000–10000, default 3000).
+    #[serde(default)]
+    pub watch_interval_ms: Option<u32>,
+    /// Passive clipboard watch: translate any copied text automatically.
+    #[serde(default)]
+    pub clipboard_watch_enabled: Option<bool>,
+    /// OCR engine preference: "auto" | "onnx" | "winrt"
+    #[serde(default)]
+    pub ocr_engine: Option<String>,
+    /// Selected ONNX OCR model version: "v3" | "v4" | "v5"
+    #[serde(default)]
+    pub ocr_version: Option<String>,
+    /// Primary translation engine: "auto" | "dict" | "llm" | "online"
+    #[serde(default)]
+    pub primary_translation_engine: Option<String>,
+    /// 百度翻译开放平台 AppID（官方免费 API，每月 100 万字符）
+    #[serde(default)]
+    pub baidu_app_id: Option<String>,
+    /// 百度翻译开放平台密钥（与 AppID 配合使用）
+    #[serde(default)]
+    pub baidu_secret: Option<String>,
+    /// DeepL 官方免费 API Key（deepl.com 注册，每月 50 万字符）
+    #[serde(default)]
+    pub deepl_api_key: Option<String>,
+    /// 自定义 DeepLX 自建服务地址（如 http://localhost:1188/translate）
+    #[serde(default)]
+    pub deepl_custom_url: Option<String>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            theme: "fluent-dark".to_string(),
-            hotkey: "Ctrl+Alt+D".to_string(),
+            theme: "system".to_string(),
+            hotkey: "F4".to_string(),
             spotlight_hotkey: Some("Alt+Space".to_string()),
             clipboard_hotkey: Some("Ctrl+Shift+C".to_string()),
             toggle_window_hotkey: Some("Alt+Q".to_string()),
@@ -341,6 +485,21 @@ impl Default for AppSettings {
             preset_dicts: PresetDicts::default(),
             online_engines: Some(OnlineEngines::default()),
             appearance: Some(AppearanceSettings::default()),
+            capture_engine: None,
+            overlay_view_mode: None,
+            enable_aabb_avoidance: None,
+            translation_style: None,
+            sidebar_collapsed: None,
+            capture_release_action: Some("auto".to_string()),
+            watch_interval_ms: Some(3000),
+            clipboard_watch_enabled: Some(false),
+            ocr_engine: None,
+            ocr_version: Some("v4".to_string()),
+            primary_translation_engine: None,
+            baidu_app_id: None,
+            baidu_secret: None,
+            deepl_api_key: None,
+            deepl_custom_url: None,
         }
     }
 }

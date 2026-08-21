@@ -23,19 +23,92 @@ pub const CLS_IMG_H: usize = 48;
 pub const CLS_IMG_W: usize = 192;
 pub const CLS_THRESH: f32 = 0.9;
 pub const REC_IMG_H: u32 = 48;
-pub const REC_MAX_W: u32 = 320;
+pub const REC_MAX_W: u32 = 3072;
 pub const GLOBAL_MIN_HEIGHT: u32 = 30;
 pub const GLOBAL_WIDTH_HEIGHT_RATIO: f32 = 20.0;
 
 const DET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const DET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
-/// Resolve the directory holding the three PP-OCRv3 ONNX models.
-/// Lookup order: env `CATWALK_OCR_MODELS_DIR`, then ./models walking up
-/// ancestors, then the executable's parent dir.
-fn resolve_models_dir() -> Option<std::path::PathBuf> {
+/// Resolve the directory holding the PP-OCR ONNX models.
+/// Lookup order: env `CATWALK_OCR_MODELS_DIR`, then the app-data override
+/// (set at startup — this is where user downloads land), then ./models
+/// walking up ancestors, then the executable's parent dir.
+static MODELS_DIR_OVERRIDE: OnceLock<std::path::PathBuf> = OnceLock::new();
+static ACTIVE_VERSION: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn active_version_lock() -> &'static Mutex<String> {
+    ACTIVE_VERSION.get_or_init(|| Mutex::new("v4".to_string()))
+}
+
+/// Get the currently active OCR model version ("v3", "v4", or "v5").
+pub fn get_active_version() -> String {
+    active_version_lock()
+        .lock()
+        .map(|g| {
+            if g.is_empty() {
+                "v4".to_string()
+            } else {
+                g.clone()
+            }
+        })
+        .unwrap_or_else(|_| "v4".to_string())
+}
+
+/// Set the active OCR model version ("v3", "v4", or "v5").
+pub fn set_active_version(ver: &str) {
+    let clean_ver = match ver.to_ascii_lowercase().as_str() {
+        "v3" | "ppocrv3" | "pp-ocrv3" => "v3",
+        "v5" | "ppocrv5" | "pp-ocrv5" => "v5",
+        _ => "v4",
+    };
+    if let Ok(mut g) = active_version_lock().lock() {
+        *g = clean_ver.to_string();
+    }
+}
+
+/// Returns the model file triple `(det, rec, cls)` for the requested OCR version.
+pub fn get_model_filenames_for_version(ver: &str) -> (&'static str, &'static str, &'static str) {
+    match ver.to_ascii_lowercase().as_str() {
+        "v3" | "ppocrv3" | "pp-ocrv3" => (
+            "ch_PP-OCRv3_det_infer.onnx",
+            "ch_PP-OCRv3_rec_infer.onnx",
+            "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+        ),
+        "v5" | "ppocrv5" | "pp-ocrv5" => (
+            "ch_PP-OCRv5_det_infer.onnx",
+            "ch_PP-OCRv5_rec_infer.onnx",
+            "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+        ),
+        _ => (
+            "ch_PP-OCRv4_det_infer.onnx",
+            "ch_PP-OCRv4_rec_infer.onnx",
+            "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+        ),
+    }
+}
+
+/// Point the resolver at the app-data models directory (setup-time call).
+pub fn set_models_dir_override(dir: std::path::PathBuf) {
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = MODELS_DIR_OVERRIDE.set(dir);
+}
+
+/// The app-data models directory, when set (used for status/download commands).
+pub fn models_dir_override() -> Option<std::path::PathBuf> {
+    MODELS_DIR_OVERRIDE.get().cloned()
+}
+
+/// Public view of resolve_models_dir for the download/status commands.
+pub fn resolved_models_dir() -> Option<std::path::PathBuf> {
+    resolve_models_dir()
+}
+
+/// Resolve the directory holding models for a specific version.
+pub fn resolve_models_dir_for_version(ver: &str) -> Option<std::path::PathBuf> {
+    let (det_file, rec_file, _) = get_model_filenames_for_version(ver);
     let exists = |dir: std::path::PathBuf| -> Option<std::path::PathBuf> {
-        if dir.join("ch_PP-OCRv3_det_infer.onnx").exists() {
+        if dir.join(det_file).exists() && dir.join(rec_file).exists() {
             Some(dir)
         } else {
             None
@@ -44,6 +117,11 @@ fn resolve_models_dir() -> Option<std::path::PathBuf> {
 
     if let Ok(dir) = std::env::var("CATWALK_OCR_MODELS_DIR") {
         if let Some(p) = exists(std::path::PathBuf::from(dir)) {
+            return Some(p);
+        }
+    }
+    if let Some(dir) = MODELS_DIR_OVERRIDE.get() {
+        if let Some(p) = exists(dir.clone()) {
             return Some(p);
         }
     }
@@ -64,9 +142,30 @@ fn resolve_models_dir() -> Option<std::path::PathBuf> {
     None
 }
 
-/// True when the three ONNX model files exist somewhere loadable.
+fn resolve_models_dir() -> Option<std::path::PathBuf> {
+    let active = get_active_version();
+    if let Some(p) = resolve_models_dir_for_version(&active) {
+        return Some(p);
+    }
+    // Fallback: check if other versions are installed
+    for fallback_ver in ["v4", "v3", "v5"] {
+        if fallback_ver != active {
+            if let Some(p) = resolve_models_dir_for_version(fallback_ver) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// True when the ONNX model files for the active (or any fallback) version exist.
 pub fn model_files_present() -> bool {
     resolve_models_dir().is_some()
+}
+
+/// True when model files for a specific version exist.
+pub fn model_files_present_for_version(ver: &str) -> bool {
+    resolve_models_dir_for_version(ver).is_some()
 }
 
 struct Sessions {
@@ -85,6 +184,19 @@ pub fn get_engine() -> MutexGuard<'static, OnnxOcrEngine> {
         .get_or_init(|| Mutex::new(OnnxOcrEngine::new()))
         .lock()
         .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Module-level helper to unload engine sessions (releases Windows file locks).
+pub fn unload_engine() {
+    get_engine().unload();
+}
+
+/// Module-level helper to switch active version and reload sessions.
+pub fn switch_active_version(ver: &str) -> Result<(), String> {
+    let engine = get_engine();
+    engine.switch_version(ver)?;
+    crate::ocr::mark_onnx_ready();
+    Ok(())
 }
 
 /// Module-level helper to recognize BMP bytes using the global singleton engine.
@@ -114,6 +226,29 @@ impl OnnxOcrEngine {
         }
     }
 
+    /// Unload the currently running ONNX runtime session instances.
+    /// This immediately drops the session handles and releases Windows file locks on the .onnx files!
+    pub fn unload(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            *guard = None;
+        }
+        if let Ok(mut err_slot) = self.load_error.lock() {
+            *err_slot = None;
+        }
+    }
+
+    /// Check if sessions are currently loaded in memory.
+    pub fn is_loaded(&self) -> bool {
+        self.inner.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
+    /// Hot-switch to a new model version (e.g. "v3", "v4", "v5").
+    pub fn switch_version(&self, ver: &str) -> Result<(), String> {
+        self.unload();
+        set_active_version(ver);
+        self.ensure_loaded()
+    }
+
     pub fn ensure_loaded(&self) -> Result<(), String> {
         let mut guard = self
             .inner
@@ -125,6 +260,9 @@ impl OnnxOcrEngine {
         match Self::load_sessions() {
             Ok(sess) => {
                 *guard = Some(sess);
+                if let Ok(mut err_slot) = self.load_error.lock() {
+                    *err_slot = None;
+                }
                 Ok(())
             }
             Err(e) => {
@@ -137,25 +275,50 @@ impl OnnxOcrEngine {
     }
 
     fn load_sessions() -> Result<Sessions, String> {
-        let dir = resolve_models_dir().ok_or_else(|| {
-            "ONNX OCR models not found (need ch_PP-OCRv3_det/rec + cls .onnx)".to_string()
-        })?;
+        let active = get_active_version();
+        let (actual_ver, dir) = if let Some(d) = resolve_models_dir_for_version(&active) {
+            (active, d)
+        } else {
+            // Check fallbacks if active version is not present
+            let mut found = None;
+            for fallback_ver in ["v4", "v3", "v5"] {
+                if let Some(d) = resolve_models_dir_for_version(fallback_ver) {
+                    found = Some((fallback_ver.to_string(), d));
+                    break;
+                }
+            }
+            found.ok_or_else(|| {
+                "ONNX OCR models not found (need det + rec + cls .onnx)".to_string()
+            })?
+        };
+
+        let (det_name, rec_name, cls_name) = get_model_filenames_for_version(&actual_ver);
+
         let commit = |name: &str| -> Result<Session, String> {
+            let mut file_path = dir.join(name);
+            if !file_path.exists() {
+                if let Some(ovr) = models_dir_override() {
+                    if ovr.join(name).exists() {
+                        file_path = ovr.join(name);
+                    }
+                }
+            }
             Session::builder()
                 .map_err(|e| format!("onnxruntime init failed: {}", e))?
-                .commit_from_file(Path::new(&dir.join(name)))
+                .commit_from_file(Path::new(&file_path))
                 .map_err(|e| format!("failed to load {}: {}", name, e))
         };
 
-        let det = commit("ch_PP-OCRv3_det_infer.onnx")?;
-        let rec = commit("ch_PP-OCRv3_rec_infer.onnx")?;
-        let cls = commit("ch_ppocr_mobile_v2.0_cls_infer.onnx")?;
+        let det = commit(det_name)?;
+        let rec = commit(rec_name)?;
+        let cls = commit(cls_name)?;
 
         // Character table embedded in rec model metadata (one char per line).
         let raw = rec
             .metadata()
             .map_err(|e| format!("rec model metadata read failed: {}", e))?
             .custom("character")
+            .or_else(|| rec.metadata().ok()?.custom("dict"))
             .ok_or_else(|| "rec model is missing 'character' metadata".to_string())?;
 
         let mut chars: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
@@ -194,6 +357,8 @@ impl OnnxOcrEngine {
         // Fallback: if DBNet did not detect boxes on tiny/single-line crop, feed entire image to REC
         if boxes.is_empty() {
             boxes.push((0u32, 0u32, img_w, img_h));
+        } else {
+            boxes = sort_boxes_reading_order(boxes);
         }
 
         let mut blocks = Vec::new();
@@ -865,4 +1030,110 @@ mod tests {
         let empty = hist_equalize_bgr(&[], 0, 0);
         assert!(empty.is_empty());
     }
+
+    #[test]
+    fn test_sort_boxes_reading_order() {
+        let raw_boxes = vec![
+            (100u32, 50u32, 50u32, 20u32), // line 2, word 2
+            (10u32, 10u32, 40u32, 20u32),  // line 1, word 1
+            (60u32, 12u32, 50u32, 20u32),  // line 1, word 2
+            (10u32, 48u32, 40u32, 20u32),  // line 2, word 1
+        ];
+        let sorted = sort_boxes_reading_order(raw_boxes);
+        assert_eq!(sorted.len(), 4);
+        assert_eq!(sorted[0], (10, 10, 40, 20));
+        assert_eq!(sorted[1], (60, 12, 50, 20));
+        assert_eq!(sorted[2], (10, 48, 40, 20));
+        assert_eq!(sorted[3], (100, 50, 50, 20));
+    }
+
+    #[test]
+    fn test_model_filenames_for_versions() {
+        let (v3_det, v3_rec, v3_cls) = get_model_filenames_for_version("v3");
+        assert_eq!(v3_det, "ch_PP-OCRv3_det_infer.onnx");
+        assert_eq!(v3_rec, "ch_PP-OCRv3_rec_infer.onnx");
+        assert_eq!(v3_cls, "ch_ppocr_mobile_v2.0_cls_infer.onnx");
+
+        let (v4_det, v4_rec, v4_cls) = get_model_filenames_for_version("v4");
+        assert_eq!(v4_det, "ch_PP-OCRv4_det_infer.onnx");
+        assert_eq!(v4_rec, "ch_PP-OCRv4_rec_infer.onnx");
+        assert_eq!(v4_cls, "ch_ppocr_mobile_v2.0_cls_infer.onnx");
+
+        let (v5_det, v5_rec, v5_cls) = get_model_filenames_for_version("v5");
+        assert_eq!(v5_det, "ch_PP-OCRv5_det_infer.onnx");
+        assert_eq!(v5_rec, "ch_PP-OCRv5_rec_infer.onnx");
+        assert_eq!(v5_cls, "ch_ppocr_mobile_v2.0_cls_infer.onnx");
+    }
+
+    #[test]
+    fn test_engine_unload_and_version_switching() {
+        let engine = OnnxOcrEngine::new();
+        assert!(!engine.is_loaded());
+        engine.unload();
+        assert!(!engine.is_loaded());
+        assert!(engine.last_error().is_none());
+
+        set_active_version("v3");
+        assert_eq!(get_active_version(), "v3");
+        set_active_version("v5");
+        assert_eq!(get_active_version(), "v5");
+        set_active_version("v4");
+        assert_eq!(get_active_version(), "v4");
+
+        unload_engine();
+    }
+}
+
+/// Sort detected bounding boxes into natural top-to-bottom, left-to-right reading order
+/// using line clustering (Y clustering with vertical overlap tolerance, X left-to-right sorting).
+pub fn sort_boxes_reading_order(mut boxes: Vec<(u32, u32, u32, u32)>) -> Vec<(u32, u32, u32, u32)> {
+    if boxes.len() <= 1 {
+        return boxes;
+    }
+
+    // Sort boxes primarily by y coordinate, secondarily by x
+    boxes.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+    let mut lines: Vec<Vec<(u32, u32, u32, u32)>> = Vec::new();
+
+    for b in boxes {
+        let mut added = false;
+        let y2 = b.1 as i32;
+        let h2 = (b.3 as i32).max(1);
+
+        for line in lines.iter_mut() {
+            if let Some(first) = line.first() {
+                let y1 = first.1 as i32;
+                let h1 = (first.3 as i32).max(1);
+
+                let overlap = (y1 + h1).min(y2 + h2) - y1.max(y2);
+                let min_h = (h1.min(h2) as f32).max(1.0);
+                let max_h = (h1.max(h2) as f32).max(1.0);
+
+                let c1 = y1 as f32 + h1 as f32 * 0.5;
+                let c2 = y2 as f32 + h2 as f32 * 0.5;
+                let center_diff = (c1 - c2).abs();
+
+                let is_same_line = (overlap > 0 && (overlap as f32 / min_h) >= 0.40)
+                    || (center_diff <= max_h * 0.5);
+
+                if is_same_line {
+                    line.push(b);
+                    added = true;
+                    break;
+                }
+            }
+        }
+
+        if !added {
+            lines.push(vec![b]);
+        }
+    }
+
+    // Sort each line horizontally by x
+    for line in lines.iter_mut() {
+        line.sort_by_key(|b| b.0);
+    }
+
+    lines.into_iter().flatten().collect()
 }

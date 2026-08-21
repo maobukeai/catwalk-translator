@@ -13,7 +13,7 @@ import type {
 } from '../services/types';
 
 const DEFAULT_APPEARANCE: AppearanceSettings = {
-  theme: 'fluent-dark',
+  theme: 'system',
   enableBlur: true,
   blurAmount: 24,
   enableTransparency: true,
@@ -23,8 +23,8 @@ const DEFAULT_APPEARANCE: AppearanceSettings = {
 };
 
 const DEFAULT_SETTINGS: AppSettings = {
-  theme: 'fluent-dark',
-  hotkey: 'Ctrl+Alt+D',
+  theme: 'system',
+  hotkey: 'F4',
   spotlightHotkey: 'Alt+Space',
   clipboardHotkey: 'Ctrl+Shift+C',
   toggleWindowHotkey: 'Alt+Q',
@@ -105,6 +105,15 @@ const DEFAULT_SETTINGS: AppSettings = {
     modelName: 'Opus-MT 英汉标准版',
     sizeMB: 38.5,
   },
+  overlayViewMode: 'cover',
+  enableAabbAvoidance: true,
+  translationStyle: 'free',
+  sidebarCollapsed: false,
+  captureReleaseAction: 'auto',
+  watchIntervalMs: 3000,
+  clipboardWatchEnabled: false,
+  ocrEngine: 'auto',
+  ocrVersion: 'v4' as 'v3' | 'v4' | 'v5',
 };
 
 interface SettingsState {
@@ -139,6 +148,7 @@ interface SettingsState {
   setTranslationTiers: (tiers: string[]) => void;
   moveTier: (fromIndex: number, toIndex: number) => void;
   setAppearance: (updates: Partial<AppearanceSettings>) => void;
+  updateAppearance: (updates: Partial<AppearanceSettings>) => void;
   setThemeMode: (theme: ThemeMode) => void;
   setEnableBlur: (enabled: boolean) => void;
   setBlurAmount: (amount: number) => void;
@@ -157,6 +167,18 @@ interface SettingsState {
   installOfflineModel: (modelId: string, modelName: string, sizeMB: number) => void;
   uninstallOfflineModel: (modelId: string) => void;
   setActiveOfflineModel: (modelId: string) => void;
+  setOverlayViewMode: (mode: 'cover' | 'tooltip' | 'panel') => void;
+  setEnableAabbAvoidance: (enabled: boolean) => void;
+  setTranslationStyle: (style: 'literal' | 'free' | 'terminology') => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  setCaptureReleaseAction: (action: 'auto' | 'adjust') => void;
+  setWatchIntervalMs: (ms: number) => void;
+  setClipboardWatchEnabled: (enabled: boolean) => void;
+  setOcrEngine: (engine: 'auto' | 'onnx' | 'winrt') => void;
+  setOcrVersion: (version: 'v3' | 'v4' | 'v5') => void;
+  setPrimaryTranslationEngine: (engine: 'auto' | 'dict' | 'llm' | 'online') => void;
+  setBaiduConfig: (appId: string, secret: string) => void;
+  setDeeplConfig: (apiKey: string, customUrl: string) => void;
   resetSettings: () => void;
   clearToast: () => void;
 }
@@ -164,6 +186,34 @@ interface SettingsState {
 function checkIsDirty(current: AppSettings, initial: AppSettings): boolean {
   return JSON.stringify(current) !== JSON.stringify(initial);
 }
+
+let saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+const debouncedSaveSettings = (
+  get: () => SettingsState,
+  set: (partial: Partial<SettingsState> | ((state: SettingsState) => Partial<SettingsState>)) => void
+) => {
+  if (saveDebounceTimer) {
+    clearTimeout(saveDebounceTimer);
+  }
+  saveDebounceTimer = setTimeout(async () => {
+    const { settings } = get();
+    set({ isSaving: true });
+    try {
+      await cmdSaveSettings(settings);
+      set({
+        initialSettings: settings,
+        isDirty: false,
+        isSaving: false,
+      });
+    } catch (err) {
+      console.error('Failed to save settings (debounced):', err);
+      set({ isSaving: false });
+    } finally {
+      saveDebounceTimer = null;
+    }
+  }, 300);
+};
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
@@ -180,14 +230,37 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const fetchedPool = fetched.llmConfigs && fetched.llmConfigs.length > 0
         ? fetched.llmConfigs
         : (fetched.llmConfig ? [fetched.llmConfig] : []);
+      const rawTheme = fetched.appearance?.theme || fetched.theme || 'system';
+      const normalizedTheme: ThemeMode = (rawTheme === 'fluent-dark' ? 'dark' : rawTheme) as ThemeMode;
+      const initialAppearance: AppearanceSettings = {
+        ...(fetched.appearance || DEFAULT_APPEARANCE),
+        theme: normalizedTheme,
+      };
+      // 确保历史配置或未显式设为 'adjust' 的用户均默认采用 'auto'（松手即译）
+      let releaseAction = fetched.captureReleaseAction || (fetched as any).capture_release_action;
+      if (!releaseAction || releaseAction !== 'adjust') {
+        releaseAction = 'auto';
+      }
+
       const settingsWithAppearance: AppSettings = {
         ...fetched,
+        hotkey: fetched.hotkey || 'F4',
+        theme: normalizedTheme,
         spotlightHotkey: fetched.spotlightHotkey || 'Alt+Space',
         clipboardHotkey: fetched.clipboardHotkey || 'Ctrl+Shift+C',
         toggleWindowHotkey: fetched.toggleWindowHotkey || 'Alt+Q',
-        appearance: fetched.appearance || DEFAULT_APPEARANCE,
+        appearance: initialAppearance,
         llmConfig: fetched.llmConfig || fetchedPool[0] || null,
         llmConfigs: fetchedPool,
+        overlayViewMode: fetched.overlayViewMode || 'cover',
+        enableAabbAvoidance: fetched.enableAabbAvoidance !== undefined ? fetched.enableAabbAvoidance : true,
+        translationStyle: fetched.translationStyle || 'free',
+        sidebarCollapsed: fetched.sidebarCollapsed ?? false,
+        captureReleaseAction: releaseAction,
+        watchIntervalMs: fetched.watchIntervalMs ?? 3000,
+        clipboardWatchEnabled: fetched.clipboardWatchEnabled ?? false,
+        ocrEngine: fetched.ocrEngine || 'auto',
+        ocrVersion: (fetched.ocrVersion as 'v3' | 'v4' | 'v5') || 'v4',
       };
       set({
         settings: settingsWithAppearance,
@@ -202,6 +275,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   saveSettings: async () => {
+    if (saveDebounceTimer) {
+      clearTimeout(saveDebounceTimer);
+      saveDebounceTimer = null;
+    }
     const { settings } = get();
     set({ isSaving: true });
     try {
@@ -437,6 +514,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
+    debouncedSaveSettings(get, set);
   },
 
   setAllOnlineEngines: (mode: 'all' | 'recommended' | 'none') => {
@@ -478,6 +556,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
+    debouncedSaveSettings(get, set);
+  },
+
+  setBaiduConfig: (appId: string, secret: string) => {
+    const { settings, initialSettings } = get();
+    const updated = { ...settings, baiduAppId: appId, baiduSecret: secret };
+    set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
+    debouncedSaveSettings(get, set);
+  },
+
+  setDeeplConfig: (apiKey: string, customUrl: string) => {
+    const { settings, initialSettings } = get();
+    const updated = { ...settings, deeplApiKey: apiKey, deeplCustomUrl: customUrl };
+    set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
+    debouncedSaveSettings(get, set);
   },
 
   setTranslationTiers: (tiers: string[]) => {
@@ -508,24 +601,42 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const { settings, initialSettings } = get();
     const currentAppearance = settings.appearance || DEFAULT_APPEARANCE;
     const updatedAppearance = { ...currentAppearance, ...updates };
-    const updated = { ...settings, appearance: updatedAppearance };
+    const syncTheme: ThemeMode = (updates.theme !== undefined
+      ? updates.theme
+      : (updatedAppearance.theme || settings.theme || 'system')) as ThemeMode;
+    const normalizedTheme: ThemeMode = syncTheme === ('fluent-dark' as any) ? 'dark' : syncTheme;
+    updatedAppearance.theme = normalizedTheme;
+
+    const updated: AppSettings = {
+      ...settings,
+      theme: normalizedTheme,
+      appearance: updatedAppearance,
+    };
+    // 毫秒级即时同步 UI 状态
     set({
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
+    // 300ms 防抖持久化写盘，防止用户快速滑动滑杆时密集 I/O 导致卡顿掉帧
+    debouncedSaveSettings(get, set);
+  },
+  updateAppearance: (updates: Partial<AppearanceSettings>) => {
+    get().setAppearance(updates);
   },
   setThemeMode: (theme: ThemeMode) => {
-    if (theme === 'fluent-dark') {
-      get().setAppearance({ theme: 'fluent-dark', enableBlur: true, blurAmount: 24, enableTransparency: true, windowOpacity: 85 });
-    } else if (theme === 'dark') {
-      get().setAppearance({ theme: 'dark', enableBlur: false, blurAmount: 0, enableTransparency: false, windowOpacity: 100 });
-    } else if (theme === 'light') {
-      get().setAppearance({ theme: 'light', enableBlur: false, blurAmount: 0, enableTransparency: false, windowOpacity: 100 });
-    } else {
-      get().setAppearance({ theme: 'system' });
-    }
+    const normalizedTheme: ThemeMode = theme === ('fluent-dark' as any) ? 'dark' : theme;
+    get().setAppearance({ theme: normalizedTheme });
   },
-  setEnableBlur: (enableBlur: boolean) => get().setAppearance({ enableBlur }),
+  setEnableBlur: (enableBlur: boolean) => {
+    const current = get().settings.appearance;
+    const updates: Partial<AppearanceSettings> = { enableBlur };
+    // 纯色主题会把 blurAmount 预设为 0；重新开启磨砂时恢复默认模糊量，
+    // 否则开关亮着却因 0px 依然纯色（用户感知为"失效"）。
+    if (enableBlur && (current?.blurAmount ?? 24) === 0) {
+      updates.blurAmount = 24;
+    }
+    get().setAppearance(updates);
+  },
   setBlurAmount: (blurAmount: number) => get().setAppearance({ blurAmount }),
   setEnableTransparency: (enableTransparency: boolean) => get().setAppearance({ enableTransparency }),
   setWindowOpacity: (windowOpacity: number) => get().setAppearance({ windowOpacity }),
@@ -717,6 +828,107 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       settings: initialSettings,
       isDirty: false,
     });
+  },
+
+  setOverlayViewMode: (mode: 'cover' | 'tooltip' | 'panel') => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, overlayViewMode: mode };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setEnableAabbAvoidance: (enabled: boolean) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, enableAabbAvoidance: enabled };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setTranslationStyle: (style) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, translationStyle: style };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setSidebarCollapsed: (collapsed) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, sidebarCollapsed: collapsed };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setCaptureReleaseAction: (action) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, captureReleaseAction: action };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setWatchIntervalMs: (ms) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const clamped = Math.min(10000, Math.max(1000, Math.round(ms)));
+    const updated = { ...settings, watchIntervalMs: clamped };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setClipboardWatchEnabled: (enabled) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, clipboardWatchEnabled: enabled };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setOcrEngine: (engine) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, ocrEngine: engine };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setOcrVersion: (version) => {
+    const { settings, initialSettings } = get();
+    const updated = { ...settings, ocrVersion: version };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    debouncedSaveSettings(get, set);
+  },
+
+  setPrimaryTranslationEngine: (engine) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, primaryTranslationEngine: engine };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
   },
 
   clearToast: () => {

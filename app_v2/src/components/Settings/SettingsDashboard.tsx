@@ -38,7 +38,10 @@ import {
   HardDriveDownload,
 } from 'lucide-react';
 import { useSettingsStore } from '../../stores/useSettingsStore';
-import { cmdGetOcrEngineStatus, cmdFetchLlmModels } from '../../services/tauri';
+import { useAppTheme } from '../../hooks/useAppTheme';
+import { OcrModelsCard } from './OcrModelsCard';
+import { cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall, cmdOfflineUninstall } from '../../services/tauri';
+import type { OfflineEngineStatus } from '../../services/tauri';
 import type {
   LlmConfig,
   OcrEngineStatus,
@@ -357,12 +360,19 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     installOfflineModel,
     uninstallOfflineModel,
     setActiveOfflineModel,
+    setCaptureReleaseAction,
+    setWatchIntervalMs,
+    setClipboardWatchEnabled,
+    setOcrEngine,
+    setPrimaryTranslationEngine,
+    setBaiduConfig,
+    setDeeplConfig,
     resetSettings,
     clearToast,
   } = useSettingsStore();
 
   const appearance = settings.appearance || {
-    theme: 'fluent-dark',
+    theme: 'system',
     enableBlur: true,
     blurAmount: 24,
     enableTransparency: true,
@@ -372,9 +382,8 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   };
   void setAppearance;
 
-  const activeTheme = appearance.theme || 'fluent-dark';
-  const isSystemLight = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches;
-  const isLight = activeTheme === 'light' || (activeTheme === 'system' && isSystemLight);
+  const activeTheme = appearance.theme || 'system';
+  const { isLight } = useAppTheme();
 
   const [activeCategory, setActiveCategory] = useState<SettingCategory>('appearance');
   const [showApiKey, setShowApiKey] = useState(false);
@@ -400,27 +409,46 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   const [formNote, setFormNote] = useState('');
   const [copiedTerm, setCopiedTerm] = useState<string | null>(null);
 
-  // 离线神经网络翻译模型下载与安装状态
-  const [downloadingModelId, setDownloadingModelId] = useState<string | null>(null);
-  const [downloadProgressMap, setDownloadProgressMap] = useState<Record<string, number>>({});
+  // 离线词库引擎：真实文件系统安装状态（Rust 端 offline.rs，无模拟下载）
+  const [offlineEngineStatus, setOfflineEngineStatus] = useState<OfflineEngineStatus | null>(null);
+  const [offlineBusy, setOfflineBusy] = useState(false);
 
-  const handleDownloadModel = (modelId: string, modelName: string, sizeMB: number) => {
-    setDownloadingModelId(modelId);
-    setDownloadProgressMap(prev => ({ ...prev, [modelId]: 5 }));
-    const interval = setInterval(() => {
-      setDownloadProgressMap(prev => {
-        const curr = prev[modelId] || 5;
-        if (curr >= 95) {
-          clearInterval(interval);
-          setTimeout(() => {
-            setDownloadingModelId(null);
-            installOfflineModel(modelId, modelName, sizeMB);
-          }, 300);
-          return { ...prev, [modelId]: 100 };
-        }
-        return { ...prev, [modelId]: curr + Math.floor(Math.random() * 15) + 8 };
-      });
-    }, 250);
+  useEffect(() => {
+    let cancelled = false;
+    cmdOfflineStatus()
+      .then((st) => { if (!cancelled) setOfflineEngineStatus(st); })
+      .catch(() => { if (!cancelled) setOfflineEngineStatus(null); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleOfflineInstall = async () => {
+    setOfflineBusy(true);
+    try {
+      const st = await cmdOfflineInstall();
+      setOfflineEngineStatus(st);
+      if (st.installed) {
+        installOfflineModel(st.modelId, st.modelName, Math.max(1, Math.round(st.storageBytes / (1024 * 1024))));
+      }
+    } catch (err) {
+      console.warn('离线引擎安装失败:', err);
+    } finally {
+      setOfflineBusy(false);
+    }
+  };
+
+  const handleOfflineUninstall = async () => {
+    setOfflineBusy(true);
+    try {
+      const st = await cmdOfflineUninstall();
+      setOfflineEngineStatus(st);
+      if (!st.installed) {
+        uninstallOfflineModel(offlineEngineStatus?.modelId || 'offline-phrase-dict-v1');
+      }
+    } catch (err) {
+      console.warn('离线引擎卸载失败:', err);
+    } finally {
+      setOfflineBusy(false);
+    }
   };
 
   const openAddModal = () => {
@@ -521,7 +549,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
       .then((s) => { if (!cancelled) setOcrStatus(s); })
       .catch(() => { if (!cancelled) setOcrStatus({ status: 'unknown', detail: 'OCR 引擎状态查询失败（演示环境）' }); });
     return () => { cancelled = true; };
-  }, []);
+  }, [settings.ocrVersion]);
 
   useEffect(() => {
     if (toastMessage) {
@@ -835,7 +863,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
       {activeCategory === 'appearance' && (
         <div className="space-y-4 animate-in fade-in duration-150">
           <div className={`p-5 space-y-5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/90 border-slate-200/90 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div>
               <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
@@ -848,10 +876,10 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
             </div>
 
             {/* 1. Live Preview Card 实时效果预览 */}
-            <div className={`rounded-2xl border p-4 space-y-3.5 shadow-xs transition-all ${
-              isLight ? 'border-slate-300/80 bg-slate-100/90' : 'border-white/10 bg-zinc-950/80'
+            <div className={`relative overflow-hidden rounded-2xl border p-4 space-y-3.5 shadow-xs transition-all ${
+              isLight ? 'border-slate-300/80 bg-white/45 backdrop-blur-md' : 'border-white/10 bg-zinc-950/80'
             }`}>
-              <div className={`flex flex-wrap items-center justify-between gap-2 border-b pb-2.5 ${
+              <div className={`flex flex-wrap items-center justify-between gap-2 border-b pb-2.5 relative z-10 ${
                 isLight ? 'border-slate-200' : 'border-white/[0.08]'
               }`}>
                 <div className={`flex items-center space-x-2 text-xs font-bold ${
@@ -866,7 +894,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                   <span className={`px-2.5 py-0.5 rounded-full font-semibold border shadow-xs ${
                     isLight ? 'bg-blue-100 text-blue-800 border-blue-300' : 'bg-blue-500/20 text-blue-300 border-blue-400/30'
                   }`}>
-                    主题: {appearance.theme === 'fluent-dark' ? '深色亚克力' : appearance.theme === 'dark' ? '经典深色' : appearance.theme === 'light' ? '明亮浅色' : '跟随系统'}
+                    主题: {appearance.theme === 'dark' || appearance.theme === ('fluent-dark' as any) ? '经典深色' : appearance.theme === 'light' ? '明亮浅色' : '跟随系统'}
                   </span>
                   <span className={`px-2.5 py-0.5 rounded-full font-semibold border shadow-xs ${
                     isLight ? 'bg-purple-100 text-purple-800 border-purple-300' : 'bg-purple-500/20 text-purple-300 border-purple-400/30'
@@ -886,88 +914,169 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                 </div>
               </div>
 
-              {/* 模拟真实的划词与对译卡片效果 */}
-              <div
-                className={`rounded-xl p-4 transition-all duration-200 border space-y-2.5 ${
-                  isLight
-                    ? 'bg-white text-slate-800 border-slate-300/80 shadow-sm'
-                    : appearance.theme === 'dark'
-                    ? 'bg-zinc-900 text-zinc-100 border-zinc-800 shadow-sm'
-                    : appearance.theme === 'system'
-                    ? 'bg-zinc-900/90 text-zinc-100 border-zinc-700/60 shadow-sm'
-                    : 'bg-zinc-900/70 text-zinc-100 border-white/15 shadow-md'
-                }`}
-                style={{
-                  backdropFilter: (appearance.enableBlur ?? true) ? `blur(${appearance.blurAmount ?? 24}px)` : 'none',
-                  WebkitBackdropFilter: (appearance.enableBlur ?? true) ? `blur(${appearance.blurAmount ?? 24}px)` : 'none',
-                  fontFamily:
-                    appearance.fontFamily === 'yahei'
-                      ? '"Microsoft YaHei", sans-serif'
-                      : appearance.fontFamily === 'segoe'
-                      ? '"Segoe UI", sans-serif'
-                      : appearance.fontFamily === 'inter'
-                      ? '"Inter", sans-serif'
-                      : appearance.fontFamily === 'mono'
-                      ? '"JetBrains Mono", monospace'
-                      : 'system-ui, sans-serif',
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-base">🐱</span>
-                    <span className="font-bold text-blue-500 text-xs">划词对译即时效果</span>
+              {/* 模拟真实的划词与对译卡片效果舞台（底层生动高对比度测试图谱 + 顶层磨砂卡片） */}
+              <div className="relative rounded-xl overflow-hidden min-h-[140px] flex items-center justify-center p-3 sm:p-5 border border-slate-300/60 dark:border-white/10">
+                {/* 底层：高对比度生动测试图谱（包含鲜艳马卡龙/霓虹渐变几何图形、流线型色带与微光网格点阵） */}
+                <div
+                  aria-hidden
+                  className="absolute inset-0 pointer-events-none overflow-hidden select-none"
+                  style={{
+                    filter: (appearance.enableBlur ?? true) ? `blur(${((appearance.blurAmount ?? 24) * 0.85).toFixed(1)}px)` : 'none',
+                    transition: 'filter 120ms ease-out',
+                  }}
+                >
+                  {/* 坐标点阵微光背景 */}
+                  <div
+                    className="absolute inset-0 opacity-40"
+                    style={{
+                      backgroundImage: isLight
+                        ? 'radial-gradient(#3b82f6 1.5px, transparent 1.5px), radial-gradient(#ec4899 1px, transparent 1px)'
+                        : 'radial-gradient(#60a5fa 1.5px, transparent 1.5px), radial-gradient(#f43f5e 1px, transparent 1px)',
+                      backgroundSize: '20px 20px, 40px 40px',
+                      backgroundPosition: '0 0, 10px 10px',
+                    }}
+                  />
+
+                  {/* 鲜艳流线霓虹色带 */}
+                  <div
+                    className="absolute -top-10 -left-10 w-64 h-48 rounded-3xl opacity-85 transform -rotate-12"
+                    style={{
+                      background: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 50%, #8b5cf6 100%)',
+                    }}
+                  />
+                  <div
+                    className="absolute top-2 left-1/3 w-56 h-36 rounded-full opacity-80 transform rotate-45"
+                    style={{
+                      background: 'linear-gradient(120deg, #ec4899 0%, #f43f5e 50%, #fb923c 100%)',
+                    }}
+                  />
+                  <div
+                    className="absolute -bottom-8 -right-8 w-72 h-44 rounded-3xl opacity-80 transform rotate-12"
+                    style={{
+                      background: 'linear-gradient(145deg, #10b981 0%, #06b6d4 50%, #3b82f6 100%)',
+                    }}
+                  />
+                  <div
+                    className="absolute bottom-2 left-10 w-40 h-24 rounded-2xl opacity-75 transform -rotate-6"
+                    style={{
+                      background: 'linear-gradient(90deg, #f59e0b 0%, #ef4444 100%)',
+                    }}
+                  />
+
+                  {/* 几何辅助标线与色块 */}
+                  <div className="absolute top-3 right-4 flex items-center space-x-1.5 opacity-90 font-mono text-[9px] font-bold text-white px-2 py-0.5 rounded bg-black/50 border border-white/20">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    <span>TEST PATTERN // DIFFUSION</span>
                   </div>
-                  <span className={`text-[10px] font-mono font-medium px-2.5 py-0.5 rounded-full border ${
-                    isLight ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-blue-500/15 text-blue-300 border-blue-400/30'
-                  }`}>
-                    🧊 Blender CG 专属词库 (极速响应)
-                  </span>
+                  
+                  <div className="absolute bottom-2.5 left-4 flex items-center space-x-1.5 opacity-80">
+                    <div className="w-3.5 h-3.5 rounded bg-cyan-400" />
+                    <div className="w-3.5 h-3.5 rounded-full bg-pink-500" />
+                    <div className="w-3.5 h-3.5 rounded bg-amber-400" />
+                    <div className="w-3.5 h-3.5 rounded-full bg-indigo-500" />
+                    <div className="w-3.5 h-3.5 rounded bg-emerald-400" />
+                  </div>
                 </div>
 
-                <div className="space-y-1">
-                  <div className={`font-mono ${
-                    isLight ? 'text-slate-500' : 'text-zinc-400'
-                  } ${
-                    appearance.fontSize === 'small' ? 'text-xs' : appearance.fontSize === 'medium' ? 'text-xs' : appearance.fontSize === 'large' ? 'text-sm' : 'text-base'
-                  }`}>
-                    Principled BSDF (Roughness: 0.15, Metallic: 0.90)
+                {/* 顶层：划词与对译磨砂玻璃悬浮卡片 */}
+                <div
+                  className={`relative z-10 w-full max-w-2xl overflow-hidden rounded-xl p-4 sm:p-5 transition-all duration-150 border space-y-2.5 shadow-lg ${
+                    isLight
+                      ? 'text-slate-900 border-white/80 shadow-slate-900/10'
+                      : 'text-zinc-100 border-white/20 shadow-black/40'
+                  }`}
+                  style={{
+                    backgroundColor: isLight
+                      ? (appearance.enableBlur ?? true)
+                        ? `rgba(255, 255, 255, ${(0.28 + ((appearance.blurAmount ?? 24) / 40) * 0.36).toFixed(3)})`
+                        : 'rgba(255, 255, 255, 0.92)'
+                      : (appearance.enableBlur ?? true)
+                        ? `rgba(15, 18, 26, ${(0.30 + ((appearance.blurAmount ?? 24) / 40) * 0.36).toFixed(3)})`
+                        : 'rgba(15, 18, 26, 0.94)',
+                    backdropFilter: (appearance.enableBlur ?? true) ? `blur(${appearance.blurAmount ?? 24}px) saturate(160%)` : 'none',
+                    WebkitBackdropFilter: (appearance.enableBlur ?? true) ? `blur(${appearance.blurAmount ?? 24}px) saturate(160%)` : 'none',
+                    fontFamily:
+                      appearance.fontFamily === 'yahei'
+                        ? '"Microsoft YaHei", sans-serif'
+                        : appearance.fontFamily === 'segoe'
+                        ? '"Segoe UI", sans-serif'
+                        : appearance.fontFamily === 'inter'
+                        ? '"Inter", sans-serif'
+                        : appearance.fontFamily === 'mono'
+                        ? '"JetBrains Mono", monospace'
+                        : 'system-ui, sans-serif',
+                  }}
+                >
+                  {/* 磨砂微颗粒层 */}
+                  {(appearance.enableBlur ?? true) && (
+                    <div
+                      aria-hidden
+                      className="absolute inset-0 pointer-events-none opacity-25"
+                      style={{
+                        backgroundImage: isLight
+                          ? 'radial-gradient(rgba(0, 0, 0, 0.15) 1px, transparent 1.2px)'
+                          : 'radial-gradient(rgba(255, 255, 255, 0.25) 1px, transparent 1.2px)',
+                        backgroundSize: '8px 8px',
+                      }}
+                    />
+                  )}
+
+                  <div className="relative z-10 flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-base">🐱</span>
+                      <span className="font-bold text-blue-600 dark:text-blue-400 text-xs">划词对译即时效果</span>
+                    </div>
+                    <span className={`text-[10px] font-mono font-medium px-2.5 py-0.5 rounded-full border shadow-xs ${
+                      isLight ? 'bg-blue-50/90 text-blue-700 border-blue-200' : 'bg-blue-500/20 text-blue-300 border-blue-400/30'
+                    }`}>
+                      🧊 Blender CG 专属词库 (极速响应)
+                    </span>
                   </div>
-                  <div className={`font-bold tracking-wide ${
-                    isLight ? 'text-slate-900' : 'text-white'
-                  } ${
-                    appearance.fontSize === 'small' ? 'text-xs' : appearance.fontSize === 'medium' ? 'text-sm' : appearance.fontSize === 'large' ? 'text-base' : 'text-lg'
-                  }`}>
-                    原理化 BSDF 材质节点 (粗糙度: 0.15, 金属度: 0.90)
+
+                  <div className="relative z-10 space-y-1">
+                    <div className={`font-mono font-medium ${
+                      isLight ? 'text-slate-700' : 'text-zinc-300'
+                    } ${
+                      appearance.fontSize === 'small' ? 'text-xs' : appearance.fontSize === 'medium' ? 'text-xs' : appearance.fontSize === 'large' ? 'text-sm' : 'text-base'
+                    }`}>
+                      Principled BSDF (Roughness: 0.15, Metallic: 0.90)
+                    </div>
+                    <div className={`font-bold tracking-wide ${
+                      isLight ? 'text-slate-950' : 'text-white'
+                    } ${
+                      appearance.fontSize === 'small' ? 'text-xs' : appearance.fontSize === 'medium' ? 'text-sm' : appearance.fontSize === 'large' ? 'text-base' : 'text-lg'
+                    }`}>
+                      原理化 BSDF 材质节点 (粗糙度: 0.15, 金属度: 0.90)
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* 2. Theme Selector (4 Tiles) */}
+            {/* 2. Theme Selector (3 Tiles) */}
             <div className="space-y-2">
               <label className={`block text-xs font-bold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>视觉主题模式</label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 {[
-                  { id: 'fluent-dark', name: '深色亚克力', sub: 'Fluent Dark', icon: Sparkles, desc: '深色亚克力毛玻璃' },
-                  { id: 'dark', name: '经典深色', sub: 'Dark', icon: Moon, desc: '高对比纯净暗黑' },
-                  { id: 'light', name: '明亮浅色', sub: 'Light', icon: Sun, desc: '清爽高亮现代白' },
                   { id: 'system', name: '跟随系统', sub: 'System', icon: Monitor, desc: '自动同步 OS 模式' },
+                  { id: 'light', name: '明亮浅色', sub: 'Light', icon: Sun, desc: '清爽通透苹果浅色' },
+                  { id: 'dark', name: '经典深色', sub: 'Dark', icon: Moon, desc: '高级深邃苹果暗黑' },
                 ].map((item) => {
-                  const isSelected = appearance.theme === item.id;
+                  const isSelected = (appearance.theme === item.id) || (item.id === 'dark' && appearance.theme === ('fluent-dark' as any));
                   const ItemIcon = item.icon;
                   return (
                     <button
                       key={item.id}
                       type="button"
                       onClick={() => setThemeMode(item.id as ThemeMode)}
-                      className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      className={`flex flex-col items-start p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
                         isSelected
                           ? (isLight
                               ? 'bg-blue-50/90 border-2 border-blue-600 shadow-md shadow-blue-500/10'
                               : 'bg-blue-600/20 border-blue-500 text-white shadow-md ring-1 ring-blue-500/50')
                           : (isLight
-                              ? 'bg-slate-100/90 border border-slate-200/90 text-slate-800 hover:bg-slate-200/80 hover:border-slate-300'
-                              : 'bg-zinc-950/50 border-white/[0.06] text-zinc-300 hover:bg-zinc-900 hover:border-zinc-700')
+                              ? 'bg-white/70 border border-slate-200/90 text-slate-800 hover:bg-white/90 hover:border-slate-300'
+                              : 'bg-white/[0.04] border-white/[0.08] text-zinc-300 hover:bg-white/[0.08] hover:border-zinc-700')
                       }`}
                     >
                       <div className="flex items-center justify-between w-full">
@@ -984,6 +1093,18 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
 
             {/* 3. Frosted Glass Blur Intensity Control */}
             <div className={`space-y-3 pt-3 border-t ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
+              {/* 临时诊断徽标：实时显示 store 数值与保存链路状态，用于定位“滑条无反应”断点 */}
+              <div className={`flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-[10px] font-mono ${
+                isLight ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-amber-500/50 bg-amber-500/10 text-amber-300'
+              }`}>
+                <span className="font-bold">诊断</span>
+                <span>store: blur={String(appearance.enableBlur)} / {appearance.blurAmount ?? 24}px</span>
+                <span>主题: {appearance.theme}</span>
+                <span className={isSaving ? 'text-blue-500 font-bold animate-pulse' : ''}>
+                  保存: {isSaving ? '进行中…' : toastMessage || '待操作'}
+                </span>
+              </div>
+
               <div className="flex items-center justify-between">
                 <div>
                   <div className={`text-xs font-bold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>开启背景磨砂玻璃材质</div>
@@ -1105,7 +1226,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
       {activeCategory === 'hotkey' && (
         <div className="space-y-4 animate-in fade-in duration-150">
           <div className={`p-5 space-y-5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div>
               <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
@@ -1380,6 +1501,92 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
               </p>
             </div>
 
+            {/* 截图翻译体验：松手行为 + 区域监控间隔 */}
+            <div className={`pt-2 border-t space-y-3 ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <label className={`block text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>
+                    划框松手后的行为
+                  </label>
+                  <p className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                    「先调整」松手后选区保留 8 个控制点，可缩放/移动/方向键微调，按 Enter 再识别；「立即识别」保留旧版松手即译。
+                  </p>
+                </div>
+                <div className="flex items-center p-0.5 rounded-xl border shrink-0">
+                  {([
+                    { value: 'adjust', label: '⏸ 先调整' },
+                    { value: 'auto', label: '⚡ 立即识别' },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      data-testid={`release-action-${opt.value}`}
+                      onClick={() => setCaptureReleaseAction(opt.value)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                        (settings.captureReleaseAction ?? 'auto') === opt.value
+                          ? 'bg-sky-500 text-white shadow'
+                          : (isLight ? 'text-slate-600 hover:bg-slate-100' : 'text-zinc-300 hover:bg-white/10')
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <label className={`block text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>
+                    剪贴板被动监听（复制即翻译）
+                  </label>
+                  <p className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                    后台监听剪贴板变化，复制外文文本自动弹出译文 Toast。数字/重复内容自动忽略，划词期间静默。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  data-testid="clipboard-watch-toggle"
+                  role="switch"
+                  aria-checked={settings.clipboardWatchEnabled ?? false}
+                  onClick={() => setClipboardWatchEnabled(!(settings.clipboardWatchEnabled ?? false))}
+                  className={`relative w-11 h-6 rounded-full transition shrink-0 cursor-pointer ${
+                    (settings.clipboardWatchEnabled ?? false) ? 'bg-emerald-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                  }`}
+                  title="开启后：在任意软件中复制外文文本即自动翻译"
+                >
+                  <span className={`absolute top-1 inline-block h-4 w-4 rounded-full bg-white transition-all cursor-pointer ${
+                    (settings.clipboardWatchEnabled ?? false) ? 'left-6' : 'left-1'
+                  }`} />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <label className={`block text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>
+                    区域监控刷新间隔 (W 键)
+                  </label>
+                  <p className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                    盯游戏数值 / 直播弹幕时每隔几秒自动重新识别翻译。
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <input
+                    type="range"
+                    min={1000}
+                    max={10000}
+                    step={500}
+                    value={settings.watchIntervalMs ?? 3000}
+                    onChange={(e) => setWatchIntervalMs(Number(e.target.value))}
+                    className="w-32 accent-sky-500 cursor-pointer"
+                    data-testid="watch-interval-slider"
+                  />
+                  <span className={`text-xs font-mono font-bold w-12 text-right ${isLight ? 'text-slate-700' : 'text-zinc-200'}`} data-testid="watch-interval-label">
+                    {((settings.watchIntervalMs ?? 3000) / 1000).toFixed(1)}s
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <div className={`rounded-xl border p-3.5 text-xs space-y-2 ${
               isLight ? 'bg-blue-50/80 border-blue-200 text-blue-900' : 'bg-gradient-to-br from-blue-950/30 to-indigo-950/20 border-blue-500/20 text-zinc-300'
             }`}>
@@ -1402,7 +1609,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
 
           {/* AI 大语言模型服务配置 (LLM) */}
           <div className={`p-5 space-y-5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
@@ -1695,7 +1902,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
         <div className="space-y-5 animate-in fade-in duration-150">
           {/* 在线公共翻译服务通道网格矩阵 */}
           <div className={`p-5 space-y-4 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
@@ -1788,9 +1995,107 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
             </div>
           </div>
 
+          {/* 百度翻译 API 凭据配置（仅当百度引擎开启时显示）*/}
+          {online.baidu && (
+            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
+              isLight ? 'bg-blue-50/60 border-blue-200/80' : 'bg-blue-950/20 border-blue-500/25'
+            }`}>
+              <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-blue-900' : 'text-blue-300'}`}>
+                <span>🐾</span>
+                <span>百度翻译 API 配置</span>
+                <span className={`text-[9px] font-normal px-1.5 py-0.5 rounded border ml-1 ${isLight ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>
+                  免费 · 每月 100 万字符
+                </span>
+                <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer"
+                  className={`ml-auto text-[10px] underline underline-offset-2 ${isLight ? 'text-blue-600' : 'text-blue-400'}`}>
+                  注册免费账号 →
+                </a>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>AppID（应用 ID）</label>
+                  <input
+                    type="text"
+                    value={settings.baiduAppId || ''}
+                    onChange={(e) => setBaiduConfig(e.target.value, settings.baiduSecret || '')}
+                    placeholder="例如：20240001234567"
+                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>密钥（Secret Key）</label>
+                  <input
+                    type="password"
+                    value={settings.baiduSecret || ''}
+                    onChange={(e) => setBaiduConfig(settings.baiduAppId || '', e.target.value)}
+                    placeholder="32 位密钥字符串"
+                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                    }`}
+                  />
+                </div>
+              </div>
+              <p className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                前往 <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer" className="underline underline-offset-2">fanyi-api.baidu.com</a> 注册开发者账号，创建应用后获取 AppID 与密钥，个人免费套餐每月 100 万字符。
+              </p>
+            </div>
+          )}
+
+          {/* DeepL 官方 API / 自建 DeepLX 配置（仅当 DeepL 引擎开启时显示）*/}
+          {online.deepl && (
+            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
+              isLight ? 'bg-teal-50/60 border-teal-200/80' : 'bg-teal-950/20 border-teal-500/25'
+            }`}>
+              <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-teal-900' : 'text-teal-300'}`}>
+                <span>⚡</span>
+                <span>DeepL 翻译 API 配置</span>
+                <span className={`text-[9px] font-normal px-1.5 py-0.5 rounded border ml-1 ${isLight ? 'bg-teal-100 text-teal-700 border-teal-200' : 'bg-teal-500/20 text-teal-400 border-teal-500/30'}`}>
+                  免费 · 每月 50 万字符
+                </span>
+              </div>
+              <div>
+                <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                  官方免费 API Key
+                  <a href="https://www.deepl.com/pro-api" target="_blank" rel="noreferrer"
+                    className={`ml-2 underline underline-offset-2 ${isLight ? 'text-teal-600' : 'text-teal-400'}`}>
+                    注册 →
+                  </a>
+                </label>
+                <input
+                  type="password"
+                  value={settings.deeplApiKey || ''}
+                  onChange={(e) => setDeeplConfig(e.target.value, settings.deeplCustomUrl || '')}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+                  className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 ${
+                    isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                  }`}
+                />
+              </div>
+              <div>
+                <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                  自建 DeepLX 地址（可选，优先于官方 API）
+                </label>
+                <input
+                  type="text"
+                  value={settings.deeplCustomUrl || ''}
+                  onChange={(e) => setDeeplConfig(settings.deeplApiKey || '', e.target.value)}
+                  placeholder="http://localhost:1188/translate"
+                  className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 ${
+                    isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                  }`}
+                />
+              </div>
+              <p className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                填写官方 API Key 直连 DeepL 免费通道；或填写自建 DeepLX 地址（两者都填时优先使用自建地址）。
+              </p>
+            </div>
+          )}
+
           {/* AI 大语言模型服务配置 (LLM) */}
           <div className={`p-5 space-y-5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
@@ -2080,193 +2385,97 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
       {/* 分类 3: 本地专业词库、自定义词条与离线翻译模型 */}
       {activeCategory === 'dicts' && (
         <div className="space-y-6 animate-in fade-in duration-150">
-          {/* 0. 离线神经网络翻译模型中心 (高密度精简版) */}
+          {/* 本地 OCR 识别模型：真实下载（PP-OCRv3 三件套，进度为真实字节流） */}
+          <OcrModelsCard />
+
+          {/* 0. 离线词库引擎 (真实文件系统状态，无模拟下载) */}
           <div className={`p-5 space-y-3.5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-2.5 border-slate-200 dark:border-white/10">
               <div>
                 <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
                   <WifiOff className="h-4 w-4 text-amber-500" />
-                  <span>离线神经网络模型中心 (4 大可选模型)</span>
+                  <span>离线词库引擎 (内置，断网可用)</span>
                   <span className={`text-[10px] font-mono px-2 py-0.2 rounded-full font-bold border ${
-                    (settings.offlineModel?.installed ?? false)
+                    offlineEngineStatus?.installed
                       ? (isLight ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30')
                       : (isLight ? 'bg-slate-100 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/15')
                   }`}>
-                    {(settings.offlineModel?.installed ?? false) ? `🟢 已激活 (${settings.offlineModel?.modelName || 'Opus-MT'})` : '⚪ 未下载 (按需选用)'}
+                    {offlineEngineStatus?.installed
+                      ? `🟢 已安装 (v${offlineEngineStatus.version})`
+                      : '⚪ 未安装'}
                   </span>
                 </div>
                 <p className={`mt-0.5 text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
-                  断网或在线 API 超时时自动接管全句离线翻译。可自由按需选装：
+                  通用 UI 短语离线对译引擎，随安装包内置、无需下载。安装后写入应用数据目录，并按「专业词库 → 离线词库 → AI → 在线兜底」的层级参与翻译。
                 </p>
               </div>
-
-              {(settings.offlineModel?.installed ?? false) && (
-                <div className="flex items-center space-x-2 shrink-0">
-                  <span className={`text-xs font-medium ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>无网自动降级</span>
-                  <button
-                    type="button"
-                    onClick={() => setOfflineModelEnabled(!(settings.offlineModel?.enabled ?? true))}
-                    className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
-                      (settings.offlineModel?.enabled ?? true) ? 'bg-blue-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
-                    }`}
-                  >
-                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.offlineModel?.enabled ?? true) ? 'translate-x-5' : 'translate-x-1'
-                    }`} />
-                  </button>
-                </div>
-              )}
             </div>
 
-            {/* 精简高密度 4 大离线模型矩阵 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              {[
-                {
-                  id: 'opus-standard',
-                  title: 'Opus-MT 英汉标准',
-                  badge: '轻量极速',
-                  badgeColor: 'blue',
-                  sizeMB: 38.5,
-                  desc: 'Bergamot NMT 8-bit 量化，响应 <50ms，超低内存',
-                  icon: '⚡',
-                },
-                {
-                  id: 'nmt-pro',
-                  title: 'NMT-Pro 深度长句',
-                  badge: '高精度',
-                  badgeColor: 'purple',
-                  sizeMB: 120.0,
-                  desc: 'Meta M2M / Marian 深度网络，长句流畅度 +45%',
-                  icon: '🧠',
-                },
-                {
-                  id: 'cg-master',
-                  title: 'CG-Master 3D 专属',
-                  badge: '3D/CG 特化',
-                  badgeColor: 'amber',
-                  sizeMB: 85.0,
-                  desc: '50万+ 3D 材质/节点/动作与管线短语离线微调',
-                  icon: '🧊',
-                },
-                {
-                  id: 'multilingual-all',
-                  title: 'Multilingual-8 多语种',
-                  badge: '8 语种互译',
-                  badgeColor: 'emerald',
-                  sizeMB: 195.0,
-                  desc: '无网离线支持 中/英/日/韩/法/德/俄/西 8 大语种',
-                  icon: '🌐',
-                },
-              ].map((m) => {
-                const installedList = settings.offlineModel?.installedModelIds || [];
-                const isInstalled = installedList.includes(m.id) || (settings.offlineModel?.installed && settings.offlineModel?.activeModelId === m.id);
-                const isActive = (settings.offlineModel?.activeModelId === m.id) && isInstalled;
-                const isDownloading = downloadingModelId === m.id;
-                const progress = downloadProgressMap[m.id] || 0;
-
-                return (
-                  <div
-                    key={m.id}
-                    className={`flex items-center justify-between rounded-xl p-3 border transition-all ${
-                      isActive
-                        ? (isLight ? 'bg-blue-50/90 border-blue-400 shadow-xs ring-1 ring-blue-500/30' : 'bg-blue-950/40 border-blue-500/50 shadow-xs ring-1 ring-blue-400/30')
-                        : isInstalled
-                        ? (isLight ? 'bg-slate-50 border-slate-300' : 'bg-zinc-950/70 border-white/10')
-                        : (isLight ? 'bg-white border-slate-200 hover:border-slate-300' : 'bg-zinc-950/40 border-white/[0.06] hover:border-white/15')
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2.5 min-w-0 flex-1 pr-2">
-                      <span className="text-base shrink-0">{m.icon}</span>
-                      <div className="min-w-0 flex-1 space-y-0.5">
-                        <div className="flex items-center space-x-1.5 flex-wrap">
-                          <span className={`text-xs font-bold truncate ${isLight ? 'text-slate-900' : 'text-white'}`}>{m.title}</span>
-                          <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded border font-semibold shrink-0 ${
-                            m.badgeColor === 'blue'
-                              ? (isLight ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-blue-500/20 text-blue-300 border-blue-400/30')
-                              : m.badgeColor === 'purple'
-                              ? (isLight ? 'bg-purple-100 text-purple-800 border-purple-200' : 'bg-purple-500/20 text-purple-300 border-purple-400/30')
-                              : m.badgeColor === 'amber'
-                              ? (isLight ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-amber-500/20 text-amber-300 border-amber-400/30')
-                              : (isLight ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30')
-                          }`}>
-                            {m.badge}
-                          </span>
-                          <span className={`text-[10px] font-mono shrink-0 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
-                            {m.sizeMB}MB
-                          </span>
-                        </div>
-
-                        <p className={`text-[11px] truncate ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
-                          {m.desc}
-                        </p>
-
-                        {isDownloading && (
-                          <div className="w-full space-y-0.5 pt-0.5">
-                            <div className="flex justify-between text-[9px] font-mono text-blue-400">
-                              <span>下载中...</span>
-                              <span>{progress}%</span>
-                            </div>
-                            <div className="w-full h-1 bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
-                              <div className="h-full bg-blue-500 rounded-full transition-all duration-200" style={{ width: `${progress}%` }} />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* 操作按钮区 */}
-                    <div className="shrink-0 flex items-center space-x-1">
-                      {isInstalled ? (
-                        <>
-                          {isActive ? (
-                            <span className="text-[10px] font-bold text-emerald-500 px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 flex items-center space-x-0.5">
-                              <Check className="h-3 w-3" />
-                              <span>当前激活</span>
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setActiveOfflineModel(m.id)}
-                              className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition cursor-pointer ${
-                                isLight ? 'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300' : 'bg-blue-900/40 hover:bg-blue-800/60 text-blue-300 border-blue-500/30'
-                              }`}
-                            >
-                              设为当前
-                            </button>
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={() => uninstallOfflineModel(m.id)}
-                            className="p-1 rounded-lg text-slate-400 hover:text-rose-500 transition cursor-pointer"
-                            title="卸载该模型包"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadModel(m.id, m.title, m.sizeMB)}
-                          disabled={downloadingModelId !== null}
-                          className="flex items-center space-x-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-[11px] px-3 py-1.5 rounded-xl shadow-xs transition cursor-pointer active:scale-95"
-                        >
-                          <HardDriveDownload className="h-3.5 w-3.5" />
-                          <span>{isDownloading ? `${progress}%` : `下载 (${m.sizeMB}M)`}</span>
-                        </button>
-                      )}
-                    </div>
+            <div
+              className={`flex items-center justify-between rounded-xl p-3.5 border transition-all ${
+                offlineEngineStatus?.installed
+                  ? (isLight ? 'bg-emerald-50/80 border-emerald-300' : 'bg-zinc-950/70 border-emerald-500/30')
+                  : (isLight ? 'bg-white border-slate-200 hover:border-slate-300' : 'bg-zinc-950/40 border-white/[0.06] hover:border-white/15')
+              }`}
+            >
+              <div className="flex items-center space-x-3 min-w-0 flex-1 pr-2">
+                <span className="text-base shrink-0">⚡</span>
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="flex items-center space-x-1.5 flex-wrap">
+                    <span className={`text-xs font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                      {offlineEngineStatus?.modelName || '离线词条引擎 v1'}
+                    </span>
+                    <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded border font-semibold ${
+                      isLight ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-blue-500/20 text-blue-300 border-blue-400/30'
+                    }`}>
+                      确定性词库对译
+                    </span>
                   </div>
-                );
-              })}
+                  <p className={`text-[11px] truncate ${isLight ? 'text-slate-500' : 'text-zinc-400'}`} title={offlineEngineStatus?.path}>
+                    {offlineEngineStatus?.installed
+                      ? `${offlineEngineStatus.dictEntries} 条通用 UI 词条 · ${(offlineEngineStatus.storageBytes / 1024).toFixed(1)} KB · ${offlineEngineStatus.path}`
+                      : '覆盖 Save / 取消 / 正在加载 等高频界面短语，安装后断网环境也能翻译。'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="shrink-0 flex items-center space-x-1.5">
+                {offlineEngineStatus?.installed ? (
+                  <>
+                    <span className="text-[10px] font-bold text-emerald-500 px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 flex items-center space-x-0.5">
+                      <Check className="h-3 w-3" />
+                      <span>参与翻译层级</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleOfflineUninstall}
+                      disabled={offlineBusy}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 transition cursor-pointer disabled:opacity-50"
+                      title="卸载离线词库（删除应用数据目录中的词库文件）"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleOfflineInstall}
+                    disabled={offlineBusy}
+                    className="flex items-center space-x-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-[11px] px-3 py-1.5 rounded-xl shadow-xs transition cursor-pointer active:scale-95"
+                  >
+                    <HardDriveDownload className="h-3.5 w-3.5" />
+                    <span>{offlineBusy ? '安装中...' : '安装 (内置, 即装即用)'}</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
           {/* 1. 内置 6 套 CG/3D 软件专属词库 */}
           <div className={`p-5 space-y-4 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div className="flex items-center justify-between">
               <div>
@@ -2359,7 +2568,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
 
           {/* 2. 用户自定义术语库 (增删改查 & 导入导出中心) */}
           <div className={`p-5 space-y-4 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3 border-slate-200 dark:border-white/10">
               <div>
@@ -2778,7 +2987,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
       {activeCategory === 'preference' && (
         <div className="space-y-4 animate-in fade-in duration-150">
           <div className={`p-5 space-y-5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div>
               <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
@@ -2890,11 +3099,11 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                 }`}>
                   <div className={isLight ? 'text-slate-600 font-medium' : 'text-zinc-400 font-medium'}>当前视觉主题</div>
                   <div className={`font-bold mt-0.5 ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>
-                    {settings.theme === 'light'
-                      ? '浅色 (Light)'
-                      : settings.theme === 'fluent-light'
-                      ? 'Fluent 浅色'
-                      : 'Mica 暗黑毛玻璃 (Glassmorphic)'}
+                    {activeTheme === 'light'
+                      ? '明亮浅色 (Light)'
+                      : activeTheme === 'dark' || (activeTheme as any) === 'fluent-dark'
+                      ? '经典深色 (Dark)'
+                      : '跟随系统 (System)'}
                   </div>
                 </div>
                 <div className={`rounded-xl border p-3 text-xs sm:col-span-2 ${
@@ -2914,6 +3123,100 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                     {ocrStatus ? ocrStatus.detail : '正在查询引擎状态...'}
                   </div>
                 </div>
+
+                {/* OCR 识别引擎选择器 */}
+                <div className={`rounded-xl border p-3 text-xs sm:col-span-2 ${
+                  isLight ? 'bg-slate-50 border-slate-200' : 'bg-zinc-950/50 border-white/[0.05]'
+                }`}>
+                  <div className={`font-medium mb-2 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                    OCR 识别引擎
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                    {([
+                      {
+                        value: 'auto',
+                        label: '自动选择',
+                        desc: `智能探测：PP-OCR${(settings.ocrVersion || 'v4').toUpperCase()} 优先，自动降级`,
+                      },
+                      {
+                        value: 'onnx',
+                        label: `PP-OCR${(settings.ocrVersion || 'v4').toUpperCase()} (推荐)`,
+                        desc: 'Rust 原生离线推理，中英排版最佳，无网络依赖',
+                      },
+                      {
+                        value: 'winrt',
+                        label: '系统 WinRT OCR',
+                        desc: 'Windows 10/11 原生超高速识别 (<15ms 零延迟)',
+                      },
+                    ] as { value: 'auto' | 'onnx' | 'winrt'; label: string; desc: string }[]).map(({ value, label, desc }) => {
+                      const isSelected = (settings.ocrEngine ?? 'auto') === value;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setOcrEngine(value)}
+                          title={desc}
+                          className={`text-left rounded-lg border px-2.5 py-2 transition-all cursor-pointer
+                            ${isSelected
+                              ? (isLight ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-blue-500/60 bg-blue-500/10 text-blue-300')
+                              : (isLight ? 'border-slate-200 hover:border-slate-400 text-slate-700' : 'border-white/[0.06] hover:border-white/20 text-zinc-300')
+                            }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                              isSelected ? 'bg-blue-500' : (isLight ? 'bg-slate-300' : 'bg-zinc-600')
+                            }`} />
+                            <span className="font-semibold">{label}</span>
+                          </div>
+                          <div className={`mt-0.5 text-[10px] leading-tight ${
+                            isLight ? 'text-slate-500' : 'text-zinc-500'
+                          }`}>{desc}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 首选翻译引擎选择器 */}
+                <div className={`rounded-xl border p-3 text-xs sm:col-span-2 ${
+                  isLight ? 'bg-slate-50 border-slate-200' : 'bg-zinc-950/50 border-white/[0.05]'
+                }`}>
+                  <div className={`font-medium mb-2 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                    首选翻译引擎
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {([
+                      { value: 'auto', label: '自动', desc: '按优先级依次尝试（推荐）' },
+                      { value: 'dict', label: '仅词典', desc: '查 CG 专业词典，最快·完全离线' },
+                      { value: 'llm', label: '优先 LLM', desc: '跳过词典，直接走 LLM 翻译' },
+                      { value: 'online', label: '在线回退', desc: 'Google / MyMemory 等在线引擎' },
+                    ] as { value: string; label: string; desc: string }[]).map(({ value, label, desc }) => {
+                      const isSelected = (settings.primaryTranslationEngine ?? 'auto') === value;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setPrimaryTranslationEngine(value as 'auto' | 'dict' | 'llm' | 'online')}
+                          title={desc}
+                          className={`text-left rounded-lg border px-2.5 py-2 transition-all cursor-pointer
+                            ${isSelected
+                              ? (isLight ? 'border-violet-400 bg-violet-50 text-violet-700' : 'border-violet-500/60 bg-violet-500/10 text-violet-300')
+                              : (isLight ? 'border-slate-200 hover:border-slate-400 text-slate-700' : 'border-white/[0.06] hover:border-white/20 text-zinc-300')
+                            }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                              isSelected ? 'bg-violet-500' : (isLight ? 'bg-slate-300' : 'bg-zinc-600')
+                            }`} />
+                            <span className="font-semibold">{label}</span>
+                          </div>
+                          <div className={`mt-0.5 text-[10px] leading-tight ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>{desc}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
               </div>
             </div>
           </div>

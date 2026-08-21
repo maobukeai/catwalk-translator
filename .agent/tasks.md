@@ -1,35 +1,21 @@
----
-round: 4
-stage: 01/09 UI/UX
 N: 5
----
+
 ## Task 1
-name: CheatSheetModal 快捷键可视化速查面板与单元测试
-priority: P1
-files: app_v2/src/components/Overlay/CheatSheetModal.tsx|app_v2/src/tests/cheatsheet_modal.test.tsx
-prompt: 创建独立的快捷键速查面板组件 app_v2/src/components/Overlay/CheatSheetModal.tsx 与配套单元测试 app_v2/src/tests/cheatsheet_modal.test.tsx。1. CheatSheetModal.tsx：采用 Mica/Acrylic 毛玻璃卡片设计 (backdrop-blur-xl, 半透明黑底 bg-slate-950/85, 边框 border-white/20, 阴影 shadow-2xl, 圆角 rounded-2xl)，结构化展示快捷键分类（📐 选区操作：拖拽划词、Shift+拖拽多选、Esc/右键退出、F4开关；🃏 卡片操作：Ctrl+P锁定、Enter/Ctrl+C复制、Space语音朗读、Ctrl+D收藏；⚙️ 模式通道：M切换原位/气泡、Tab切AI模型、1~6切换语种；💡 帮助指引：?/F1速查），使用统一的 <kbd> 按键样式（微阴影、圆角边框、等宽字体），提供右上角关闭按钮，监听 Esc / ? / F1 键触发 onClose，符合 WCAG 4.5:1 AA 对比度标准。2. cheatsheet_modal.test.tsx：编写全面测试用例，验证 isOpen=true 时正确渲染各分组与快捷键内容、点击关闭按钮与按 Esc 触发 onClose 回调、isOpen=false 时不渲染。确保运行 npm test 全部通过。
----
+name: cheatsheet-modal-and-tests
+prompt: 实现快捷键速查面板组件 app_v2/src/components/Overlay/CheatSheetModal.tsx 与单元测试 app_v2/src/tests/cheatsheet_modal.test.tsx。要求：1. Mica毛玻璃视觉(backdrop-blur-xl, bg-slate-950/85, border-white/20, shadow-2xl, rounded-2xl)与环境光晕；2. 结构化四大快捷键分类(选区操作、卡片操作、模式通道、帮助指引)；3. 精致<kbd>按键标签与Focus Trap无障碍保护，符合WCAG 2.2 AA标准；4. 支持Esc/?/F1及遮罩点击关闭；5. 编写Vitest测试确保覆盖显隐/按键响应/点击遮罩。目标文件仅限于 app_v2/src/components/Overlay/CheatSheetModal.tsx 和 app_v2/src/tests/cheatsheet_modal.test.tsx，严禁修改其他文件。验证：npx vitest run src/tests/cheatsheet_modal.test.tsx 通过且 npx tsc --noEmit 0错误。
+
 ## Task 2
-name: AABB 碰撞避让与 Tooltip 浮动定位计算算法
-priority: P1
-files: app_v2/src/services/overlayLayout.ts|app_v2/src/tests/overlay_layout.test.ts
-prompt: 创建独立的屏幕空间布局避让与坐标计算算法模块 app_v2/src/services/overlayLayout.ts 与配套单元测试 app_v2/src/tests/overlay_layout.test.ts。1. overlayLayout.ts：实现 resolveAABBCollisions(blocks: OverlayBlock[], containerWidth: number, containerHeight: number, margin?: number): OverlayBlock[]，检测多个 OverlayBlock 的 Bounding Box 矩形相交（overlapY > 2px 且 overlapX > 4px），在垂直重叠时自上而下施加纵向推移微调（y += overlapY + margin），若底部超出 containerHeight 则执行智能向上压缩与边界夹取；实现 calculateTooltipPosition(block: OverlayBlock, containerWidth: number, containerHeight: number, tooltipW: number, tooltipH: number): { x: number; y: number; placement: 'top' | 'bottom' }，默认在选区上方 y - tooltipH - 8 放置气泡，若顶部越界 (y - tooltipH - 8 < 10) 自动下翻至选区下方 y + block.logicalH + 8，X 坐标在 [8, containerWidth - tooltipW - 8] 范围内 Clamp 夹取。2. overlay_layout.test.ts：编写测试用例覆盖单块/多块无重叠场景、密集重叠块避让偏移计算、Tooltip 顶部/底部边界自适应与屏幕左右越界夹取。确保运行 npm test 全部通过。
----
+name: aabb-overlay-layout-algorithm
+prompt: 实现屏幕空间碰撞避让与Tooltip定位算法 app_v2/src/services/overlayLayout.ts 及单元测试 app_v2/src/tests/overlay_layout.test.ts。要求：1. 实现 resolveAABBCollisions 函数，相交条件ΔX>4px且ΔY>2px时自上而下纵向推移微调，底部溢出阻尼反向压缩回推，边界Clamp至[0, containerHeight-h]；2. 实现 calculateTooltipPosition 函数，默认上方y-tooltipH-8，空间<10px翻转至下方y+block.logicalH+8，X轴居中夹取至[8, containerWidth-tooltipW-8]；3. 编写Vitest测试覆盖单块/多块密集/底部溢出/翻转/边界用例。目标文件仅限于 app_v2/src/services/overlayLayout.ts 和 app_v2/src/tests/overlay_layout.test.ts，严禁修改其他文件。验证：npx vitest run src/tests/overlay_layout.test.ts 通过且 npx tsc --noEmit 0错误。
+
 ## Task 3
-name: Store 配置扩展与全局 UI/UX 设计系统样式
-priority: P1
-files: app_v2/src/stores/useSettingsStore.ts|app_v2/src/services/types.ts|app_v2/src/index.css
-prompt: 扩展设置状态、类型定义与全局设计系统样式。1. app_v2/src/services/types.ts：在 AppSettings 接口中新增 overlayViewMode?: 'cover' | 'tooltip'（原位覆盖 vs 悬浮气泡）与 enableAabbAvoidance?: boolean（是否启用 AABB 碰撞避让）。2. app_v2/src/stores/useSettingsStore.ts：在 DEFAULT_SETTINGS 中赋予 overlayViewMode: 'cover' 与 enableAabbAvoidance: true，在 SettingsStore 接口及实现中增加 setOverlayViewMode: (mode: 'cover' | 'tooltip') => void 与 setEnableAabbAvoidance: (enabled: boolean) => void 方法，触发时设置 isDirty 为 true 并持久化配置。3. app_v2/src/index.css：增加 @keyframes pulse-glow-amber 与 .pulse-glow-amber 呼吸动画类（为 Pin 锁定卡片提供琥珀金色微光光晕）；增加 @keyframes tooltip-pop 与 .tooltip-pop 弹性平滑进场动效 (cubic-bezier(0.16, 1, 0.3, 1))；增加 .cg-term-highlight 与 .cg-term-badge 样式（专属天蓝/琥珀虚线下划线与轻量徽标）；增加 .touch-hit-box 工具类，扩展图标按钮可点击感应区至最小 36px~44px。
----
+name: settings-store-and-design-system
+prompt: 扩展配置与全局UI/UX样式系统 app_v2/src/services/types.ts、app_v2/src/stores/useSettingsStore.ts 与 app_v2/src/index.css。要求：1. types.ts在AppSettings中增加 overlayViewMode?: 'cover' | 'tooltip' 与 enableAabbAvoidance?: boolean；2. useSettingsStore.ts设置默认值(overlayViewMode: 'cover', enableAabbAvoidance: true)并添加持久化更新方法 setOverlayViewMode 和 setEnableAabbAvoidance；3. index.css新增 .pulse-glow-amber 呼吸微光、.tooltip-pop 弹性动效、.cg-term-highlight/.cg-term-badge 术语微样式、.touch-hit-box 触控热区样式。目标文件仅限于 app_v2/src/services/types.ts、app_v2/src/stores/useSettingsStore.ts、app_v2/src/index.css，严禁修改其他文件。验证：npx tsc --noEmit 0错误且现有测试通过。
+
 ## Task 4
-name: 主翻译窗口 CG 术语高亮与多引擎对照 Tab 体验打磨
-priority: P2
-files: app_v2/src/components/MainWindow/DualPaneTranslator.tsx
-prompt: 优化主翻译窗口 app_v2/src/components/MainWindow/DualPaneTranslator.tsx 的专业术语视觉体验与 Tab 栏交互。1. CG 专业术语高亮与释义：检查 response.engines 或 sourceTier，若包含 Preset、CG 词库、Blender、Substance 等专业词典来源，为对应译文卡片渲染 🧊 CG 术语 标识与天蓝色微发光虚线下划线；当鼠标悬停在专有名词或词库标牌时，展示释义浮层（含英文原词、中文标准定名与 3D 软件应用提示）。2. 多源对照 Tab 栏交互与滚动打磨：优化水平滚动栏的视觉反馈，当存在左/右可滚动内容时在两侧显示柔和的渐变遮罩指示器 (from-black/40 to-transparent)；左右翻页按钮增加扩展触控区 (hitbox) 并加入平滑弹性滚动动效；保证所有交互元素符合 WCAG 4.5:1 AA 对比度。确保编译无 warning、测试通过。
----
+name: dual-pane-cg-terms-and-tab-scroll
+prompt: 优化主翻译窗口CG专有名词高亮悬浮释义与多源Tab体验 app_v2/src/components/MainWindow/DualPaneTranslator.tsx 及调优测试 app_v2/src/tests/cg_terms_and_tab_scroll.test.tsx。要求：1. 命中CG专业词库时渲染 🧊 CG 术语 标牌与天蓝发光虚线下划线，鼠标悬停展示释义浮层；2. 多源Tab水平溢出时提供两侧渐变遮罩指示器与平滑滚动扩展热区；3. 调优修复 cg_terms_and_tab_scroll.test.tsx 中的防抖计时等待与选择器冲突，确保100%通过。目标文件仅限于 app_v2/src/components/MainWindow/DualPaneTranslator.tsx 和 app_v2/src/tests/cg_terms_and_tab_scroll.test.tsx，严禁修改其他文件。验证：npx vitest run src/tests/cg_terms_and_tab_scroll.test.tsx 通过且 npx tsc --noEmit 0错误。
+
 ## Task 5
-name: TitleBar 与 Sidebar 触控热区与微交互反馈增强
-priority: P2
-files: app_v2/src/components/TitleBar.tsx|app_v2/src/components/Sidebar/Sidebar.tsx
-prompt: 打磨标题栏与侧边栏的无障碍触控体验与微交互反馈。1. app_v2/src/components/TitleBar.tsx：将最小化、最大化、关闭按钮的触控响应区（Hit Box）扩展至 36x36px，内部图标保持居中；关闭按钮 Hover 增加柔和红色背景渐变过渡，支持 :active 按压微缩 (scale(0.95)) 微反馈；版本号与 Logo 增加高质感渐变光晕与 Tooltip 说明。2. app_v2/src/components/Sidebar/Sidebar.tsx：为每个导航 Tab 项与快捷划词按钮添加 Hover 快捷键气泡提示（如“快捷划词 (F4)”）；Active Tab 增加动态平滑光标条与柔和呼吸背景；统一图标与文字的色彩层级与聚焦轮廓线 (focus-visible:ring-2)。确保编译与测试通过。
----
+name: titlebar-sidebar-ux-and-fix-tests
+prompt: 增强标题栏与侧边栏触控热区微交互并修复现有测试 app_v2/src/components/TitleBar.tsx、app_v2/src/components/Sidebar/Sidebar.tsx、app_v2/src/App.tsx、app_v2/src/services/tauri.ts 与 app_v2/src/tests/m4_overlay_sampler.test.tsx。要求：1. TitleBar.tsx窗口操作按钮Hit Box扩大至36x36px，关闭按钮增加红色渐变与:active微缩放；2. Sidebar.tsx导航项与划词按钮增加Hover快捷键气泡(如快捷划词F4)，强化Active发光条；3. App.tsx修正 settings.captureHotkeyEnabled ?? settings.hotkeyEnabled ?? true 兼容性；4. tauri.ts历史记录读写增加 Array.isArray(current) 容错守卫；5. 修复 m4_overlay_sampler.test.tsx 的 closest('.overlay-block') 断言。目标文件仅限于上述5个文件，严禁修改其他文件。验证：npx vitest run src/tests/m4_overlay_sampler.test.tsx 通过且 npx tsc --noEmit 0错误。

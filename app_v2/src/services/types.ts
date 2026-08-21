@@ -40,10 +40,23 @@ export interface OverlayBlock {
   logicalY: number;
   logicalW: number;
   logicalH: number;
+  /** Height used for AABB collision avoidance if different from logicalH */
+  aabbH?: number;
   /** CSS rgba() background color sampled from desktop */
   bgCss: string;
-  /** '#ffffff' or '#141417' */
+  /** Real sampled ink colour (rgb() string) or high-contrast fallback */
   fgCss: string;
+  /** Base64 PNG: the padded OCR box with glyphs erased (background
+   *  continuation). Used as the card background so the original text is
+   *  "removed" and the card blends into the real screen pixels. */
+  patchPng?: string;
+  /** Logical (CSS) rect of the patch (padded OCR box, absolute on screen) */
+  patchX?: number;
+  patchY?: number;
+  patchW?: number;
+  patchH?: number;
+  /** Frontend-only: stage-2 translation failed for this block (shows retry). */
+  translationFailed?: boolean;
 }
 
 export interface OverlayResult {
@@ -133,7 +146,7 @@ export interface OnlineEngines {
   [key: string]: boolean | undefined;
 }
 
-export type ThemeMode = 'fluent-dark' | 'dark' | 'light' | 'system';
+export type ThemeMode = 'system' | 'light' | 'dark' | 'fluent-dark';
 export type FontFamilyOption = 'system' | 'yahei' | 'segoe' | 'inter' | 'mono';
 export type FontSizeOption = 'small' | 'medium' | 'large' | 'xlarge';
 
@@ -169,6 +182,7 @@ export interface OfflineModelSettings {
 export interface AppSettings {
   theme: string;
   hotkey: string;
+  hotkeyEnabled?: boolean;
   spotlightHotkey?: string;
   clipboardHotkey?: string;
   toggleWindowHotkey?: string;
@@ -186,6 +200,65 @@ export interface AppSettings {
   appearance?: AppearanceSettings;
   customDictItems?: CustomDictItem[];
   offlineModel?: OfflineModelSettings;
+  overlayViewMode?: 'cover' | 'tooltip' | 'panel';
+  enableAabbAvoidance?: boolean;
+  /** LLM translation style: literal (直译) | free (意译) | terminology (术语优先) */
+  translationStyle?: 'literal' | 'free' | 'terminology';
+  /** Collapsed icon-only sidebar */
+  sidebarCollapsed?: boolean;
+  /** Selection release behaviour: 'adjust' = release freezes the rect for
+   *  resize/move/nudge before recognition; 'auto' = release recognises at once. */
+  captureReleaseAction?: 'auto' | 'adjust';
+  /** Region-watch (W) refresh interval in ms, clamped to 1000–10000. */
+  watchIntervalMs?: number;
+  /** Passive clipboard watch: translate any copied text automatically (off by default). */
+  clipboardWatchEnabled?: boolean;
+  /** OCR engine preference: 'auto' | 'onnx' | 'winrt' */
+  ocrEngine?: 'auto' | 'onnx' | 'winrt';
+  /** Selected ONNX OCR model version: 'v3' | 'v4' | 'v5' */
+  ocrVersion?: 'v3' | 'v4' | 'v5';
+  /** Primary translation engine: 'auto' | 'dict' | 'llm' | 'online' */
+  primaryTranslationEngine?: 'auto' | 'dict' | 'llm' | 'online';
+  /** 百度翻译开放平台 AppID（免费注册，每月 100 万字符）*/
+  baiduAppId?: string;
+  /** 百度翻译开放平台密钥 */
+  baiduSecret?: string;
+  /** DeepL 官方免费 API Key（每月 50 万字符）*/
+  deeplApiKey?: string;
+  /** 自定义 DeepLX 自建服务地址，如 http://localhost:1188/translate */
+  deeplCustomUrl?: string;
+}
+
+export interface OfflineModelStatus {
+  id: string;
+  version?: string;
+  name: string;
+  fileName: string;
+  installed: boolean;
+  sizeBytes: number;
+  approxBytes: number;
+}
+
+/** One in-place card of a saved capture session (positions are overlay-logical px). */
+export interface CaptureSessionBlock {
+  original: string;
+  translated: string;
+  sourceTier: string;
+  logicalX: number;
+  logicalY: number;
+  logicalW: number;
+  logicalH: number;
+  bgCss: string;
+  fgCss: string;
+}
+
+/** A full screen-capture translation session, replayable in the main window. */
+export interface CaptureSession {
+  id: string;
+  timestamp: string;
+  targetLang: string;
+  engine: string;
+  blocks: CaptureSessionBlock[];
 }
 
 export type LanguageCode =
@@ -214,7 +287,16 @@ export interface UniversalTranslationRequest {
   presetDicts?: PresetDicts;
   onlineEngines?: OnlineEngines;
   translationTiers?: string[];
+  /** Translation style hint for LLM tiers: literal | free | terminology */
+  style?: 'literal' | 'free' | 'terminology';
+  forcedEngine?: string;
+  baiduAppId?: string;
+  baiduSecret?: string;
+  deeplApiKey?: string;
+  deeplCustomUrl?: string;
 }
+
+export type UniversalTranslateParams = UniversalTranslationRequest;
 
 export interface UniversalTranslationResponse {
   original: string;

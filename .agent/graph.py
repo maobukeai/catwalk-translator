@@ -267,10 +267,11 @@ class Graph:
                 self._checkpoint()
 
             except Interrupt as e:
+                # Interrupt 发生时保存 checkpoint（含当前节点），让 resume 能精准恢复
                 self._state["status"] = "INTERRUPTED"
                 self._state["interrupt_reason"] = e.reason
                 self._checkpoint()
-                print(f"⏸️  [Interrupt] {e.reason}")
+                print(f"⏸️  [Interrupt] {e.reason} (node={self._current_node})")
                 print(f"    Checkpoint 已保存: {self.state_dir / 'checkpoint.json'}")
                 raise
             except Exception as e:
