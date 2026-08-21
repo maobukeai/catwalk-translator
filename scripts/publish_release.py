@@ -27,9 +27,19 @@ TAURI_CONF_PATH = os.path.join(SRC_TAURI_DIR, "tauri.conf.json")
 BUILD_RS_PATH = os.path.join(SRC_TAURI_DIR, "build.rs")
 RELEASE_DIST_DIR = os.path.join(PROJECT_ROOT, "release_dist")
 
+def get_build_env():
+    env = os.environ.copy()
+    sdk_bin = r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64"
+    rc_exe = r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\rc.exe"
+    env["RC"] = rc_exe
+    env["RC_x86_64_pc_windows_msvc"] = rc_exe
+    if sdk_bin not in env.get("PATH", ""):
+        env["PATH"] = sdk_bin + ";" + env.get("PATH", "")
+    return env
+
 def run(cmd, cwd=PROJECT_ROOT, check=True):
     print(f"[*] 执行命令: {cmd} (cwd: {cwd})")
-    res = subprocess.run(cmd, cwd=cwd, shell=True)
+    res = subprocess.run(cmd, cwd=cwd, shell=True, env=get_build_env())
     if check and res.returncode != 0:
         print(f"[!] 命令执行失败，退出码: {res.returncode}")
         sys.exit(res.returncode)
@@ -91,6 +101,13 @@ def step_4_verify_and_collect():
     # 冒烟测试：运行 release 二进制文件
     release_exe = os.path.join(SRC_TAURI_DIR, "target", "release", "app_v2.exe")
     assert os.path.exists(release_exe), f"未找到生成的 release 可执行文件: {release_exe}"
+    
+    # 严格验证 release_exe 中已成功物理内嵌 Common-Controls 6.0 清单 (防止 TaskDialogIndirect 报错)
+    with open(release_exe, "rb") as f:
+        exe_bytes = f.read()
+    assert b"Microsoft.Windows.Common-Controls" in exe_bytes, "FATAL: release exe 缺少 Microsoft.Windows.Common-Controls 清单，会导致 TaskDialogIndirect 报错！"
+    assert b"6.0.0.0" in exe_bytes, "FATAL: release exe 缺少 Common-Controls 6.0.0.0 清单声明！"
+    print("  [OK] release_exe 物理二进制中已正确内嵌 Common-Controls 6.0.0.0 清单")
     
     # 清理并创建 release_dist
     if os.path.exists(RELEASE_DIST_DIR):

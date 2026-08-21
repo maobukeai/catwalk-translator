@@ -1,4 +1,4 @@
-const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+﻿const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <dependency>
     <dependentAssembly>
@@ -25,6 +25,10 @@ fn main() {
     #[cfg(windows)]
     {
         let sdk_bin = r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64";
+        let rc_exe = r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\rc.exe";
+        
+        std::env::set_var("RC", rc_exe);
+        std::env::set_var("RC_x86_64_pc_windows_msvc", rc_exe);
         if let Ok(path) = std::env::var("PATH") {
             if !path.contains("10.0.26100.0") {
                 std::env::set_var("PATH", format!("{};{}", sdk_bin, path));
