@@ -99,7 +99,9 @@ def step_4_verify_and_collect():
     print("="*60)
 
     # 冒烟测试：运行 release 二进制文件
-    release_exe = os.path.join(SRC_TAURI_DIR, "target", "release", "app_v2.exe")
+    release_exe = os.path.join(SRC_TAURI_DIR, "target", "release", "MaobuTranslator.exe")
+    if not os.path.exists(release_exe):
+        release_exe = os.path.join(SRC_TAURI_DIR, "target", "release", "app_v2.exe")
     assert os.path.exists(release_exe), f"未找到生成的 release 可执行文件: {release_exe}"
     
     # 严格验证 release_exe 中已成功物理内嵌 Common-Controls 6.0 清单 (防止 TaskDialogIndirect 报错)

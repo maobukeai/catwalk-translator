@@ -3,6 +3,29 @@
 version = 4
 
 [[package]]
+name = "MaobuTranslator"
+version = "0.0.1"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "image",
+ "md5",
+ "ndarray",
+ "ort",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-opener",
+ "tauri-winres",
+ "tokio",
+ "windows 0.58.0",
+ "winreg",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -46,29 +69,6 @@ name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
-name = "app_v2"
-version = "0.0.1"
-dependencies = [
- "base64 0.22.1",
- "futures-util",
- "image",
- "md5",
- "ndarray",
- "ort",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-opener",
- "tauri-winres",
- "tokio",
- "windows 0.58.0",
- "winreg",
-]
 
 [[package]]
 name = "async-broadcast"
