@@ -1,11 +1,11 @@
 ﻿# 🐾 猫步翻译 (Catwalk Translator)
 
 <p align="center">
-  <img src="app_icon.png" width="128" height="128" alt="Catwalk Translator Logo" />
+  <img src="app_icon.png" width="128" height="128" alt="猫步翻译 Logo" />
 </p>
 
 <p align="center">
-  <b>专为 3D/CG 创作者、设计师与极客打造的新一代轻量、沉浸式桌面 AI 截图划词翻译神器</b>
+  <b>专为 3D/CG 创作者、设计师、游戏玩家与极客打造的新一代轻量、沉浸式桌面 AI 截图划词翻译神器</b>
 </p>
 
 <p align="center">
@@ -14,6 +14,7 @@
   <img src="https://img.shields.io/badge/Tauri-2.0-orange?style=flat-square" alt="Tauri" />
   <img src="https://img.shields.io/badge/React-19-61dafb?style=flat-square" alt="React" />
   <img src="https://img.shields.io/badge/Rust-2021-DEA584?style=flat-square" alt="Rust" />
+  <img src="https://img.shields.io/badge/Language-中文简体-brightgreen?style=flat-square" alt="Language" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
 </p>
 
@@ -22,7 +23,8 @@
 ## 🌟 核心特性亮点
 
 ### 1. ⚡ 毫秒级原生 OCR 引擎
-- **本地 ONNX 离线识别**：内置轻量级 PP-OCRv4 引擎，无需网络连接即可秒级提取屏幕文本。
+- **本地 ONNX 离线识别**：内置轻量级 PP-OCRv3/v4/v5 引擎支持，无需网络连接即可秒级提取屏幕文本。
+- **Windows 10/11 原生 OCR 免模型直连**：零模型体积依赖，开箱即用。
 - **高 DPI 像素级映射**：完美兼容 100%、125%、150%、200% 等 Windows 多显示器缩放比例，识别框零偏移。
 
 ### 2. 🎯 三级级联智能翻译流水线
@@ -60,13 +62,19 @@
 
 ---
 
-## 📦 下载与安装
+## 📦 下载与安装指南
 
-进入 [GitHub Releases 页面](https://github.com/maobukeai/catwalk-translator/releases/tag/v0.0.1) 下载对应版本的安装包或绿色独立版：
+请进入 [GitHub Releases 发布页面](https://github.com/maobukeai/catwalk-translator/releases/tag/v0.0.1) 下载对应格式文件：
 
-- **Windows 独立安装包 (NSIS)**: `CatwalkTranslator_0.0.1_x64-setup.exe`
-- **Windows MSI 安装包**: `CatwalkTranslator_0.0.1_x64_en-US.msi`
-- **便携免安装版**: `app_v2.exe`
+| 安装包类型 | 文件名 | 说明 |
+| :--- | :--- | :--- |
+| **Windows 中文安装包 (强烈推荐)** | `猫步翻译_0.0.1_x64-setup.exe` | 纯中文安装引导，体积仅 ~7.2MB，支持覆盖升级与自动桌面图标 |
+| **Windows MSI 安装包** | `猫步翻译_0.0.1_x64_zh-CN.msi` | 适用于 Windows 批量部署与标准 MSI 管理环境 |
+| **绿色便携免安装版** | `猫步翻译_0.0.1_x64_portable.exe` | 单文件独立运行，无需安装，解压即用 |
+
+### 🔄 覆盖安装与升级说明
+- 安装包采用智能覆盖安装机制，直接运行最新安装包即可**自动就地升级**，无需手动卸载旧版本；
+- 软件配置与生词本历史记录独立保存在系统 `%APPDATA%` 中，覆盖安装**绝对不会丢失您的 API Key、个性化设置与生词记录**。
 
 ---
 
@@ -75,23 +83,20 @@
 ### 环境依赖
 - [Node.js](https://nodejs.org/) (v18+) & `pnpm` 或 `npm`
 - [Rust](https://rustup.rs/) (1.75+) 与 Cargo
-- Windows 10/11 x64
+- Windows 10/11 x64 (附带 WebView2 运行时)
 
-### 本地运行
+### 本地运行与构建
 ```bash
 # 进入前端与 Tauri 工程目录
 cd app_v2
 
-# 安装依赖
+# 安装前端依赖
 npm install
 
-# 启动开发环境 (热重载)
+# 启动本地开发（热重载）
 npm run tauri dev
-```
 
-### 构建打包
-```bash
-# 生成生产版本安装包
+# 打包生产安装包与独立运行版
 npm run tauri build
 ```
 

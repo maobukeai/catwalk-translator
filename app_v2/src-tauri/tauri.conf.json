@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CatwalkTranslator",
+  "productName": "猫步翻译",
   "version": "0.0.1",
   "identifier": "com.maobukeai.catwalk",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "AI 截图与划词翻译器",
+        "title": "猫步翻译 - 桌面 AI 截图与划词翻译器",
         "width": 960,
         "height": 720,
         "minWidth": 760,
@@ -41,6 +41,19 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser"
+      },
+      "wix": {
+        "language": "zh-CN"
+      }
+    },
     "resources": {
       "assets/dicts": "assets/dicts",
       "assets/offline/general_ui_dict.json": "assets/offline/general_ui_dict.json"
