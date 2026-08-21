@@ -66,8 +66,8 @@ def step_1_preflight():
     with open(BUILD_RS_PATH, "r", encoding="utf-8") as f:
         build_rs = f.read()
     assert "Microsoft.Windows.Common-Controls" in build_rs, "build.rs 必须包含 Common-Controls 6.0 清单以防止 TaskDialogIndirect 报错"
-    assert "tauri_winres" in build_rs, "build.rs 必须通过 winres 内嵌资源与清单"
-    print("  [OK] build.rs 中已正确配置 Common-Controls 6.0 清单与 winres 资源编译器")
+    assert "app_manifest" in build_rs, "build.rs 必须配置 app_manifest"
+    print("  [OK] build.rs 中已正确配置 Common-Controls 6.0 清单与 Windows SDK 编译器集成")
 
 def step_2_test_suite():
     print("\n" + "="*60)

@@ -26,21 +26,14 @@ fn main() {
     {
         let sdk_bin = r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64";
         if let Ok(path) = std::env::var("PATH") {
-            std::env::set_var("PATH", format!("{};{}", sdk_bin, path));
-        }
-
-        let mut res = tauri_winres::WindowsResource::new();
-        res.set_manifest(MANIFEST);
-        res.set_icon("icons/icon.ico");
-        if let Err(e) = res.compile() {
-            println!("cargo:warning=winres error: {:?}", e);
-        } else {
-            println!("cargo:warning=winres compiled manifest successfully");
+            if !path.contains("10.0.26100.0") {
+                std::env::set_var("PATH", format!("{};{}", sdk_bin, path));
+            }
         }
 
         let windows = tauri_build::WindowsAttributes::new().app_manifest(MANIFEST);
         let attrs = tauri_build::Attributes::new().windows_attributes(windows);
-        let _ = tauri_build::try_build(attrs);
+        tauri_build::try_build(attrs).expect("Failed to run tauri-build");
     }
 
     #[cfg(not(windows))]
