@@ -57,6 +57,14 @@ export async function cmdBeginCapture(): Promise<import('./types').ScreenCapture
 export const cmdStartScreenCapture = cmdBeginCapture;
 
 /// Show the window in full-screen overlay mode (called after capture payload arrives)
+export async function cmdExitApp(): Promise<void> {
+  if (isTauri()) {
+    await invoke('cmd_exit_app');
+  } else {
+    console.log('[Browser Mode] cmdExitApp called');
+  }
+}
+
 export async function cmdShowOverlay(): Promise<void> {
   if (isTauri()) {
     await invoke('cmd_show_overlay');

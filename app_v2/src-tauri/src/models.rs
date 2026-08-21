@@ -434,6 +434,12 @@ pub struct AppSettings {
     /// 自定义 DeepLX 自建服务地址（如 http://localhost:1188/translate）
     #[serde(default)]
     pub deepl_custom_url: Option<String>,
+    /// Window close action: "ask" | "minimize" | "exit" (default "ask")
+    #[serde(default)]
+    pub close_action: Option<String>,
+    /// Mini window (Spotlight) close action: "hide" | "minimize"
+    #[serde(default)]
+    pub mini_window_close_action: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -500,6 +506,8 @@ impl Default for AppSettings {
             baidu_secret: None,
             deepl_api_key: None,
             deepl_custom_url: None,
+            close_action: Some("ask".to_string()),
+            mini_window_close_action: Some("hide".to_string()),
         }
     }
 }

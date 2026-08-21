@@ -114,6 +114,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   clipboardWatchEnabled: false,
   ocrEngine: 'auto',
   ocrVersion: 'v4' as 'v3' | 'v4' | 'v5',
+  closeAction: 'ask',
+  miniWindowCloseAction: 'hide',
 };
 
 interface SettingsState {
@@ -179,6 +181,8 @@ interface SettingsState {
   setPrimaryTranslationEngine: (engine: 'auto' | 'dict' | 'llm' | 'online') => void;
   setBaiduConfig: (appId: string, secret: string) => void;
   setDeeplConfig: (apiKey: string, customUrl: string) => void;
+  setCloseAction: (action: 'ask' | 'minimize' | 'exit') => void;
+  setMiniWindowCloseAction: (action: 'hide' | 'minimize') => void;
   resetSettings: () => void;
   clearToast: () => void;
 }
@@ -924,6 +928,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setPrimaryTranslationEngine: (engine) => {
     const { settings, initialSettings, saveSettings } = get();
     const updated = { ...settings, primaryTranslationEngine: engine };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setCloseAction: (action) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, closeAction: action };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    saveSettings();
+  },
+
+  setMiniWindowCloseAction: (action) => {
+    const { settings, initialSettings, saveSettings } = get();
+    const updated = { ...settings, miniWindowCloseAction: action };
     set({
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),

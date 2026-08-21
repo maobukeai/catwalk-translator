@@ -10,7 +10,8 @@ import { CaptureOverlay } from "./components/Overlay/CaptureOverlay";
 import { CheatSheetModal } from "./components/Overlay/CheatSheetModal";
 import { SpotlightModal } from "./components/SpotlightModal";
 import { ClipboardToast, type ClipboardPayload } from "./components/ClipboardToast";
-import { isTauri, cmdQueryText, cmdSetWindowBlur } from "./services/tauri";
+import { CloseConfirmModal } from "./components/CloseConfirmModal";
+import { isTauri, cmdQueryText, cmdSetWindowBlur, cmdExitApp } from "./services/tauri";
 import { matchesHotkey } from "./services/hotkeys";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useAppTheme } from "./hooks/useAppTheme";
@@ -22,6 +23,7 @@ function App() {
   const [isOverlayOpen, setIsOverlayOpen] = useState(false);
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
   const [isCheatSheetOpen, setIsCheatSheetOpen] = useState(false);
+  const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false);
   const [clipboardPayload, setClipboardPayload] = useState<ClipboardPayload | null>(null);
   const [transferredText, setTransferredText] = useState<string>("");
   const [openInHoverMode, setOpenInHoverMode] = useState(false);
@@ -107,6 +109,29 @@ function App() {
       setOpenInHoverMode(true);
       return true;
     });
+  }, []);
+
+  const handleRequestClose = useCallback(async () => {
+    const curCloseAction = useSettingsStore.getState().settings.closeAction || 'ask';
+    if (curCloseAction === 'exit') {
+      if (isTauri()) {
+        try {
+          await cmdExitApp();
+        } catch {
+          import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().close().catch(() => {}));
+        }
+      } else {
+        console.log('[Browser Mode] Exit App');
+      }
+    } else if (curCloseAction === 'minimize') {
+      if (isTauri()) {
+        import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().hide().catch(() => {}));
+      } else {
+        console.log('[Browser Mode] Minimize to tray');
+      }
+    } else {
+      setIsCloseConfirmOpen(true);
+    }
   }, []);
 
   // Browser-level hotkey listener fallback (matches exact configured hotkey strings)
@@ -371,6 +396,7 @@ function App() {
             onTriggerCapture={() => setIsOverlayOpen(true)}
             hotkey={settings.hotkey || "F4"}
             onQuickSearch={() => setIsSpotlightOpen((v) => !v)}
+            onRequestClose={handleRequestClose}
           />
 
           {/* Global Hotkey Trigger Toast */}
@@ -459,6 +485,12 @@ function App() {
         payload={clipboardPayload}
         onClose={() => setClipboardPayload(null)}
         onDisableWatch={() => setClipboardWatchEnabled(false)}
+      />
+
+      {/* 关闭窗口行为确认弹窗 */}
+      <CloseConfirmModal
+        isOpen={isCloseConfirmOpen}
+        onClose={() => setIsCloseConfirmOpen(false)}
       />
     </div>
     </div>

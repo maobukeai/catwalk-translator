@@ -227,6 +227,10 @@ export interface AppSettings {
   deeplApiKey?: string;
   /** 自定义 DeepLX 自建服务地址，如 http://localhost:1188/translate */
   deeplCustomUrl?: string;
+  /** 关闭主窗口时的行为：'ask' (每次询问) | 'minimize' (最小化到系统托盘) | 'exit' (直接退出程序) */
+  closeAction?: 'ask' | 'minimize' | 'exit';
+  /** Spotlight 查词小窗口关闭行为：'hide' (自动隐藏) | 'minimize' (最小化) */
+  miniWindowCloseAction?: 'hide' | 'minimize';
 }
 
 export interface OfflineModelStatus {

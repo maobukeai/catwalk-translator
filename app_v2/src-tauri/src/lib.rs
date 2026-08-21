@@ -617,6 +617,7 @@ pub fn run() {
             commands::cmd_offline_uninstall,
             commands::cmd_offline_status,
             commands::cmd_image_ocr_translate,
+            commands::cmd_exit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

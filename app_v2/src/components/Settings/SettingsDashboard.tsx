@@ -367,6 +367,8 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     setPrimaryTranslationEngine,
     setBaiduConfig,
     setDeeplConfig,
+    setCloseAction,
+    setMiniWindowCloseAction,
     resetSettings,
     clearToast,
   } = useSettingsStore();
@@ -3211,6 +3213,129 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                             <span className="font-semibold">{label}</span>
                           </div>
                           <div className={`mt-0.5 text-[10px] leading-tight ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>{desc}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 关闭窗口行为选择器 */}
+                <div className={`rounded-xl border p-3 text-xs sm:col-span-2 ${
+                  isLight ? 'bg-slate-50 border-slate-200' : 'bg-zinc-950/50 border-white/[0.05]'
+                }`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className={`font-medium ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
+                      关闭主窗口行为 (必选项)
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                      isLight ? 'bg-blue-100 text-blue-700' : 'bg-blue-500/20 text-blue-300'
+                    }`}>
+                      系统控制
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {([
+                      {
+                        value: 'ask',
+                        label: '每次询问',
+                        desc: '点击关闭时弹出对话框确认（推荐）',
+                      },
+                      {
+                        value: 'minimize',
+                        label: '最小化到托盘',
+                        desc: '常驻后台，热键随时秒级呼出',
+                      },
+                      {
+                        value: 'exit',
+                        label: '直接退出程序',
+                        desc: '关闭窗口时直接彻底结束软件',
+                      },
+                    ] as { value: 'ask' | 'minimize' | 'exit'; label: string; desc: string }[]).map(({ value, label, desc }) => {
+                      const isSelected = (settings.closeAction ?? 'ask') === value;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setCloseAction(value)}
+                          title={desc}
+                          className={`text-left rounded-lg border p-2.5 transition-all cursor-pointer ${
+                            isSelected
+                              ? (isLight ? 'border-blue-500 bg-blue-50/80 text-blue-700 ring-1 ring-blue-500/20 shadow-2xs' : 'border-blue-500 bg-blue-500/15 text-blue-300 ring-1 ring-blue-500/30')
+                              : (isLight ? 'border-slate-200 hover:border-slate-300 bg-white text-slate-700' : 'border-white/[0.06] hover:border-white/15 bg-zinc-900/50 text-zinc-300')
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 flex items-center justify-center border ${
+                              isSelected
+                                ? (isLight ? 'border-blue-600 bg-blue-600' : 'border-blue-400 bg-blue-400')
+                                : (isLight ? 'border-slate-300 bg-white' : 'border-zinc-600 bg-transparent')
+                            }`}>
+                              {isSelected && <span className="w-1 h-1 rounded-full bg-white" />}
+                            </span>
+                            <span className="font-semibold text-xs">{label}</span>
+                          </div>
+                          <div className={`mt-1 text-[10.5px] leading-tight ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                            {desc}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Spotlight 查词小窗口行为 */}
+                <div className={`rounded-xl border p-3 text-xs sm:col-span-2 ${
+                  isLight ? 'bg-slate-50 border-slate-200' : 'bg-zinc-950/50 border-white/[0.05]'
+                }`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className={`font-medium ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
+                      Win 快速查词小窗口 (Spotlight) 行为
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                      isLight ? 'bg-purple-100 text-purple-700' : 'bg-purple-500/20 text-purple-300'
+                    }`}>
+                      快捷悬浮窗
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {([
+                      {
+                        value: 'hide',
+                        label: '按 Esc / 失去焦点自动关闭',
+                        desc: '查完即走，丝滑不遮挡 3D/CG 创作工作区',
+                      },
+                      {
+                        value: 'minimize',
+                        label: '仅按 Esc 手动关闭',
+                        desc: '点击其他窗口时不自动关闭，便于对照参考',
+                      },
+                    ] as { value: 'hide' | 'minimize'; label: string; desc: string }[]).map(({ value, label, desc }) => {
+                      const isSelected = (settings.miniWindowCloseAction ?? 'hide') === value;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setMiniWindowCloseAction(value)}
+                          title={desc}
+                          className={`text-left rounded-lg border p-2.5 transition-all cursor-pointer ${
+                            isSelected
+                              ? (isLight ? 'border-purple-500 bg-purple-50/80 text-purple-700 ring-1 ring-purple-500/20 shadow-2xs' : 'border-purple-500 bg-purple-500/15 text-purple-300 ring-1 ring-purple-500/30')
+                              : (isLight ? 'border-slate-200 hover:border-slate-300 bg-white text-slate-700' : 'border-white/[0.06] hover:border-white/15 bg-zinc-900/50 text-zinc-300')
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 flex items-center justify-center border ${
+                              isSelected
+                                ? (isLight ? 'border-purple-600 bg-purple-600' : 'border-purple-400 bg-purple-400')
+                                : (isLight ? 'border-slate-300 bg-white' : 'border-zinc-600 bg-transparent')
+                            }`}>
+                              {isSelected && <span className="w-1 h-1 rounded-full bg-white" />}
+                            </span>
+                            <span className="font-semibold text-xs">{label}</span>
+                          </div>
+                          <div className={`mt-1 text-[10.5px] leading-tight ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                            {desc}
+                          </div>
                         </button>
                       );
                     })}

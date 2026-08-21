@@ -9,9 +9,10 @@ interface TitleBarProps {
   onTriggerCapture?: () => void;
   hotkey?: string;
   onQuickSearch?: () => void;
+  onRequestClose?: () => void;
 }
 
-export const TitleBar: React.FC<TitleBarProps> = ({ onQuickSearch }) => {
+export const TitleBar: React.FC<TitleBarProps> = ({ onQuickSearch, onRequestClose }) => {
   const [isMaximized, setIsMaximized] = useState(false);
 
   // 原生窗口拖拽处理（同步无延迟调用）
@@ -90,6 +91,10 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onQuickSearch }) => {
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (onRequestClose) {
+      onRequestClose();
+      return;
+    }
     if (isTauri()) {
       try {
         getCurrentWindow().hide();

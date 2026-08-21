@@ -2342,6 +2342,11 @@ pub async fn cmd_chat_llm_stream(
     })
 }
 
+#[tauri::command]
+pub fn cmd_exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[cfg(test)]
 mod mapping_tests {
     use super::logical_selection_to_physical;

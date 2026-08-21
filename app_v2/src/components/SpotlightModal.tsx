@@ -85,7 +85,11 @@ export const SpotlightModal: React.FC<SpotlightModalProps> = ({ isOpen, onClose,
   return (
     <div
       className="fixed inset-0 z-[300] flex items-start justify-center pt-[15vh] p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-150"
-      onClick={onClose}
+      onClick={() => {
+        if (settings.miniWindowCloseAction !== 'minimize') {
+          onClose();
+        }
+      }}
     >
       <div
         className="lg-surface w-full max-w-2xl p-5 space-y-4 shadow-2xl transition-all animate-in zoom-in-95 duration-150"
@@ -132,9 +136,19 @@ export const SpotlightModal: React.FC<SpotlightModalProps> = ({ isOpen, onClose,
             type="button"
             onClick={() => handleSearch()}
             disabled={loading || !query.trim()}
-            className="lg-btn lg-btn-primary !px-3.5 !py-1.5 !text-xs"
+            className="lg-btn lg-btn-primary !px-3.5 !py-1.5 !text-xs cursor-pointer"
           >
             {loading ? '检索中...' : '查词'}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            title="关闭 (Esc)"
+            className={`p-1.5 rounded-lg transition cursor-pointer ${
+              isLight ? 'text-slate-400 hover:text-slate-700 hover:bg-slate-100' : 'text-zinc-400 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <X className="h-4 w-4" />
           </button>
         </div>
 
