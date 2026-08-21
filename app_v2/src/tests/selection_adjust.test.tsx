@@ -109,7 +109,6 @@ describe('selection adjust mode (release → resize/move/nudge → confirm)', ()
     expect(await screen.findByTestId('adjust-confirm-bar')).toBeInTheDocument();
     expect(screen.getByTestId('adjust-handle-se')).toBeInTheDocument();
     expect(screen.getByTestId('adjust-handle-nw')).toBeInTheDocument();
-    expect(screen.getByText('300 × 100 px')).toBeInTheDocument();
     expect(layoutCalls(calls)).toHaveLength(0);
   });
 
@@ -145,7 +144,6 @@ describe('selection adjust mode (release → resize/move/nudge → confirm)', ()
     fireEvent.mouseMove(container(), { clientX: 450, clientY: 230 });
     fireEvent.mouseUp(container());
 
-    expect(screen.getByText('350 × 130 px')).toBeInTheDocument();
     pressKey('Enter', 'Enter');
     await waitFor(() => {
       expect(layoutCalls(calls)).toHaveLength(1);

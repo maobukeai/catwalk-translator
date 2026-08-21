@@ -3,6 +3,7 @@ import { TitleBar } from "./components/TitleBar";
 import { Dock, type AppTab } from "./components/Dock";
 import { SettingsDashboard } from "./components/Settings/SettingsDashboard";
 import { DualPaneTranslator } from "./components/MainWindow/DualPaneTranslator";
+import { AboutPanel } from "./components/MainWindow/AboutPanel";
 import { SearchPanel } from "./components/MainWindow/SearchPanel";
 import { AiChatPanel } from "./components/MainWindow/AiChatPanel";
 import { HistoryPanel } from "./components/Vocabulary/HistoryPanel";
@@ -314,9 +315,9 @@ function App() {
           style={{
             filter: `blur(${blurPx * 1.5}px) saturate(1.1)`,
             transform: 'scale(1.04)',
-            transitionProperty: 'opacity, filter',
-            transitionDuration: '500ms, 180ms',
-            transitionTimingFunction: 'ease, ease-out',
+            transitionProperty: 'opacity',
+            transitionDuration: '500ms',
+            transitionTimingFunction: 'ease',
           }}
         >
           {/* 轻盈微弱的环境辉光（低不透明度，不遮挡底层 Windows DWM 硬件级磨砂与桌面内容） */}
@@ -396,6 +397,7 @@ function App() {
             onTriggerCapture={() => setIsOverlayOpen(true)}
             hotkey={settings.hotkey || "F4"}
             onQuickSearch={() => setIsSpotlightOpen((v) => !v)}
+            onOpenAbout={() => setActiveTab("about")}
             onRequestClose={handleRequestClose}
           />
 
@@ -419,14 +421,17 @@ function App() {
                   onOpenSettings={() => setActiveTab("settings")}
                 />
               )}
-              {activeTab === "search" && <SearchPanel settings={settings} />}
               {activeTab === "ai" && <AiChatPanel onOpenSettings={() => setActiveTab("settings")} />}
               {activeTab === "vocabulary" && <HistoryPanel />}
+              {(activeTab === "search" || activeTab === "about") && (
+                <AboutPanel onOpenSettings={() => setActiveTab("settings")} />
+              )}
               {activeTab === "settings" && (
                 <SettingsDashboard
                   onStartCapture={() => setIsOverlayOpen(true)}
                   onTriggerSpotlight={() => setIsSpotlightOpen(true)}
                   onTriggerClipboard={handleTriggerClipboard}
+                  onOpenAbout={() => setActiveTab("about")}
                   onToggleWindow={() => {
                     setTriggerToast("主程序显隐逻辑联动运行中 (可按下录制的热键随时切换！)");
                     setTimeout(() => setTriggerToast(null), 3000);

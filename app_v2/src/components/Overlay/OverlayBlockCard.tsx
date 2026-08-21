@@ -213,11 +213,10 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
     return () => el.removeEventListener('wheel', onWheel);
   }, [onScaleChange]);
 
-  // 动态字号与排版计算：字号贴合 OCR 实测行高（CJK 墨高≈0.9em，拉丁混排
-  // ≈1.0em）。不再夹在 11–14px——大字按原大渲染，才有"嵌在原文里"的感觉。
+  // 动态字号与排版计算：
+  // 1. 根据原文与译文长度/字符集，计算理想贴合字号，使得译文在原文位置区域内自然缩放对齐；
+  // 2. 避免译文较长时产生巨大字号导致多行膨胀与错位。
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
-  // Pending = stage-2 translation not arrived yet: show the OCR original with a
-  // subtle shimmer so the swap to the translation feels like a live handover.
   const isPending = !block.translated;
   const displayText = block.translated || block.original;
   const primaryText = viewMode === 'original' ? block.original : displayText;
@@ -228,8 +227,34 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   const cjkCount = (block.original.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
   const emFactor = cjkCount / nonSpaceLen > 0.3 ? 1.05 : 0.92;
   const baseFontSize = singleLineH * emFactor;
-  const fontSize = Math.round(Math.min(64, Math.max(9, baseFontSize)) * scale);
-  const maxWidth = Math.min(vw - pos.x - 20, Math.max(Math.round(block.logicalW * 1.6 + 24), 160));
+
+  // 自适应字号缩放计算 (Auto Font-Fit Calculation)
+  let targetFontSize = baseFontSize;
+  if (block.translated && viewMode !== 'original') {
+    const dispLen = Math.max(1, primaryText.length);
+    const dispCjkCount = (primaryText.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
+    const dispIsCjk = dispCjkCount / dispLen > 0.3;
+    // CJK 字符平均宽度约 1.05em，西文字符平均宽度约 0.52em
+    const charWidthRatio = dispIsCjk ? 1.05 : 0.52;
+    const estimatedWidth = dispLen * charWidthRatio * baseFontSize;
+    const allowedWidth = Math.max(block.logicalW * 1.2, 80);
+
+    if (estimatedWidth > allowedWidth) {
+      const minSafeFontSize = Math.max(9, singleLineH * 0.55);
+      // 优先尝试单行缩放
+      const singleLineFitSize = baseFontSize * (allowedWidth / estimatedWidth);
+      if (singleLineFitSize >= minSafeFontSize && lineCount === 1) {
+        targetFontSize = singleLineFitSize;
+      } else {
+        // 多行或单行较长时折为双行分配
+        const twoLineFitSize = baseFontSize * ((allowedWidth * 1.85) / estimatedWidth);
+        targetFontSize = Math.max(minSafeFontSize, Math.min(baseFontSize * 0.88, twoLineFitSize));
+      }
+    }
+  }
+
+  const fontSize = Math.round(Math.min(64, Math.max(9, targetFontSize)) * scale);
+  const maxWidth = Math.min(vw - pos.x - 20, Math.max(Math.round(block.logicalW * 1.35 + 24), 140));
   const isLight = isLightBg(block.bgCss, block.fgCss);
   const hasPatch = !!block.patchPng && (block.patchW ?? 0) > 0;
 
@@ -286,23 +311,20 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         maxWidth,
         minHeight: block.logicalH,
         height: 'auto',
-        // 有抹除补丁时卡片本体透明：补丁负责盖住原文并延续真实背景；
-        // 无补丁（旧后端/测试）回退为实色底遮盖。
-        background: hasPatch ? 'transparent' : toSolidBg(block.bgCss, block.fgCss),
         color: block.fgCss,
         fontSize: `${fontSize}px`,
-        fontFamily: '"Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif',
+        fontFamily: 'var(--app-font-family, "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif)',
         fontWeight: 400,
-        lineHeight: 1.1,
+        lineHeight: 1.15,
         cursor: dragging ? 'grabbing' : 'move',
         zIndex: isPinned ? 210 : 200,
-        borderRadius: 0,
+        borderRadius: 2,
         border: 'none',
         boxShadow: cardBoxShadow,
         whiteSpace: 'normal',
         wordBreak: 'break-word',
         overflowWrap: 'break-word',
-        padding: 0,
+        padding: '1px 3px',
       }}
       title={`${block.original} → ${block.translated || '翻译中…'} [${block.sourceTier}]`}
       onMouseDown={onMouseDown}
@@ -321,6 +343,21 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         onCardContextMenu?.(e);
       }}
     >
+      {/* 保底实色抹除底板：全向外扩 3px，带微圆角，杜绝任何 OCR 边界误差导致的边缘/上下笔画露字 */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute"
+        style={{
+          top: -3,
+          left: -4,
+          right: -4,
+          bottom: -3,
+          background: toSolidBg(block.bgCss, block.fgCss),
+          borderRadius: 3,
+          zIndex: 0,
+        }}
+      />
+
       {/* 抹除补丁：OCR 框外扩区域经背景插值抹掉字形后的 PNG。边缘像素与
           屏幕真实背景逐像素衔接，实现"原文被抹除、译文嵌入背景"的效果。 */}
       {hasPatch && (
@@ -335,19 +372,21 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
             backgroundImage: `url(data:image/png;base64,${block.patchPng})`,
             backgroundSize: '100% 100%',
             backgroundRepeat: 'no-repeat',
+            borderRadius: 3,
+            zIndex: 1,
           }}
         />
       )}
 
       {/* Stage-2 pending shimmer: original text is visible under a moving sheen */}
       {isPending && (
-        <span className="overlay-shimmer pointer-events-none absolute inset-0" aria-hidden />
+        <span className="overlay-shimmer pointer-events-none absolute inset-0 z-[2]" aria-hidden />
       )}
 
       {/* 双语对照：原文小字灰字在上，译文主体在下 */}
       {viewMode === 'bilingual' && (
         <span
-          className="relative leading-snug"
+          className="relative z-[2] leading-snug"
           style={{ fontSize: '0.72em', opacity: 0.72, userSelect: 'text' }}
           onMouseDown={(e) => e.stopPropagation()}
         >
@@ -355,7 +394,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         </span>
       )}
       <span
-        className={`relative ${isPending ? 'opacity-80' : 'tooltip-pop'}`}
+        className={`relative z-[2] ${isPending ? 'opacity-80' : 'tooltip-pop'}`}
         style={{ userSelect: 'text', lineHeight: 'inherit' }}
         onMouseDown={(e) => e.stopPropagation()}
       >

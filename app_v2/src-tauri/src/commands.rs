@@ -1936,6 +1936,7 @@ fn plan_chat_endpoints(config: &LlmConfig) -> Result<ChatEndpointPlan, String> {
 
     let is_google_gemini = raw_ep.contains("google")
         || raw_ep.contains("gemini")
+        || raw_ep.contains("googleapis.com")
         || raw_ep.contains("google-ai-studio")
         || api_key.starts_with("AIza");
 
@@ -1945,47 +1946,77 @@ fn plan_chat_endpoints(config: &LlmConfig) -> Result<ChatEndpointPlan, String> {
         None => (raw_ep.as_str(), None),
     };
 
-    let mut clean_base = base_path.trim_end_matches('/').to_string();
-    if clean_base.ends_with("/chat/completions") {
-        clean_base = clean_base.replace("/chat/completions", "");
-    }
-    if clean_base.ends_with("/completions") {
-        clean_base = clean_base.replace("/completions", "");
-    }
+    let clean_base = base_path.trim_end_matches('/').to_string();
 
     // Candidate chat endpoints in priority order
     let mut candidate_urls = Vec::new();
 
     if raw_ep.contains("/chat/completions") || raw_ep.contains(":generateContent") {
         candidate_urls.push(raw_ep.clone());
-    } else if is_google_gemini {
-        // Google AI Studio official OpenAI-compatible endpoint
-        candidate_urls.push(format!("{}/v1beta/openai/chat/completions", clean_base));
-        candidate_urls.push(format!("{}/openai/chat/completions", clean_base));
+    }
+
+    if is_google_gemini {
+        // Strip suffixes to get base root hostname (e.g. https://generativelanguage.googleapis.com)
+        let mut root = clean_base.as_str();
+        if let Some(stripped) = root.strip_suffix("/chat/completions") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/completions") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/openai") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/models") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/v1beta") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/v1") {
+            root = stripped;
+        }
+        let root = root.trim_end_matches('/');
+
+        // Google AI Studio official OpenAI-compatible endpoint (supports SSE stream & standard chat completions)
+        candidate_urls.push(format!("{}/v1beta/openai/chat/completions", root));
         // Google AI Studio native REST endpoint
         candidate_urls.push(format!(
             "{}/v1beta/models/{}:generateContent",
-            clean_base, model_name
+            root, model_name
         ));
         candidate_urls.push(format!(
             "{}/models/{}:generateContent",
-            clean_base, model_name
+            root, model_name
         ));
-        // Standard fallbacks
-        if clean_base.ends_with("/v1") || clean_base.ends_with("/v1beta") {
-            candidate_urls.push(format!("{}/chat/completions", clean_base));
-        } else {
-            candidate_urls.push(format!("{}/v1/chat/completions", clean_base));
-            candidate_urls.push(format!("{}/chat/completions", clean_base));
-        }
+        candidate_urls.push(format!("{}/v1/chat/completions", root));
+        candidate_urls.push(format!("{}/chat/completions", root));
     } else {
-        if clean_base.ends_with("/v1") {
-            candidate_urls.push(format!("{}/chat/completions", clean_base));
+        let mut b = clean_base.as_str();
+        if let Some(stripped) = b.strip_suffix("/chat/completions") {
+            b = stripped;
+        }
+        if let Some(stripped) = b.strip_suffix("/completions") {
+            b = stripped;
+        }
+        let b = b.trim_end_matches('/');
+
+        if b.ends_with("/v1") {
+            candidate_urls.push(format!("{}/chat/completions", b));
+            candidate_urls.push(b.to_string());
         } else {
-            candidate_urls.push(format!("{}/v1/chat/completions", clean_base));
-            candidate_urls.push(format!("{}/chat/completions", clean_base));
+            candidate_urls.push(format!("{}/v1/chat/completions", b));
+            candidate_urls.push(format!("{}/chat/completions", b));
+        }
+
+        if b.contains("localhost") || b.contains("127.0.0.1") {
+            candidate_urls.push(format!("{}/api/chat", b));
         }
     }
+
+    // Deduplicate candidate_urls while preserving order
+    let mut seen = std::collections::HashSet::new();
+    candidate_urls.retain(|url| seen.insert(url.clone()));
 
     Ok(ChatEndpointPlan {
         candidate_urls,
@@ -2124,10 +2155,7 @@ pub async fn cmd_chat_llm(
 ) -> Result<String, String> {
     let plan = plan_chat_endpoints(&config)?;
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(35))
-        .build()
-        .map_err(|e| format!("无法初始化网络客户端: {}", e))?;
+    let client = crate::translator::create_http_client(35000);
 
     let mut last_err = String::new();
 
@@ -2199,11 +2227,7 @@ pub async fn cmd_chat_llm_stream(
 
     let plan = plan_chat_endpoints(&config)?;
 
-    // 流式响应整体耗时可能超过 35s，仅限制连接建立阶段
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("无法初始化网络客户端: {}", e))?;
+    let client = crate::translator::create_http_client(35000);
 
     let mut last_err = String::new();
 

@@ -78,10 +78,13 @@ describe('Dynamic Engine Switching and Online Channels Persistence Test Suite', 
   });
 
   // ── 2. DualPaneTranslator Dynamic Channels ───────────────────────────────────
-  it('DualPaneTranslator dynamically reads enabled channels from settings.onlineEngines', async () => {
+  it('DualPaneTranslator dynamically reads enabled channels from settings.onlineEngines and omits unconfigured engines', async () => {
     vi.useRealTimers();
     const customSettings: AppSettings = {
       ...useSettingsStore.getState().settings,
+      deeplApiKey: 'mock-deepl-key',
+      baiduAppId: 'mock-baidu-id',
+      baiduSecret: 'mock-baidu-secret',
       onlineEngines: {
         google: true,
         bing: true,
@@ -93,9 +96,9 @@ describe('Dynamic Engine Switching and Online Channels Persistence Test Suite', 
       },
     };
 
-    render(<DualPaneTranslator settings={customSettings} initialText="" />);
+    const { unmount } = render(<DualPaneTranslator settings={customSettings} initialText="" />);
 
-    // Placeholder tabs should include enabled channels: Google, Bing, DeepL, 百度
+    // Placeholder tabs should include configured and enabled channels: Google, Bing, DeepL, 百度
     expect(screen.getByText('Google')).toBeTruthy();
     expect(screen.getByText('Bing')).toBeTruthy();
     expect(screen.getByText('DeepL')).toBeTruthy();
@@ -104,16 +107,50 @@ describe('Dynamic Engine Switching and Online Channels Persistence Test Suite', 
     expect(screen.queryByText('有道')).toBeNull();
     expect(screen.queryByText('MyMemory')).toBeNull();
     expect(screen.queryByText('腾讯')).toBeNull();
+
+    unmount();
+
+    // When unconfigured, DeepL, Baidu, and LLM should NOT appear in placeholder tabs
+    const unconfiguredSettings: AppSettings = {
+      ...useSettingsStore.getState().settings,
+      llmConfig: {
+        provider: 'DeepSeek',
+        apiKey: '',
+        model: 'deepseek-chat',
+        endpoint: 'https://api.deepseek.com/v1',
+      },
+      deeplApiKey: '',
+      deeplCustomUrl: '',
+      baiduAppId: '',
+      baiduSecret: '',
+      onlineEngines: {
+        google: true,
+        bing: true,
+        youdao: false,
+        deepl: true,
+        baidu: true,
+        myMemory: false,
+        tencent: false,
+      },
+    };
+
+    render(<DualPaneTranslator settings={unconfiguredSettings} initialText="" />);
+    expect(screen.getByText('Google')).toBeTruthy();
+    expect(screen.getByText('Bing')).toBeTruthy();
+    expect(screen.queryByText('DeepL')).toBeNull();
+    expect(screen.queryByText('百度')).toBeNull();
+    expect(screen.queryByText('DeepSeek 深度翻译')).toBeNull();
   });
 
   // ── 3. SnippingToolbar Categorized Dynamic Optgroups ─────────────────────────
-  it('SnippingToolbar renders categorized optgroups for AI models, online channels and CG dicts', () => {
+  it('SnippingToolbar renders only enabled AI models and online channels, and excludes CG dicts', () => {
     vi.useRealTimers();
     const customSettings: AppSettings = {
       ...useSettingsStore.getState().settings,
       llmConfigs: [
-        { id: '1', provider: 'DeepSeek', model: 'deepseek-chat', apiKey: '', endpoint: '' },
-        { id: '2', provider: 'OpenAI', model: 'gpt-4o-mini', apiKey: '', endpoint: '' },
+        { id: '1', provider: 'DeepSeek', model: 'deepseek-chat', apiKey: 'sk-test-deepseek', endpoint: 'https://api.deepseek.com/v1' },
+        { id: '2', provider: 'OpenAI', model: 'gpt-4o-mini', apiKey: 'sk-test-openai', endpoint: 'https://api.openai.com/v1' },
+        { id: '3', provider: 'CustomUnconfigured', model: 'custom-none', apiKey: '', endpoint: '' },
       ],
       onlineEngines: {
         google: true,
@@ -159,18 +196,22 @@ describe('Dynamic Engine Switching and Online Channels Persistence Test Suite', 
     const select = screen.getByTitle('切换翻译引擎 (Tab)') as HTMLSelectElement;
     expect(select).toBeTruthy();
 
-    // Verify AI group
+    // Verify AI group with configured models
     expect(screen.getByText('DeepSeek (deepseek-chat)')).toBeTruthy();
     expect(screen.getByText('OpenAI (gpt-4o-mini)')).toBeTruthy();
+    expect(screen.queryByText('CustomUnconfigured (custom-none)')).toBeNull();
 
-    // Verify Online group
+    // Verify Online group with enabled channels only
     expect(screen.getByText('DeepL 极速翻译')).toBeTruthy();
     expect(screen.getByText('百度通用翻译')).toBeTruthy();
     expect(screen.getByText('Google 翻译')).toBeTruthy();
+    expect(screen.queryByText('MyMemory 记忆库')).toBeNull();
+    expect(screen.queryByText('腾讯交互翻译')).toBeNull();
 
-    // Verify CG dicts group
-    expect(screen.getByText('Blender 词库')).toBeTruthy();
-    expect(screen.getByText('Maya 建模词库')).toBeTruthy();
+    // Verify CG dicts are completely removed from dropdown
+    expect(screen.queryByText('Blender 词库')).toBeNull();
+    expect(screen.queryByText('Maya 建模词库')).toBeNull();
+    expect(screen.queryByText('📚 CG 术语词库')).toBeNull();
 
     // Trigger engine switch
     fireEvent.change(select, { target: { value: 'deepl' } });

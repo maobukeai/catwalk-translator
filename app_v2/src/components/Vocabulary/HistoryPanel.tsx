@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Star, Download, Search, BookMarked, Clock, Volume2, Trash2, Trash, Inbox, Play, X, Copy, Check, Camera, FileText, GraduationCap, Eye, RotateCcw, Library } from "lucide-react";
 import { cmdGetHistory, cmdToggleFavorite, cmdExportAnki, cmdDeleteHistoryEntry, cmdClearHistory, cmdGetCaptureSessions, cmdClearCaptureSessions } from "../../services/tauri";
 import { useSettingsStore } from "../../stores/useSettingsStore";
@@ -635,9 +636,11 @@ export const HistoryPanel: React.FC = () => {
       </div>
 
       {/* ── 回放弹窗：原位卡片重演 + 文本对照 ─────────────────────────────── */}
-      {replay && (
+      {replay && typeof document !== "undefined" && createPortal(
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm"
+          className={`fixed inset-0 z-[500] flex items-center justify-center p-6 transition-colors ${
+            isLight ? 'bg-black/20 backdrop-blur-sm' : 'bg-black/60 backdrop-blur-md'
+          }`}
           style={{ animation: 'page-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both' }}
           onClick={() => setReplay(null)}
         >
@@ -737,7 +740,8 @@ export const HistoryPanel: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

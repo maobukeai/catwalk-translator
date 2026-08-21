@@ -1206,7 +1206,8 @@ export async function cmdUniversalTranslate(
   }
 
   // DeepL
-  if ((forced && forced.includes('deepl')) || (!isForced && online.deepl)) {
+  const isDeeplConfigured = !!req.deeplApiKey?.trim() || !!req.deeplCustomUrl?.trim();
+  if ((forced && forced.includes('deepl')) || (!isForced && online.deepl && isDeeplConfigured)) {
     tasks.push(
       fetchDeepLTranslate(trimmed, actualSource, actualTarget)
         .then((res) => ({ name: 'DeepL 极速通道', trans: res, tier: 'Online Fallback' }))
@@ -1224,7 +1225,8 @@ export async function cmdUniversalTranslate(
   }
 
   // Baidu
-  if ((forced && (forced.includes('baidu') || forced.includes('百度'))) || (!isForced && online.baidu)) {
+  const isBaiduConfigured = !!req.baiduAppId?.trim() && !!req.baiduSecret?.trim();
+  if ((forced && (forced.includes('baidu') || forced.includes('百度'))) || (!isForced && online.baidu && isBaiduConfigured)) {
     tasks.push(
       fetchBaiduTranslate(trimmed, actualSource, actualTarget)
         .then((res) => ({ name: '百度通用翻译', trans: res, tier: 'Online Fallback' }))
@@ -1242,7 +1244,12 @@ export async function cmdUniversalTranslate(
   }
 
   // LLM API
-  const runLlm = (forced && (forced.includes('llm') || forced.includes('ai') || forced.includes('openai') || forced.includes('deepseek') || forced.includes('ollama') || forced.includes('glm') || forced.includes('custom'))) || (!isForced && !!req.llmConfig);
+  const isLlmConfigured = !!req.llmConfig && (
+    !req.llmConfig.endpoint?.trim() ? false :
+    (req.llmConfig.endpoint.includes('localhost') || req.llmConfig.endpoint.includes('127.0.0.1')) ||
+    !!req.llmConfig.apiKey?.trim()
+  );
+  const runLlm = (forced && (forced.includes('llm') || forced.includes('ai') || forced.includes('openai') || forced.includes('deepseek') || forced.includes('ollama') || forced.includes('glm') || forced.includes('custom'))) || (!isForced && isLlmConfigured);
   if (runLlm && req.llmConfig) {
     const provider = req.llmConfig.provider || 'AI';
     tasks.push(
@@ -1574,3 +1581,99 @@ export async function cmdChatLlmStream(
   }
   return full;
 }
+
+export interface UpdateAssetInfo {
+  name: string;
+  url: string;
+  size: number;
+  sha256?: string | null;
+}
+
+export interface UpdateInfo {
+  version: string;
+  release_date: string;
+  download_url: string;
+  sha256?: string | null;
+  release_notes: string;
+  assets: UpdateAssetInfo[];
+}
+
+export interface UpdateCheckResult {
+  latest?: UpdateInfo | null;
+  has_update: boolean;
+  current_version: string;
+  error?: string | null;
+}
+
+export interface AppInfo {
+  name: string;
+  version: string;
+  repo_url: string;
+}
+
+export async function cmdCheckAppUpdate(): Promise<UpdateCheckResult> {
+  if (isTauri()) {
+    return await invoke<UpdateCheckResult>('cmd_check_app_update');
+  }
+  // Browser / JSDOM fallback
+  try {
+    const res = await fetch('https://api.github.com/repos/maobukeai/catwalk-translator/releases/latest', {
+      headers: { 'Accept': 'application/vnd.github.v3+json' },
+    });
+    if (!res.ok) {
+      if (res.status === 404) {
+        return {
+          latest: null,
+          has_update: false,
+          current_version: '0.1.3',
+          error: '未找到已发布的 Release 版本 (404)',
+        };
+      }
+      return {
+        latest: null,
+        has_update: false,
+        current_version: '0.1.3',
+        error: `GitHub API 返回 HTTP ${res.status}`,
+      };
+    }
+    const json = await res.json();
+    const tag = String(json.tag_name || '').replace(/^[vV]/, '');
+    const has_update = tag > '0.1.3';
+    return {
+      latest: {
+        version: tag || '0.1.3',
+        release_date: json.published_at || '',
+        download_url: json.html_url || 'https://github.com/maobukeai/catwalk-translator/releases',
+        release_notes: json.body || '',
+        assets: (json.assets || []).map((a: any) => ({
+          name: a.name,
+          url: a.browser_download_url,
+          size: a.size || 0,
+          sha256: null,
+        })),
+      },
+      has_update,
+      current_version: '0.1.3',
+      error: null,
+    };
+  } catch (err) {
+    return {
+      latest: null,
+      has_update: false,
+      current_version: '0.1.3',
+      error: `检查更新失败: ${String(err)}`,
+    };
+  }
+}
+
+export async function cmdGetAppInfo(): Promise<AppInfo> {
+  if (isTauri()) {
+    return await invoke<AppInfo>('cmd_get_app_info');
+  }
+  return {
+    name: '猫步翻译',
+    version: '0.1.3',
+    repo_url: 'https://github.com/maobukeai/catwalk-translator',
+  };
+}
+

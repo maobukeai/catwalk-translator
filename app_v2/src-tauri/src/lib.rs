@@ -10,6 +10,7 @@ pub mod onnx_ocr;
 pub mod reconstruction;
 pub mod sampler;
 pub mod translator;
+pub mod updater;
 
 use commands::AppState;
 use std::str::FromStr;
@@ -618,6 +619,8 @@ pub fn run() {
             commands::cmd_offline_status,
             commands::cmd_image_ocr_translate,
             commands::cmd_exit_app,
+            updater::cmd_check_app_update,
+            updater::cmd_get_app_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

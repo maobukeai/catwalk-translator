@@ -467,9 +467,9 @@ fn test_m3_universal_translate_100_percent_cards_retained() {
             translation_tiers: None,
             style: None,
             forced_engine: None,
-            baidu_app_id: None,
-            baidu_secret: None,
-            deepl_api_key: None,
+            baidu_app_id: Some("mock_id".to_string()),
+            baidu_secret: Some("mock_sec".to_string()),
+            deepl_api_key: Some("mock_key".to_string()),
             deepl_custom_url: None,
         };
 

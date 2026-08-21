@@ -63,4 +63,22 @@ describe('TitleBar Windows 11 Controls Test Suite', () => {
     fireEvent.click(spotlightBtn);
     expect(handleQuickSearch).toHaveBeenCalledTimes(1);
   });
+
+  it('renders and handles onOpenAbout when provided in titlebar', () => {
+    const handleOpenAbout = vi.fn();
+    render(<TitleBar onOpenAbout={handleOpenAbout} />);
+
+    const aboutBtn = screen.getByRole('button', { name: '软件信息' });
+    expect(aboutBtn).toBeInTheDocument();
+
+    fireEvent.click(aboutBtn);
+    expect(handleOpenAbout).toHaveBeenCalledTimes(1);
+
+    const brandBtn = screen.getByAltText('猫步翻译').closest('button');
+    expect(brandBtn).toBeInTheDocument();
+    if (brandBtn) {
+      fireEvent.click(brandBtn);
+      expect(handleOpenAbout).toHaveBeenCalledTimes(2);
+    }
+  });
 });

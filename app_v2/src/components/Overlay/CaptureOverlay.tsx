@@ -79,6 +79,13 @@ const TARGET_LANG_OPTIONS: { code: LanguageCode; label: string }[] = [
   { code: 'de', label: '德' },
   { code: 'fr', label: '法' },
   { code: 'es', label: '西' },
+  { code: 'ru', label: '俄' },
+  { code: 'zh-TW', label: '繁' },
+  { code: 'it', label: '意' },
+  { code: 'pt', label: '葡' },
+  { code: 'ar', label: '阿' },
+  { code: 'th', label: '泰' },
+  { code: 'vi', label: '越' },
 ];
 
 /** 8 resize handles around the adjusting rect: four corners + four edge midpoints. */
@@ -347,7 +354,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           sourceLang: 'auto',
           targetLang,
           preset: selectedEngine !== 'auto' ? selectedEngine : (settings.defaultPreset || 'blender'),
-          llmConfig: selectedEngine === 'auto' || ['deepseek', 'openai', 'ollama', 'custom'].includes(selectedEngine)
+          llmConfig: ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k))
             ? settings.llmConfig
             : null,
           presetDicts: settings.presetDicts,
@@ -1025,9 +1032,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     // card's text in place as soon as results arrive.
     const phrases = layout.blocks.map((b) => b.original);
     const preset = selectedEngine !== 'auto' ? selectedEngine : (settings.defaultPreset || 'blender');
-    const llmConfig = selectedEngine === 'auto' ? settings.llmConfig ?? null : (
-      ['deepseek', 'openai', 'ollama', 'custom'].includes(selectedEngine) ? settings.llmConfig ?? null : null
-    );
+    const isExplicitLlm = ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k));
+    const llmConfig = isExplicitLlm ? (settings.llmConfig ?? null) : null;
     const style = settings.translationStyle;
 
     try {
@@ -1162,8 +1168,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     const block = overlayResult.blocks[blockIndex];
     if (!block) return;
     const preset = selectedEngine !== 'auto' ? selectedEngine : (settings.defaultPreset || 'blender');
+    const isExplicitLlm = ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k));
+    const llmConfig = isExplicitLlm ? (settings.llmConfig ?? null) : null;
     try {
-      const [tr] = await cmdTranslatePhrasesStyled([block.original], preset, settings.llmConfig ?? null, settings.translationStyle);
+      const [tr] = await cmdTranslatePhrasesStyled([block.original], preset, llmConfig, settings.translationStyle);
       if (!mountedRef.current) return;
       if (tr && tr.translated && tr.translated.trim()) {
         setOverlayResult((prev) => prev ? {
@@ -1679,9 +1687,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         ? { x: adjustRect.x, y: adjustRect.y, w: adjustRect.width, h: adjustRect.height }
         : null);
 
-  // 速赢 3: 降级感知检测（用户指定 LLM 但结果为 Fallback / Google / MyMemory / 词库）
-  const isLlmEngine = ['deepseek', 'openai', 'ollama', 'custom'].includes(selectedEngine) ||
-    (selectedEngine === 'auto' && Boolean(settings.llmConfig?.apiKey));
+  // 降级感知检测（仅当用户在工具栏主动切换为 AI 大模型时，若大模型失败降级才提示）
+  const isLlmEngine = ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k));
 
   let isDowngraded = false;
   let effectiveEngineName = '公共备用通道';
@@ -1832,14 +1839,6 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                   <div className="absolute bottom-0 left-0 w-2.5 h-2.5 border-b-2 border-l-2 border-sky-300 pointer-events-none" />
                   <div className="absolute bottom-0 right-0 w-2.5 h-2.5 border-b-2 border-r-2 border-sky-300 pointer-events-none" />
                 </>
-              )}
-
-              {/* 尺寸指示气泡 (如 310 × 59 px) */}
-              {phase !== 'processing' && (
-                <span className="absolute -top-7 left-0 text-[11px] font-mono font-bold bg-slate-900/90 text-white px-2.5 py-0.5 rounded-md shadow-lg border border-emerald-500/40 flex items-center gap-1.5 backdrop-blur-md">
-                  <span className="text-emerald-400 font-bold">📐</span>
-                  <span>{Math.round(activeBox.w)} × {Math.round(activeBox.h)} px</span>
-                </span>
               )}
 
               {/* 调整模式：8 个白色绿边控制点 */}

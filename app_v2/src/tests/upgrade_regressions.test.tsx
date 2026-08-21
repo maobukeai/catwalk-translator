@@ -60,7 +60,7 @@ async function mouseSelection() {
   fireEvent.mouseMove(container, { clientX: 400, clientY: 200 });
   fireEvent.mouseUp(container);
   // v2.4: release freezes the rect into adjust mode — confirm with Enter
-  fireEvent(window, new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+  fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
 }
 
 describe('shared hotkey matcher (services/hotkeys)', () => {
@@ -244,8 +244,8 @@ describe('v2.2 feature upgrades: snap / style / collapse / replay', () => {
       />
     );
 
-    // 五个功能入口 + 截图 CTA 均可按 aria-label 命中
-    for (const label of ['翻译器', '划词查词', 'AI 对话', '生词本', '系统设置', '划词翻译']) {
+    // 四个功能入口 + 截图 CTA 均可按 aria-label 命中
+    for (const label of ['翻译器', 'AI 对话', '生词本', '系统设置', '划词翻译']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
 

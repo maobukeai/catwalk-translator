@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   ArrowDown,
@@ -310,6 +311,7 @@ interface SettingsDashboardProps {
   onTriggerSpotlight?: () => void;
   onTriggerClipboard?: () => void;
   onToggleWindow?: () => void;
+  onOpenAbout?: () => void;
 }
 
 export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
@@ -317,6 +319,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   onTriggerSpotlight,
   onTriggerClipboard,
   onToggleWindow,
+  onOpenAbout,
 }) => {
   const {
     settings,
@@ -766,7 +769,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   const categories = [
     { id: 'appearance', label: '外观与个性化', icon: Palette },
     { id: 'hotkey', label: '快捷键与 AI 模型', icon: Zap },
-    { id: 'online', label: `在线引擎 (${activeOnlineCount})`, icon: Globe },
+    { id: 'online', label: '在线引擎', badge: activeOnlineCount, icon: Globe },
     { id: 'dicts', label: '专业词库', icon: BookOpen },
     { id: 'preference', label: '优先级', icon: Sliders },
   ] as const;
@@ -833,29 +836,59 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
 
       {/* 顶部二级分类分段选择器 */}
       <nav
-        className={`flex items-center space-x-1 p-1.5 rounded-xl border shadow-sm backdrop-blur-md overflow-hidden ${
-          isLight ? 'bg-slate-200/80 border-slate-300/80' : 'bg-white/10 border-white/20'
+        className={`flex items-center gap-1 p-1 rounded-xl border shadow-2xs backdrop-blur-md transition-colors ${
+          isLight
+            ? 'bg-black/[0.04] border-black/[0.06]'
+            : 'bg-white/[0.06] border-white/[0.08]'
         }`}
         aria-label="设置分类"
       >
         {categories.map((cat) => {
           const Icon = cat.icon;
           const isActive = activeCategory === cat.id;
+          const badgeCount = 'badge' in cat ? cat.badge : undefined;
           return (
             <button
               key={cat.id}
               type="button"
               onClick={() => setActiveCategory(cat.id as SettingCategory)}
-              className={`flex-1 min-w-0 flex items-center justify-center space-x-1.5 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all duration-200 cursor-pointer whitespace-nowrap ${
+              className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer select-none whitespace-nowrap ${
                 isActive
-                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md border border-blue-400/40 font-bold'
+                  ? isLight
+                    ? 'bg-white text-blue-600 shadow-sm border border-black/[0.06] font-bold'
+                    : 'bg-white/15 text-white shadow-sm border border-white/15 font-bold'
                   : isLight
-                  ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-300/60'
-                  : 'text-zinc-300 hover:text-white hover:bg-white/10'
+                  ? 'text-slate-600 hover:text-slate-900 hover:bg-black/[0.03]'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.05]'
               }`}
             >
-              <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white' : isLight ? 'text-slate-500' : 'text-zinc-300'}`} />
+              <Icon
+                className={`w-3.5 h-3.5 shrink-0 transition-colors ${
+                  isActive
+                    ? isLight
+                      ? 'text-blue-600'
+                      : 'text-blue-400'
+                    : isLight
+                    ? 'text-slate-500'
+                    : 'text-zinc-400'
+                }`}
+              />
               <span className="truncate">{cat.label}</span>
+              {badgeCount !== undefined && (
+                <span
+                  className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none shrink-0 transition-colors ${
+                    isActive
+                      ? isLight
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-blue-500/25 text-blue-300'
+                      : isLight
+                      ? 'bg-black/[0.06] text-slate-600'
+                      : 'bg-white/10 text-zinc-400'
+                  }`}
+                >
+                  {badgeCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -877,38 +910,38 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
               </p>
             </div>
 
-            {/* 1. Live Preview Card 实时效果预览 */}
-            <div className={`relative overflow-hidden rounded-2xl border p-4 space-y-3.5 shadow-xs transition-all ${
+            {/* 1. Live Preview Card 实时效果预览 (紧凑型设计，减少垂直占用) */}
+            <div className={`relative overflow-hidden rounded-xl border p-3 space-y-2.5 shadow-xs transition-all ${
               isLight ? 'border-slate-300/80 bg-white/45 backdrop-blur-md' : 'border-white/10 bg-zinc-950/80'
             }`}>
-              <div className={`flex flex-wrap items-center justify-between gap-2 border-b pb-2.5 relative z-10 ${
+              <div className={`flex flex-wrap items-center justify-between gap-1.5 border-b pb-2 relative z-10 ${
                 isLight ? 'border-slate-200' : 'border-white/[0.08]'
               }`}>
-                <div className={`flex items-center space-x-2 text-xs font-bold ${
+                <div className={`flex items-center space-x-1.5 text-xs font-bold ${
                   isLight ? 'text-slate-800' : 'text-zinc-200'
                 }`}>
-                  <Sparkles className="h-4 w-4 text-blue-500 shrink-0" />
-                  <span>实时效果预览 (Live Preview)</span>
+                  <Sparkles className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                  <span>效果预览</span>
                 </div>
                 
-                {/* 状态徽章 (高对比度清晰文字) */}
-                <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
-                  <span className={`px-2.5 py-0.5 rounded-full font-semibold border shadow-xs ${
+                {/* 状态徽章 (紧凑高对比度) */}
+                <div className="flex flex-wrap items-center gap-1 text-[10px] font-mono">
+                  <span className={`px-2 py-0.5 rounded-full font-semibold border shadow-xs ${
                     isLight ? 'bg-blue-100 text-blue-800 border-blue-300' : 'bg-blue-500/20 text-blue-300 border-blue-400/30'
                   }`}>
-                    主题: {appearance.theme === 'dark' || appearance.theme === ('fluent-dark' as any) ? '经典深色' : appearance.theme === 'light' ? '明亮浅色' : '跟随系统'}
+                    主题: {appearance.theme === 'dark' || appearance.theme === ('fluent-dark' as any) ? '深色' : appearance.theme === 'light' ? '浅色' : '跟随系统'}
                   </span>
-                  <span className={`px-2.5 py-0.5 rounded-full font-semibold border shadow-xs ${
+                  <span className={`px-2 py-0.5 rounded-full font-semibold border shadow-xs ${
                     isLight ? 'bg-purple-100 text-purple-800 border-purple-300' : 'bg-purple-500/20 text-purple-300 border-purple-400/30'
                   }`}>
                     字体: {appearance.fontFamily === 'yahei' ? '微软雅黑' : appearance.fontFamily === 'segoe' ? 'Segoe UI' : appearance.fontFamily === 'inter' ? 'Inter' : appearance.fontFamily === 'mono' ? 'JetBrains Mono' : '系统默认'}
                   </span>
-                  <span className={`px-2.5 py-0.5 rounded-full font-semibold border shadow-xs ${
+                  <span className={`px-2 py-0.5 rounded-full font-semibold border shadow-xs ${
                     isLight ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30'
                   }`}>
-                    字号: {appearance.fontSize === 'small' ? '小 (13px)' : appearance.fontSize === 'medium' ? '中 (14px)' : appearance.fontSize === 'large' ? '大 (16px)' : '超大 (18px)'}
+                    字号: {appearance.fontSize === 'small' ? '13px' : appearance.fontSize === 'medium' ? '14px' : appearance.fontSize === 'large' ? '16px' : '18px'}
                   </span>
-                  <span className={`px-2.5 py-0.5 rounded-full font-semibold border shadow-xs ${
+                  <span className={`px-2 py-0.5 rounded-full font-semibold border shadow-xs ${
                     isLight ? 'bg-amber-100 text-amber-800 border-amber-300' : 'bg-amber-500/20 text-amber-300 border-amber-400/30'
                   }`}>
                     磨砂: {(appearance.enableBlur ?? true) ? `${appearance.blurAmount ?? 24}px` : '禁用'}
@@ -916,73 +949,42 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                 </div>
               </div>
 
-              {/* 模拟真实的划词与对译卡片效果舞台（底层生动高对比度测试图谱 + 顶层磨砂卡片） */}
-              <div className="relative rounded-xl overflow-hidden min-h-[140px] flex items-center justify-center p-3 sm:p-5 border border-slate-300/60 dark:border-white/10">
-                {/* 底层：高对比度生动测试图谱（包含鲜艳马卡龙/霓虹渐变几何图形、流线型色带与微光网格点阵） */}
+              {/* 紧凑模拟舞台 */}
+              <div className="relative rounded-lg overflow-hidden h-16 sm:h-20 min-h-0 flex items-center justify-center p-2 border border-slate-300/60 dark:border-white/10">
+                {/* 底层：高对比度生动测试极光图谱 */}
                 <div
                   aria-hidden
                   className="absolute inset-0 pointer-events-none overflow-hidden select-none"
                   style={{
                     filter: (appearance.enableBlur ?? true) ? `blur(${((appearance.blurAmount ?? 24) * 0.85).toFixed(1)}px)` : 'none',
-                    transition: 'filter 120ms ease-out',
                   }}
                 >
-                  {/* 坐标点阵微光背景 */}
                   <div
                     className="absolute inset-0 opacity-40"
                     style={{
                       backgroundImage: isLight
                         ? 'radial-gradient(#3b82f6 1.5px, transparent 1.5px), radial-gradient(#ec4899 1px, transparent 1px)'
                         : 'radial-gradient(#60a5fa 1.5px, transparent 1.5px), radial-gradient(#f43f5e 1px, transparent 1px)',
-                      backgroundSize: '20px 20px, 40px 40px',
-                      backgroundPosition: '0 0, 10px 10px',
-                    }}
-                  />
-
-                  {/* 鲜艳流线霓虹色带 */}
-                  <div
-                    className="absolute -top-10 -left-10 w-64 h-48 rounded-3xl opacity-85 transform -rotate-12"
-                    style={{
-                      background: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 50%, #8b5cf6 100%)',
+                      backgroundSize: '16px 16px',
                     }}
                   />
                   <div
-                    className="absolute top-2 left-1/3 w-56 h-36 rounded-full opacity-80 transform rotate-45"
-                    style={{
-                      background: 'linear-gradient(120deg, #ec4899 0%, #f43f5e 50%, #fb923c 100%)',
-                    }}
+                    className="absolute -top-8 -left-6 w-48 h-32 rounded-3xl opacity-85 transform -rotate-12"
+                    style={{ background: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 50%, #8b5cf6 100%)' }}
                   />
                   <div
-                    className="absolute -bottom-8 -right-8 w-72 h-44 rounded-3xl opacity-80 transform rotate-12"
-                    style={{
-                      background: 'linear-gradient(145deg, #10b981 0%, #06b6d4 50%, #3b82f6 100%)',
-                    }}
+                    className="absolute top-0 left-1/3 w-40 h-24 rounded-full opacity-80 transform rotate-45"
+                    style={{ background: 'linear-gradient(120deg, #ec4899 0%, #f43f5e 50%, #fb923c 100%)' }}
                   />
                   <div
-                    className="absolute bottom-2 left-10 w-40 h-24 rounded-2xl opacity-75 transform -rotate-6"
-                    style={{
-                      background: 'linear-gradient(90deg, #f59e0b 0%, #ef4444 100%)',
-                    }}
+                    className="absolute -bottom-6 -right-6 w-48 h-32 rounded-3xl opacity-80 transform rotate-12"
+                    style={{ background: 'linear-gradient(145deg, #10b981 0%, #06b6d4 50%, #3b82f6 100%)' }}
                   />
-
-                  {/* 几何辅助标线与色块 */}
-                  <div className="absolute top-3 right-4 flex items-center space-x-1.5 opacity-90 font-mono text-[9px] font-bold text-white px-2 py-0.5 rounded bg-black/50 border border-white/20">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                    <span>TEST PATTERN // DIFFUSION</span>
-                  </div>
-                  
-                  <div className="absolute bottom-2.5 left-4 flex items-center space-x-1.5 opacity-80">
-                    <div className="w-3.5 h-3.5 rounded bg-cyan-400" />
-                    <div className="w-3.5 h-3.5 rounded-full bg-pink-500" />
-                    <div className="w-3.5 h-3.5 rounded bg-amber-400" />
-                    <div className="w-3.5 h-3.5 rounded-full bg-indigo-500" />
-                    <div className="w-3.5 h-3.5 rounded bg-emerald-400" />
-                  </div>
                 </div>
 
-                {/* 顶层：划词与对译磨砂玻璃悬浮卡片 */}
+                {/* 顶层：划词与对译磨砂玻璃悬浮卡片 (紧凑单行/双行横向) */}
                 <div
-                  className={`relative z-10 w-full max-w-2xl overflow-hidden rounded-xl p-4 sm:p-5 transition-all duration-150 border space-y-2.5 shadow-lg ${
+                  className={`relative z-10 w-full max-w-xl overflow-hidden rounded-lg px-3 py-1.5 sm:py-2 border flex items-center justify-between gap-3 shadow-md ${
                     isLight
                       ? 'text-slate-900 border-white/80 shadow-slate-900/10'
                       : 'text-zinc-100 border-white/20 shadow-black/40'
@@ -1009,48 +1011,27 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                         : 'system-ui, sans-serif',
                   }}
                 >
-                  {/* 磨砂微颗粒层 */}
-                  {(appearance.enableBlur ?? true) && (
-                    <div
-                      aria-hidden
-                      className="absolute inset-0 pointer-events-none opacity-25"
-                      style={{
-                        backgroundImage: isLight
-                          ? 'radial-gradient(rgba(0, 0, 0, 0.15) 1px, transparent 1.2px)'
-                          : 'radial-gradient(rgba(255, 255, 255, 0.25) 1px, transparent 1.2px)',
-                        backgroundSize: '8px 8px',
-                      }}
-                    />
-                  )}
-
-                  <div className="relative z-10 flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-base">🐱</span>
-                      <span className="font-bold text-blue-600 dark:text-blue-400 text-xs">划词对译即时效果</span>
-                    </div>
-                    <span className={`text-[10px] font-mono font-medium px-2.5 py-0.5 rounded-full border shadow-xs ${
-                      isLight ? 'bg-blue-50/90 text-blue-700 border-blue-200' : 'bg-blue-500/20 text-blue-300 border-blue-400/30'
-                    }`}>
-                      🧊 Blender CG 专属词库 (极速响应)
-                    </span>
-                  </div>
-
-                  <div className="relative z-10 space-y-1">
-                    <div className={`font-mono font-medium ${
-                      isLight ? 'text-slate-700' : 'text-zinc-300'
-                    } ${
-                      appearance.fontSize === 'small' ? 'text-xs' : appearance.fontSize === 'medium' ? 'text-xs' : appearance.fontSize === 'large' ? 'text-sm' : 'text-base'
-                    }`}>
-                      Principled BSDF (Roughness: 0.15, Metallic: 0.90)
-                    </div>
-                    <div className={`font-bold tracking-wide ${
-                      isLight ? 'text-slate-950' : 'text-white'
-                    } ${
-                      appearance.fontSize === 'small' ? 'text-xs' : appearance.fontSize === 'medium' ? 'text-sm' : appearance.fontSize === 'large' ? 'text-base' : 'text-lg'
-                    }`}>
-                      原理化 BSDF 材质节点 (粗糙度: 0.15, 金属度: 0.90)
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm shrink-0">🐱</span>
+                    <div className="min-w-0">
+                      <div className={`font-mono text-[11px] opacity-75 truncate leading-tight ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
+                        Principled BSDF
+                      </div>
+                      <div className={`font-bold tracking-tight truncate leading-snug ${
+                        isLight ? 'text-slate-950' : 'text-white'
+                      } ${
+                        appearance.fontSize === 'small' ? 'text-xs' : appearance.fontSize === 'medium' ? 'text-sm' : appearance.fontSize === 'large' ? 'text-base' : 'text-base font-extrabold'
+                      }`}>
+                        原理化 BSDF 材质节点
+                      </div>
                     </div>
                   </div>
+
+                  <span className={`text-[10px] font-mono font-medium px-2 py-0.5 rounded-full border shadow-xs shrink-0 whitespace-nowrap hidden sm:inline-flex ${
+                    isLight ? 'bg-blue-50/90 text-blue-700 border-blue-200' : 'bg-blue-500/20 text-blue-300 border-blue-400/30'
+                  }`}>
+                    🧊 Blender CG 专属词库
+                  </span>
                 </div>
               </div>
             </div>
@@ -1142,6 +1123,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                     max="40"
                     value={appearance.blurAmount ?? 24}
                     onChange={(e) => setBlurAmount(Number(e.target.value))}
+                    onInput={(e) => setBlurAmount(Number((e.target as HTMLInputElement).value))}
                     className="w-full h-1.5 bg-zinc-300 dark:bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-600"
                   />
                   <div className={`flex justify-between text-[10px] pt-0.5 ${isLight ? 'text-slate-600 font-medium' : 'text-zinc-400'}`}>
@@ -1158,11 +1140,11 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
               <label className={`block text-xs font-bold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>字体样式 (Font Family)</label>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                 {[
-                  { id: 'system', name: '系统默认', sub: 'System UI', fontStyle: 'system-ui' },
-                  { id: 'yahei', name: '微软雅黑', sub: 'Microsoft YaHei', fontStyle: '"Microsoft YaHei"' },
-                  { id: 'segoe', name: 'Segoe UI', sub: 'Segoe UI', fontStyle: '"Segoe UI"' },
-                  { id: 'inter', name: 'Inter', sub: '现代无衬线', fontStyle: '"Inter"' },
-                  { id: 'mono', name: '等宽字体', sub: 'JetBrains Mono', fontStyle: '"JetBrains Mono", monospace' },
+                  { id: 'system', name: '系统默认', sub: 'System UI', fontStyle: "'Segoe UI Variable Text', system-ui, -apple-system, Segoe UI, Roboto, 'Microsoft YaHei UI', 'PingFang SC', sans-serif" },
+                  { id: 'yahei', name: '微软雅黑', sub: 'Microsoft YaHei', fontStyle: "'Microsoft YaHei UI', 'Microsoft YaHei', '微软雅黑', 'PingFang SC', sans-serif" },
+                  { id: 'segoe', name: 'Segoe UI', sub: 'Segoe UI', fontStyle: "'Segoe UI Variable Text', 'Segoe UI', -apple-system, sans-serif" },
+                  { id: 'inter', name: 'Inter', sub: '现代无衬线', fontStyle: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" },
+                  { id: 'mono', name: '等宽字体', sub: 'JetBrains Mono', fontStyle: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', ui-monospace, Consolas, Monaco, monospace" },
                 ].map((f) => {
                   const isSelected = appearance.fontFamily === f.id;
                   return (
@@ -1240,231 +1222,213 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
               </p>
             </div>
 
-            {/* 全局快捷键控制中心 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* 全局快捷键控制中心 - 紧凑型极简列表 */}
+            <div className={`rounded-xl border divide-y overflow-hidden shadow-xs ${
+              isLight ? 'bg-white/70 border-slate-200 divide-slate-100' : 'bg-zinc-950/60 border-white/[0.08] divide-white/[0.05]'
+            }`}>
               {/* 1. 全局划词选区 */}
-              <div className={`flex flex-col justify-between p-4 rounded-2xl border transition-all ${
-                isLight ? 'bg-slate-100/90 border-slate-200 shadow-xs hover:border-slate-300' : 'bg-zinc-950/70 border-white/[0.07] shadow-xs hover:border-white/15'
-              }`}>
-                <div className="flex items-start justify-between space-x-3 mb-3">
-                  <div className="flex items-center space-x-2.5 min-w-0">
-                    <span className="text-lg p-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 shrink-0 select-none">📸</span>
-                    <div className="min-w-0">
-                      <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>全局划词选区</div>
-                      <div className={`text-[10px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>桌面全屏鼠标划词与擦除翻译</div>
-                    </div>
+              <div className="flex items-center justify-between p-2.5 sm:px-3.5 gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <span className="text-sm p-1 rounded-lg bg-blue-500/10 border border-blue-500/20 shrink-0 select-none">📸</span>
+                  <div className="min-w-0">
+                    <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>全局划词选区</div>
+                    <div className={`text-[10.5px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate`}>桌面全屏鼠标划词与擦除翻译</div>
                   </div>
+                </div>
+
+                <div className="flex items-center space-x-1.5 shrink-0">
+                  <kbd
+                    onClick={() => setRecordingTarget(recordingTarget === 'capture' ? null : 'capture')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider transition-all shadow-xs cursor-pointer border ${
+                      recordingTarget === 'capture'
+                        ? 'bg-blue-600/30 text-blue-600 border-blue-500 animate-pulse'
+                        : (isLight ? 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50' : 'bg-zinc-900 text-blue-400 border-blue-500/40 hover:bg-zinc-800')
+                    } ${!(settings.captureHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
+                    title="点击开始录制按键"
+                  >
+                    {recordingTarget === 'capture' ? '⌨️ 请按下按键...' : settings.hotkey || 'F4'}
+                  </kbd>
 
                   <button
                     type="button"
-                    onClick={() => setCaptureHotkeyEnabled(!(settings.captureHotkeyEnabled ?? true))}
-                    className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors cursor-pointer shrink-0 mt-0.5 ${
-                      (settings.captureHotkeyEnabled ?? true) ? 'bg-blue-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                    onClick={() => setRecordingTarget(recordingTarget === 'capture' ? null : 'capture')}
+                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                      recordingTarget === 'capture'
+                        ? 'bg-rose-500/20 text-rose-600 border-rose-300'
+                        : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
                     }`}
-                    title="开启或关闭该快捷键"
                   >
-                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.captureHotkeyEnabled ?? true) ? 'translate-x-5' : 'translate-x-1'
-                    }`} />
+                    {recordingTarget === 'capture' ? '取消' : '重新录制'}
                   </button>
-                </div>
-
-                <div className={`flex items-center justify-between pt-2.5 border-t ${isLight ? 'border-slate-200/80' : 'border-white/[0.06]'}`}>
-                  <div className="flex items-center space-x-2">
-                    <kbd
-                      onClick={() => setRecordingTarget(recordingTarget === 'capture' ? null : 'capture')}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold tracking-wider transition-all shadow-xs cursor-pointer border ${
-                        recordingTarget === 'capture'
-                          ? 'bg-blue-600/30 text-blue-600 border-blue-500 animate-pulse'
-                          : (isLight ? 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50' : 'bg-zinc-900 text-blue-400 border-blue-500/40 hover:bg-zinc-800')
-                      } ${!(settings.captureHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
-                      title="点击开始录制按键"
-                    >
-                      {recordingTarget === 'capture' ? '⌨️ 请按下按键...' : settings.hotkey || 'F4'}
-                    </kbd>
-
-                    <button
-                      type="button"
-                      onClick={() => setRecordingTarget(recordingTarget === 'capture' ? null : 'capture')}
-                      className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition cursor-pointer ${
-                        recordingTarget === 'capture'
-                          ? 'bg-rose-500/20 text-rose-600 border-rose-300'
-                          : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
-                      }`}
-                    >
-                      {recordingTarget === 'capture' ? '取消' : '重新录制'}
-                    </button>
-                  </div>
 
                   {onStartCapture && (
                     <button
                       type="button"
                       onClick={onStartCapture}
-                      className="px-2.5 py-1.5 rounded-xl bg-blue-600/10 hover:bg-blue-600/20 text-blue-600 dark:text-sky-400 text-xs font-bold border border-blue-500/30 transition cursor-pointer shrink-0"
+                      className="px-2 py-1 rounded-lg bg-blue-600/10 hover:bg-blue-600/20 text-blue-600 dark:text-sky-400 text-[11px] font-semibold border border-blue-500/30 transition cursor-pointer"
                     >
-                      🚀 点击测试
+                      🚀 测试
                     </button>
                   )}
-                </div>
-              </div>
-
-              {/* 2. Spotlight 居中极简查词 */}
-              <div className={`flex flex-col justify-between p-4 rounded-2xl border transition-all ${
-                isLight ? 'bg-slate-100/90 border-slate-200 shadow-xs hover:border-slate-300' : 'bg-zinc-950/70 border-white/[0.07] shadow-xs hover:border-white/15'
-              }`}>
-                <div className="flex items-start justify-between space-x-3 mb-3">
-                  <div className="flex items-center space-x-2.5 min-w-0">
-                    <span className="text-lg p-1.5 rounded-xl bg-purple-500/10 border border-purple-500/20 shrink-0 select-none">🔍</span>
-                    <div className="min-w-0">
-                      <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>Spotlight 居中查词</div>
-                      <div className={`text-[10px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>屏幕中央弹框，极速打字查词</div>
-                    </div>
-                  </div>
 
                   <button
                     type="button"
-                    onClick={() => setSpotlightHotkeyEnabled(!(settings.spotlightHotkeyEnabled ?? true))}
-                    className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors cursor-pointer shrink-0 mt-0.5 ${
-                      (settings.spotlightHotkeyEnabled ?? true) ? 'bg-purple-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                    onClick={() => setCaptureHotkeyEnabled(!(settings.captureHotkeyEnabled ?? true))}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-1 ${
+                      (settings.captureHotkeyEnabled ?? true) ? 'bg-blue-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                     }`}
                     title="开启或关闭该快捷键"
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.spotlightHotkeyEnabled ?? true) ? 'translate-x-5' : 'translate-x-1'
+                      (settings.captureHotkeyEnabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
                     }`} />
                   </button>
                 </div>
+              </div>
 
-                <div className={`flex items-center justify-between pt-2.5 border-t ${isLight ? 'border-slate-200/80' : 'border-white/[0.06]'}`}>
-                  <div className="flex items-center space-x-2">
-                    <kbd
-                      onClick={() => setRecordingTarget(recordingTarget === 'spotlight' ? null : 'spotlight')}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold tracking-wider transition-all shadow-xs cursor-pointer border ${
-                        recordingTarget === 'spotlight'
-                          ? 'bg-purple-600/30 text-purple-600 border-purple-500 animate-pulse'
-                          : (isLight ? 'bg-white text-purple-600 border-purple-300 hover:bg-purple-50' : 'bg-zinc-900 text-purple-400 border-purple-500/40 hover:bg-zinc-800')
-                      } ${!(settings.spotlightHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
-                      title="点击开始录制按键"
-                    >
-                      {recordingTarget === 'spotlight' ? '⌨️ 请按下按键...' : settings.spotlightHotkey || 'Alt+Space'}
-                    </kbd>
-
-                    <button
-                      type="button"
-                      onClick={() => setRecordingTarget(recordingTarget === 'spotlight' ? null : 'spotlight')}
-                      className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition cursor-pointer ${
-                        recordingTarget === 'spotlight'
-                          ? 'bg-rose-500/20 text-rose-600 border-rose-300'
-                          : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
-                      }`}
-                    >
-                      {recordingTarget === 'spotlight' ? '取消' : '重新录制'}
-                    </button>
+              {/* 2. Spotlight 居中查词 */}
+              <div className="flex items-center justify-between p-2.5 sm:px-3.5 gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <span className="text-sm p-1 rounded-lg bg-purple-500/10 border border-purple-500/20 shrink-0 select-none">🔍</span>
+                  <div className="min-w-0">
+                    <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>Spotlight 居中查词</div>
+                    <div className={`text-[10.5px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate`}>屏幕中央弹框，极速打字查词</div>
                   </div>
+                </div>
+
+                <div className="flex items-center space-x-1.5 shrink-0">
+                  <kbd
+                    onClick={() => setRecordingTarget(recordingTarget === 'spotlight' ? null : 'spotlight')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider transition-all shadow-xs cursor-pointer border ${
+                      recordingTarget === 'spotlight'
+                        ? 'bg-purple-600/30 text-purple-600 border-purple-500 animate-pulse'
+                        : (isLight ? 'bg-white text-purple-600 border-purple-300 hover:bg-purple-50' : 'bg-zinc-900 text-purple-400 border-purple-500/40 hover:bg-zinc-800')
+                    } ${!(settings.spotlightHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
+                    title="点击开始录制按键"
+                  >
+                    {recordingTarget === 'spotlight' ? '⌨️ 请按下按键...' : settings.spotlightHotkey || 'Alt+Space'}
+                  </kbd>
+
+                  <button
+                    type="button"
+                    onClick={() => setRecordingTarget(recordingTarget === 'spotlight' ? null : 'spotlight')}
+                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                      recordingTarget === 'spotlight'
+                        ? 'bg-rose-500/20 text-rose-600 border-rose-300'
+                        : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
+                    }`}
+                  >
+                    {recordingTarget === 'spotlight' ? '取消' : '重新录制'}
+                  </button>
 
                   {onTriggerSpotlight && (
                     <button
                       type="button"
                       onClick={onTriggerSpotlight}
-                      className="px-2.5 py-1.5 rounded-xl bg-purple-600/10 hover:bg-purple-600/20 text-purple-600 dark:text-purple-400 text-xs font-bold border border-purple-500/30 transition cursor-pointer shrink-0"
+                      className="px-2 py-1 rounded-lg bg-purple-600/10 hover:bg-purple-600/20 text-purple-600 dark:text-purple-400 text-[11px] font-semibold border border-purple-500/30 transition cursor-pointer"
                     >
-                      🚀 点击测试
+                      🚀 测试
                     </button>
                   )}
-                </div>
-              </div>
-
-              {/* 3. 剪贴板静默一键翻译 */}
-              <div className={`flex flex-col justify-between p-4 rounded-2xl border transition-all ${
-                isLight ? 'bg-slate-100/90 border-slate-200 shadow-xs hover:border-slate-300' : 'bg-zinc-950/70 border-white/[0.07] shadow-xs hover:border-white/15'
-              }`}>
-                <div className="flex items-start justify-between space-x-3 mb-3">
-                  <div className="flex items-center space-x-2.5 min-w-0">
-                    <span className="text-lg p-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 shrink-0 select-none">📋</span>
-                    <div className="min-w-0">
-                      <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>剪贴板静默翻译</div>
-                      <div className={`text-[10px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>读取剪贴板文本并右下角弹出</div>
-                    </div>
-                  </div>
 
                   <button
                     type="button"
+                    onClick={() => setSpotlightHotkeyEnabled(!(settings.spotlightHotkeyEnabled ?? true))}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-1 ${
+                      (settings.spotlightHotkeyEnabled ?? true) ? 'bg-purple-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                    }`}
+                    title="开启或关闭该快捷键"
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      (settings.spotlightHotkeyEnabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* 3. 剪贴板静默翻译 */}
+              <div className="flex items-center justify-between p-2.5 sm:px-3.5 gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <span className="text-sm p-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 shrink-0 select-none">📋</span>
+                  <div className="min-w-0">
+                    <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>剪贴板静默翻译</div>
+                    <div className={`text-[10.5px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate`}>读取剪贴板文本并右下角弹出</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-1.5 shrink-0">
+                  <button
+                    type="button"
                     onClick={() => setClipboardHotkeyEnabled(!(settings.clipboardHotkeyEnabled ?? true))}
-                    className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors cursor-pointer shrink-0 mt-0.5 ${
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-1 ${
                       (settings.clipboardHotkeyEnabled ?? true) ? 'bg-emerald-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                     }`}
                     title="开启或关闭该快捷键"
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.clipboardHotkeyEnabled ?? true) ? 'translate-x-5' : 'translate-x-1'
+                      (settings.clipboardHotkeyEnabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
                     }`} />
                   </button>
                 </div>
               </div>
 
-              {/* 4. 主界面显隐切换 */}
-              <div className={`flex flex-col justify-between p-4 rounded-2xl border transition-all ${
-                isLight ? 'bg-slate-100/90 border-slate-200 shadow-xs hover:border-slate-300' : 'bg-zinc-950/70 border-white/[0.07] shadow-xs hover:border-white/15'
-              }`}>
-                <div className="flex items-start justify-between space-x-3 mb-3">
-                  <div className="flex items-center space-x-2.5 min-w-0">
-                    <span className="text-lg p-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 shrink-0 select-none">⚡</span>
-                    <div className="min-w-0">
-                      <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>唤醒 / 隐藏主程序</div>
-                      <div className={`text-[10px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>托盘后台与前台窗口秒切</div>
-                    </div>
+              {/* 4. 唤醒 / 隐藏主程序 */}
+              <div className="flex items-center justify-between p-2.5 sm:px-3.5 gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <span className="text-sm p-1 rounded-lg bg-amber-500/10 border border-amber-500/20 shrink-0 select-none">⚡</span>
+                  <div className="min-w-0">
+                    <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>唤醒 / 隐藏主程序</div>
+                    <div className={`text-[10.5px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate`}>托盘后台与前台窗口秒切</div>
                   </div>
+                </div>
+
+                <div className="flex items-center space-x-1.5 shrink-0">
+                  <kbd
+                    onClick={() => setRecordingTarget(recordingTarget === 'toggleWindow' ? null : 'toggleWindow')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider transition-all shadow-xs cursor-pointer border ${
+                      recordingTarget === 'toggleWindow'
+                        ? 'bg-amber-600/30 text-amber-600 border-amber-500 animate-pulse'
+                        : (isLight ? 'bg-white text-amber-600 border-amber-300 hover:bg-amber-50' : 'bg-zinc-900 text-amber-400 border-amber-500/40 hover:bg-zinc-800')
+                    } ${!(settings.toggleWindowHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
+                    title="点击开始录制按键"
+                  >
+                    {recordingTarget === 'toggleWindow' ? '⌨️ 请按下按键...' : settings.toggleWindowHotkey || 'Alt+Q'}
+                  </kbd>
 
                   <button
                     type="button"
-                    onClick={() => setToggleWindowHotkeyEnabled(!(settings.toggleWindowHotkeyEnabled ?? true))}
-                    className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors cursor-pointer shrink-0 mt-0.5 ${
-                      (settings.toggleWindowHotkeyEnabled ?? true) ? 'bg-amber-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                    onClick={() => setRecordingTarget(recordingTarget === 'toggleWindow' ? null : 'toggleWindow')}
+                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                      recordingTarget === 'toggleWindow'
+                        ? 'bg-rose-500/20 text-rose-600 border-rose-300'
+                        : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
                     }`}
-                    title="开启或关闭该快捷键"
                   >
-                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.toggleWindowHotkeyEnabled ?? true) ? 'translate-x-5' : 'translate-x-1'
-                    }`} />
+                    {recordingTarget === 'toggleWindow' ? '取消' : '重新录制'}
                   </button>
-                </div>
-
-                <div className={`flex items-center justify-between pt-2.5 border-t ${isLight ? 'border-slate-200/80' : 'border-white/[0.06]'}`}>
-                  <div className="flex items-center space-x-2">
-                    <kbd
-                      onClick={() => setRecordingTarget(recordingTarget === 'toggleWindow' ? null : 'toggleWindow')}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold tracking-wider transition-all shadow-xs cursor-pointer border ${
-                        recordingTarget === 'toggleWindow'
-                          ? 'bg-amber-600/30 text-amber-600 border-amber-500 animate-pulse'
-                          : (isLight ? 'bg-white text-amber-600 border-amber-300 hover:bg-amber-50' : 'bg-zinc-900 text-amber-400 border-amber-500/40 hover:bg-zinc-800')
-                      } ${!(settings.toggleWindowHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
-                      title="点击开始录制按键"
-                    >
-                      {recordingTarget === 'toggleWindow' ? '⌨️ 请按下按键...' : settings.toggleWindowHotkey || 'Alt+Q'}
-                    </kbd>
-
-                    <button
-                      type="button"
-                      onClick={() => setRecordingTarget(recordingTarget === 'toggleWindow' ? null : 'toggleWindow')}
-                      className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition cursor-pointer ${
-                        recordingTarget === 'toggleWindow'
-                          ? 'bg-rose-500/20 text-rose-600 border-rose-300'
-                          : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
-                      }`}
-                    >
-                      {recordingTarget === 'toggleWindow' ? '取消' : '重新录制'}
-                    </button>
-                  </div>
 
                   {onToggleWindow && (
                     <button
                       type="button"
                       onClick={onToggleWindow}
-                      className="px-2.5 py-1.5 rounded-xl bg-amber-600/10 hover:bg-amber-600/20 text-amber-600 dark:text-amber-400 text-xs font-bold border border-amber-500/30 transition cursor-pointer shrink-0"
+                      className="px-2 py-1 rounded-lg bg-amber-600/10 hover:bg-amber-600/20 text-amber-600 dark:text-amber-400 text-[11px] font-semibold border border-amber-500/30 transition cursor-pointer"
                     >
-                      🚀 点击测试
+                      🚀 测试
                     </button>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={() => setToggleWindowHotkeyEnabled(!(settings.toggleWindowHotkeyEnabled ?? true))}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-1 ${
+                      (settings.toggleWindowHotkeyEnabled ?? true) ? 'bg-amber-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                    }`}
+                    title="开启或关闭该快捷键"
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      (settings.toggleWindowHotkeyEnabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
+                    }`} />
+                  </button>
                 </div>
               </div>
             </div>
@@ -1579,6 +1543,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                     step={500}
                     value={settings.watchIntervalMs ?? 3000}
                     onChange={(e) => setWatchIntervalMs(Number(e.target.value))}
+                    onInput={(e) => setWatchIntervalMs(Number((e.target as HTMLInputElement).value))}
                     className="w-32 accent-sky-500 cursor-pointer"
                     data-testid="watch-interval-slider"
                   />
@@ -2748,13 +2713,18 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
           </div>
 
           {/* 3. 系统内置词库检索 Pop-up Modal */}
-          {presetViewerDictKey && PRESET_DICTS_DATA[presetViewerDictKey] && (
-            <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
-              <div className={`w-full max-w-2xl max-h-[85vh] rounded-2xl border p-5 flex flex-col shadow-2xl ${
-                isLight ? 'bg-white text-slate-800 border-slate-200' : 'bg-zinc-900 text-zinc-100 border-white/15'
+          {presetViewerDictKey && PRESET_DICTS_DATA[presetViewerDictKey] && typeof document !== 'undefined' && createPortal(
+            <div
+              onClick={(e) => { if (e.target === e.currentTarget) setPresetViewerDictKey(null); }}
+              className={`fixed inset-0 z-[500] flex items-center justify-center p-4 transition-colors animate-in fade-in duration-150 ${
+                isLight ? 'bg-black/20 backdrop-blur-sm' : 'bg-black/60 backdrop-blur-md'
+              }`}
+            >
+              <div className={`w-full max-w-2xl h-[560px] max-h-[85vh] rounded-2xl border p-5 flex flex-col shadow-2xl animate-in zoom-in-95 duration-150 ${
+                isLight ? 'bg-white/95 backdrop-blur-xl text-slate-800 border-slate-200' : 'bg-zinc-900/95 backdrop-blur-xl text-zinc-100 border-white/15'
               }`}>
                 {/* Modal Header */}
-                <div className="flex items-center justify-between border-b pb-3 border-slate-200 dark:border-white/10">
+                <div className="flex items-center justify-between border-b pb-3 border-slate-200 dark:border-white/10 shrink-0">
                   <div>
                     <h3 className="text-sm font-bold flex items-center space-x-2">
                       <BookOpen className="h-4 w-4 text-emerald-500" />
@@ -2767,14 +2737,14 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => setPresetViewerDictKey(null)}
-                    className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+                    className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer"
                   >
                     <X className="h-4 w-4" />
                   </button>
                 </div>
 
                 {/* Search in Preset Modal */}
-                <div className="py-3">
+                <div className="py-3 shrink-0">
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 dark:text-zinc-500" />
                     <input
@@ -2790,7 +2760,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                 </div>
 
                 {/* Terms Table */}
-                <div className="flex-1 overflow-y-auto scrollbar-thin space-y-1.5 pr-1">
+                <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin space-y-1.5 pr-1">
                   {Object.entries(PRESET_DICTS_DATA[presetViewerDictKey].terms)
                     .filter(([orig, trans]) =>
                       orig.toLowerCase().includes(presetSearchQuery.toLowerCase()) ||
@@ -2803,10 +2773,10 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                           isLight ? 'bg-slate-50 border-slate-200' : 'bg-zinc-950/60 border-white/[0.05]'
                         }`}
                       >
-                        <div className="flex items-center space-x-3 font-mono font-medium">
-                          <span className={`font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>{orig}</span>
-                          <span className="text-slate-400">➔</span>
-                          <span className="text-blue-500 font-sans font-semibold">{trans}</span>
+                        <div className="flex items-center space-x-3 font-mono font-medium min-w-0">
+                          <span className={`font-bold truncate ${isLight ? 'text-slate-900' : 'text-white'}`}>{orig}</span>
+                          <span className="text-slate-400 shrink-0">➔</span>
+                          <span className="text-blue-500 font-sans font-semibold truncate">{trans}</span>
                         </div>
 
                         <button
@@ -2816,8 +2786,8 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                             setCopiedTerm(orig);
                             setTimeout(() => setCopiedTerm(null), 1500);
                           }}
-                          className={`p-1 rounded-md text-[10px] flex items-center space-x-1 border cursor-pointer ${
-                            isLight ? 'bg-white border-slate-300 text-slate-600' : 'bg-zinc-800 border-white/10 text-zinc-300'
+                          className={`p-1 rounded-md text-[10px] flex items-center space-x-1 border cursor-pointer shrink-0 ml-2 ${
+                            isLight ? 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50' : 'bg-zinc-800 border-white/10 text-zinc-300 hover:bg-zinc-700'
                           }`}
                         >
                           {copiedTerm === orig ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
@@ -2828,31 +2798,37 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                 </div>
 
                 {/* Modal Footer */}
-                <div className="pt-3 border-t border-slate-200 dark:border-white/10 flex justify-end">
+                <div className="pt-3 border-t border-slate-200 dark:border-white/10 flex justify-end shrink-0">
                   <button
                     type="button"
                     onClick={() => setPresetViewerDictKey(null)}
-                    className="px-4 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white hover:bg-blue-500 transition cursor-pointer"
+                    className="px-4 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white hover:bg-blue-500 transition cursor-pointer shadow-sm"
                   >
                     关闭
                   </button>
                 </div>
               </div>
-            </div>
+            </div>,
+            document.body
           )}
 
           {/* 4. 新增 / 编辑自定义词条 Modal */}
-          {showAddEditModal && (
-            <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
+          {showAddEditModal && typeof document !== 'undefined' && createPortal(
+            <div
+              onClick={(e) => { if (e.target === e.currentTarget) setShowAddEditModal(false); }}
+              className={`fixed inset-0 z-[500] flex items-center justify-center p-4 transition-colors animate-in fade-in duration-150 ${
+                isLight ? 'bg-black/20 backdrop-blur-sm' : 'bg-black/60 backdrop-blur-md'
+              }`}
+            >
               <form
                 onSubmit={handleSaveCustomTerm}
-                className={`w-full max-w-lg rounded-3xl border p-6 space-y-4 shadow-2xl transition-all animate-in zoom-in-95 duration-200 ${
+                className={`w-full max-w-lg max-h-[90vh] flex flex-col rounded-3xl border p-6 space-y-4 shadow-2xl transition-all animate-in zoom-in-95 duration-200 overflow-y-auto scrollbar-thin ${
                   isLight
                     ? 'bg-white text-slate-900 border-slate-300 shadow-slate-900/25 ring-1 ring-slate-200'
                     : 'bg-[#181824] text-zinc-100 border-white/15 shadow-[0_25px_60px_rgba(0,0,0,0.85)] ring-1 ring-white/10'
                 }`}
               >
-                <div className={`flex items-center justify-between border-b pb-3.5 ${
+                <div className={`flex items-center justify-between border-b pb-3.5 shrink-0 ${
                   isLight ? 'border-slate-200' : 'border-white/10'
                 }`}>
                   <h3 className="text-sm font-extrabold flex items-center space-x-2">
@@ -2958,7 +2934,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                   </div>
                 </div>
 
-                <div className={`pt-4 border-t flex items-center justify-end space-x-2.5 ${
+                <div className={`pt-4 border-t flex items-center justify-end space-x-2.5 shrink-0 ${
                   isLight ? 'border-slate-200' : 'border-white/10'
                 }`}>
                   <button
@@ -2980,7 +2956,8 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                   </button>
                 </div>
               </form>
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       )}
@@ -3342,6 +3319,38 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                   </div>
                 </div>
 
+                {/* 软件信息 / 关于卡片入口 */}
+                <div className="pt-2">
+                  <div className={`p-4 rounded-xl border flex flex-wrap items-center justify-between gap-3 ${
+                    isLight ? 'bg-gradient-to-r from-blue-50/80 to-indigo-50/80 border-blue-200' : 'bg-gradient-to-r from-blue-950/20 to-indigo-950/20 border-blue-500/20'
+                  }`}>
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="h-10 w-10 rounded-xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-lg shrink-0">
+                        🐾
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold flex items-center space-x-1.5 flex-wrap">
+                          <span>猫步翻译 (Maobu Translator)</span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-bold">v1.0.0</span>
+                        </div>
+                        <p className={`text-[11px] mt-0.5 truncate ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                          基于 React 19 + Rust Tauri v2 · 专为 3D/CG 与多语种打造的下一代翻译利器
+                        </p>
+                      </div>
+                    </div>
+
+                    {onOpenAbout && (
+                      <button
+                        type="button"
+                        onClick={onOpenAbout}
+                        className="lg-btn lg-btn-primary !px-3 !py-1.5 !text-xs font-semibold shrink-0 cursor-pointer"
+                      >
+                        <span>查看软件信息与架构 ➔</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
               </div>
             </div>
           </div>
@@ -3349,8 +3358,11 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
       )}
 
       {/* 快捷键正在录制全屏强提示 Overlay Modal */}
-      {recordingTarget && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/65 backdrop-blur-md animate-in fade-in duration-150">
+      {recordingTarget && typeof document !== 'undefined' && createPortal(
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setRecordingTarget(null); }}
+          className="fixed inset-0 z-[600] flex items-center justify-center bg-black/65 backdrop-blur-md animate-in fade-in duration-150"
+        >
           <div className="bg-slate-900 border-2 border-blue-500/80 rounded-2xl p-6 shadow-2xl max-w-md w-full text-center space-y-4 animate-in zoom-in-95 duration-150">
             <div className="h-12 w-12 rounded-full bg-blue-500/20 border border-blue-400 flex items-center justify-center mx-auto text-2xl animate-bounce">
               ⌨️
@@ -3381,7 +3393,8 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

@@ -817,10 +817,136 @@ pub fn is_valid_translation(orig: &str, candidate: &str) -> bool {
     true
 }
 
+fn map_google_lang(code: &str) -> &str {
+    match code {
+        "auto" => "auto",
+        "zh-CN" | "zh" => "zh-CN",
+        "zh-TW" | "zh-HK" => "zh-TW",
+        "he" => "iw",
+        other => other.split('-').next().unwrap_or(other),
+    }
+}
+
+fn map_bing_lang(code: &str) -> &str {
+    match code {
+        "auto" | "" => "",
+        "zh-CN" | "zh" => "zh-Hans",
+        "zh-TW" | "zh-HK" => "zh-Hant",
+        other => other.split('-').next().unwrap_or(other),
+    }
+}
+
+fn map_bing_target_lang(code: &str) -> &str {
+    match code {
+        "zh-CN" | "zh" | "auto" => "zh-Hans",
+        "zh-TW" | "zh-HK" => "zh-Hant",
+        other => other.split('-').next().unwrap_or(other),
+    }
+}
+
+fn map_baidu_lang(code: &str) -> &str {
+    match code {
+        "auto" => "auto",
+        "zh-CN" | "zh" => "zh",
+        "zh-TW" | "zh-HK" => "cht",
+        "en" => "en",
+        "ja" => "jp",
+        "ko" => "kor",
+        "fr" => "fra",
+        "es" => "spa",
+        "th" => "th",
+        "ar" => "ara",
+        "ru" => "ru",
+        "pt" => "pt",
+        "de" => "de",
+        "it" => "it",
+        "el" => "el",
+        "nl" => "nl",
+        "pl" => "pl",
+        "da" => "dan",
+        "fi" => "fin",
+        "cs" => "cs",
+        "sv" => "swe",
+        "hu" => "hu",
+        "ro" => "rom",
+        "vi" => "vie",
+        "id" => "id",
+        "hi" => "hi",
+        "uk" => "ukr",
+        other => other.split('-').next().unwrap_or(other),
+    }
+}
+
+fn map_mymemory_lang(code: &str) -> &str {
+    match code {
+        "auto" => "en",
+        "zh-CN" | "zh" => "zh-CN",
+        "zh-TW" | "zh-HK" => "zh-TW",
+        other => other.split('-').next().unwrap_or(other),
+    }
+}
+
+fn map_deepl_source_lang(code: &str) -> String {
+    match code {
+        "auto" => "AUTO".to_string(),
+        "zh-CN" | "zh" => "ZH".to_string(),
+        "zh-TW" | "zh-HK" => "ZH".to_string(),
+        "en" => "EN".to_string(),
+        other => other.to_uppercase(),
+    }
+}
+
+fn map_deepl_target_lang(code: &str) -> String {
+    match code {
+        "zh-CN" | "zh" | "auto" => "ZH".to_string(),
+        "zh-TW" | "zh-HK" => "ZH-HANT".to_string(),
+        "en" | "en-US" => "EN-US".to_string(),
+        "en-GB" => "EN-GB".to_string(),
+        "pt" | "pt-BR" => "PT-BR".to_string(),
+        "pt-PT" => "PT-PT".to_string(),
+        other => other.to_uppercase(),
+    }
+}
+
+fn get_target_lang_display_name(code: &str) -> &str {
+    match code {
+        "zh-CN" | "zh" => "Simplified Chinese (简体中文)",
+        "zh-TW" | "zh-HK" => "Traditional Chinese (繁體中文)",
+        "en" => "English",
+        "ja" => "Japanese (日本語)",
+        "ko" => "Korean (한국어)",
+        "fr" => "French (Français)",
+        "de" => "German (Deutsch)",
+        "es" => "Spanish (Español)",
+        "ru" => "Russian (Русский)",
+        "it" => "Italian (Italiano)",
+        "pt" => "Portuguese (Português)",
+        "nl" => "Dutch (Nederlands)",
+        "pl" => "Polish (Polski)",
+        "ar" => "Arabic (العربية)",
+        "th" => "Thai (ไทย)",
+        "vi" => "Vietnamese (Tiếng Việt)",
+        "id" => "Indonesian (Bahasa Indonesia)",
+        "tr" => "Turkish (Türkçe)",
+        "hi" => "Hindi (हिन्दी)",
+        "uk" => "Ukrainian (Українська)",
+        "sv" => "Swedish (Svenska)",
+        "cs" => "Czech (Čeština)",
+        "el" => "Greek (Ελληνικά)",
+        "he" => "Hebrew (עברית)",
+        "da" => "Danish (Dansk)",
+        "fi" => "Finnish (Suomi)",
+        "no" => "Norwegian (Norsk)",
+        "hu" => "Hungarian (Magyar)",
+        "ro" => "Romanian (Română)",
+        other => other,
+    }
+}
+
 /// ── Google 翻译 ─────────────────────────────────────────────────────────────
 pub async fn translate_google(client: &Client, q: &str, src: &str, tgt: &str) -> Option<String> {
-    let clean_src = if src == "auto" { "auto" } else { src.split('-').next().unwrap_or("auto") };
-    let clean_tgt = if tgt.starts_with("zh") { "zh-CN" } else { "en" };
+    let clean_src = map_google_lang(src);
+    let clean_tgt = map_google_lang(tgt);
     let url = format!(
         "https://translate.googleapis.com/translate_a/single?client=gtx&sl={}&tl={}&dt=t&q={}",
         clean_src, clean_tgt, urlencoding_encode(q)
@@ -851,14 +977,8 @@ pub async fn translate_bing(client: &Client, q: &str, src: &str, tgt: &str) -> O
     use futures_util::stream::FuturesUnordered;
     use futures_util::StreamExt;
 
-    let from_lang = if src.starts_with("zh") {
-        "zh-Hans"
-    } else if src.starts_with("en") {
-        "en"
-    } else {
-        ""
-    };
-    let to_lang = if tgt.starts_with("zh") { "zh-Hans" } else { "en" };
+    let from_lang = map_bing_lang(src);
+    let to_lang = map_bing_target_lang(tgt);
 
     let mut futures = FuturesUnordered::new();
 
@@ -1137,14 +1257,8 @@ pub async fn translate_baidu(
         }
     };
 
-    let clean_from = if src == "auto" {
-        "auto"
-    } else if src.starts_with("zh") {
-        "zh"
-    } else {
-        "en"
-    };
-    let clean_to = if tgt.starts_with("zh") { "zh" } else { "en" };
+    let clean_from = map_baidu_lang(src);
+    let clean_to = map_baidu_lang(tgt);
 
     // MD5 签名：md5(appid + q + salt + secret)
     let salt = "1435660288";
@@ -1212,8 +1326,8 @@ pub async fn translate_baidu(
 
 /// ── MyMemory 全球翻译记忆库 ────────────────────────────────────────────────
 pub async fn translate_mymemory(client: &Client, q: &str, src: &str, tgt: &str) -> Option<String> {
-    let clean_src = if src.starts_with("zh") { "zh" } else { "en" };
-    let clean_tgt = if tgt.starts_with("zh") { "zh" } else { "en" };
+    let clean_src = map_mymemory_lang(src);
+    let clean_tgt = map_mymemory_lang(tgt);
     let url = format!(
         "https://api.mymemory.translated.net/get?q={}&langpair={}|{}",
         urlencoding_encode(q),
@@ -1251,8 +1365,8 @@ pub async fn translate_deepl(
     custom_url: Option<&str>,
 ) -> MultiEngineTranslation {
     let engine_name = "DeepL 极速通道".to_string();
-    let clean_src = if src.starts_with("zh") { "ZH" } else if src == "auto" { "AUTO" } else { &src.to_uppercase() };
-    let clean_tgt = if tgt.starts_with("zh") { "ZH" } else { "EN" };
+    let clean_src = map_deepl_source_lang(src);
+    let clean_tgt = map_deepl_target_lang(tgt);
 
     // 优先走用户自建 DeepLX 服务
     if let Some(url) = custom_url {
@@ -1305,7 +1419,7 @@ pub async fn translate_deepl(
         if !key.trim().is_empty() {
             let form = [
                 ("text", q),
-                ("target_lang", clean_tgt),
+                ("target_lang", clean_tgt.as_str()),
             ];
             if let Ok(Ok(res)) = tokio::time::timeout(
                 Duration::from_millis(5000),
@@ -1440,6 +1554,7 @@ pub async fn translate_with_llm(
 
     let is_google_gemini = raw_ep.contains("google")
         || raw_ep.contains("gemini")
+        || raw_ep.contains("googleapis.com")
         || raw_ep.contains("google-ai-studio")
         || api_key.starts_with("AIza");
 
@@ -1448,46 +1563,76 @@ pub async fn translate_with_llm(
         None => (raw_ep.as_str(), None),
     };
 
-    let mut clean_base = base_path.trim_end_matches('/').to_string();
-    if clean_base.ends_with("/chat/completions") {
-        clean_base = clean_base.replace("/chat/completions", "");
-    }
-    if clean_base.ends_with("/completions") {
-        clean_base = clean_base.replace("/completions", "");
-    }
+    let clean_base = base_path.trim_end_matches('/').to_string();
 
     let mut candidate_urls = Vec::new();
     if raw_ep.contains("/chat/completions") || raw_ep.contains(":generateContent") {
         candidate_urls.push(raw_ep.clone());
-    } else if is_google_gemini {
-        candidate_urls.push(format!("{}/v1beta/openai/chat/completions", clean_base));
-        candidate_urls.push(format!("{}/openai/chat/completions", clean_base));
+    }
+
+    if is_google_gemini {
+        let mut root = clean_base.as_str();
+        if let Some(stripped) = root.strip_suffix("/chat/completions") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/completions") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/openai") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/models") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/v1beta") {
+            root = stripped;
+        }
+        if let Some(stripped) = root.strip_suffix("/v1") {
+            root = stripped;
+        }
+        let root = root.trim_end_matches('/');
+
+        candidate_urls.push(format!("{}/v1beta/openai/chat/completions", root));
         candidate_urls.push(format!(
             "{}/v1beta/models/{}:generateContent",
-            clean_base, model_name
+            root, model_name
         ));
         candidate_urls.push(format!(
             "{}/models/{}:generateContent",
-            clean_base, model_name
+            root, model_name
         ));
-        if clean_base.ends_with("/v1") || clean_base.ends_with("/v1beta") {
-            candidate_urls.push(format!("{}/chat/completions", clean_base));
-        } else {
-            candidate_urls.push(format!("{}/v1/chat/completions", clean_base));
-            candidate_urls.push(format!("{}/chat/completions", clean_base));
-        }
+        candidate_urls.push(format!("{}/v1/chat/completions", root));
+        candidate_urls.push(format!("{}/chat/completions", root));
     } else {
-        if clean_base.ends_with("/v1") {
-            candidate_urls.push(format!("{}/chat/completions", clean_base));
+        let mut b = clean_base.as_str();
+        if let Some(stripped) = b.strip_suffix("/chat/completions") {
+            b = stripped;
+        }
+        if let Some(stripped) = b.strip_suffix("/completions") {
+            b = stripped;
+        }
+        let b = b.trim_end_matches('/');
+
+        if b.ends_with("/v1") {
+            candidate_urls.push(format!("{}/chat/completions", b));
+            candidate_urls.push(b.to_string());
         } else {
-            candidate_urls.push(format!("{}/v1/chat/completions", clean_base));
-            candidate_urls.push(format!("{}/chat/completions", clean_base));
+            candidate_urls.push(format!("{}/v1/chat/completions", b));
+            candidate_urls.push(format!("{}/chat/completions", b));
+        }
+
+        if b.contains("localhost") || b.contains("127.0.0.1") {
+            candidate_urls.push(format!("{}/api/chat", b));
         }
     }
 
+    let mut seen = std::collections::HashSet::new();
+    candidate_urls.retain(|url| seen.insert(url.clone()));
+
+    let target_display = get_target_lang_display_name(target_lang);
     let prompt = format!(
         "You are a professional, accurate translator. Translate the following text into {}. Preserve formatting, code, numbers, and technical terms accurately. Return ONLY the translated text without explanations.{}\n\n{}",
-        target_lang, style_directive(style), q
+        target_display, style_directive(style), q
     );
 
     let mut last_status_code = 0;
@@ -1766,7 +1911,7 @@ pub async fn execute_universal_translate(
     }
 
     // 2. 并行请求所有开启的在线引擎 (Google, Bing, Youdao, DeepL, MyMemory, Baidu, Tencent)
-    let online = req.online_engines.unwrap_or_default();
+    let online = req.online_engines.clone().unwrap_or_default();
     let mut tasks = Vec::new();
 
     // ── 1. Google 翻译 (官方通道) ─────────────────────────────────────────────
@@ -1842,8 +1987,16 @@ pub async fn execute_universal_translate(
     }
 
     // ── 4. 百度通用翻译 ────────────────────────────────────────────────────────
+    let is_baidu_configured = req
+        .baidu_app_id
+        .as_deref()
+        .map_or(false, |id| !id.trim().is_empty())
+        && req
+            .baidu_secret
+            .as_deref()
+            .map_or(false, |s| !s.trim().is_empty());
     let run_baidu = forced.as_ref().map_or(false, |f| f.contains("baidu") || f.contains("百度"))
-        || (!is_forced && (online.baidu.unwrap_or(false) || online.baidu == Some(true)));
+        || (!is_forced && (online.baidu.unwrap_or(false) || online.baidu == Some(true)) && is_baidu_configured);
     if run_baidu {
         let c = client.clone();
         let q = trimmed.to_string();
@@ -1881,8 +2034,16 @@ pub async fn execute_universal_translate(
     }
 
     // ── 6. DeepL 翻译通道 ──────────────────────────────────────────────────
+    let is_deepl_configured = req
+        .deepl_api_key
+        .as_deref()
+        .map_or(false, |k| !k.trim().is_empty())
+        || req
+            .deepl_custom_url
+            .as_deref()
+            .map_or(false, |u| !u.trim().is_empty());
     let run_deepl = forced.as_ref().map_or(false, |f| f.contains("deepl"))
-        || (!is_forced && (online.deepl.unwrap_or(false) || online.deepl == Some(true)));
+        || (!is_forced && (online.deepl.unwrap_or(false) || online.deepl == Some(true)) && is_deepl_configured);
     if run_deepl {
         let c = client.clone();
         let q = trimmed.to_string();
@@ -1920,9 +2081,14 @@ pub async fn execute_universal_translate(
     }
 
     // ── 8. AI 深度翻译 (DeepSeek / LLM) ────────────────────────────────────────
+    let is_llm_configured = req.llm_config.as_ref().map_or(false, |cfg| {
+        let ep = cfg.endpoint.trim();
+        let is_local = ep.contains("localhost") || ep.contains("127.0.0.1");
+        !ep.is_empty() && (!cfg.api_key.trim().is_empty() || is_local)
+    });
     let run_llm = forced.as_ref().map_or(false, |f| {
         f.contains("llm") || f.contains("ai") || f.contains("deepseek") || f.contains("openai") || f.contains("ollama") || f.contains("glm") || f.contains("custom")
-    }) || (!is_forced && req.llm_config.is_some());
+    }) || (!is_forced && is_llm_configured);
 
     if run_llm {
         if let Some(config) = &req.llm_config {
@@ -2194,5 +2360,58 @@ mod tests {
         assert_eq!(result.source_tier, "LLM (Config Required)");
         assert_eq!(result.translated, "[未配置 API Key · 点击前往设置]");
         assert_eq!(result.engine_name, "🤖 AI 深度翻译 (DeepSeek)");
+    }
+
+    #[tokio::test]
+    async fn test_unconfigured_engines_omitted_in_universal_translate() {
+        let req = crate::models::UniversalTranslationRequest {
+            text: "Principled BSDF".to_string(),
+            source_lang: "auto".to_string(),
+            target_lang: "zh-CN".to_string(),
+            preset: Some("blender".to_string()),
+            llm_config: Some(LlmConfig {
+                id: Some("deepseek".to_string()),
+                provider: "DeepSeek".to_string(),
+                api_key: "".to_string(),
+                model: "deepseek-chat".to_string(),
+                endpoint: "https://api.deepseek.com/v1".to_string(),
+            }),
+            preset_dicts: Some(crate::models::PresetDicts {
+                blender: true,
+                substance: true,
+                unity: true,
+                unreal: true,
+                maya: true,
+                houdini: true,
+            }),
+            online_engines: Some(crate::models::OnlineEngines {
+                google: Some(false),
+                bing: Some(false),
+                youdao: Some(false),
+                deepl: Some(true),
+                my_memory: Some(false),
+                baidu: Some(true),
+                tencent: Some(false),
+            }),
+            translation_tiers: None,
+            style: None,
+            forced_engine: None,
+            baidu_app_id: None,
+            baidu_secret: None,
+            deepl_api_key: None,
+            deepl_custom_url: None,
+        };
+
+        let res = execute_universal_translate(req).await;
+        assert!(res.is_ok());
+        let resp = res.unwrap();
+        // Since LLM, DeepL, and Baidu have no keys/credentials and are not forced,
+        // none of them should appear in resp.engines!
+        for eng in &resp.engines {
+            assert!(!eng.engine_name.contains("DeepSeek"));
+            assert!(!eng.engine_name.contains("DeepL"));
+            assert!(!eng.engine_name.contains("百度"));
+            assert!(!eng.translated.contains("未配置"));
+        }
     }
 }

@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useAppTheme } from '../../hooks/useAppTheme';
 
 const CATEGORY_ICONS: Record<string, React.ElementType> = {
   selection: MousePointer2,
@@ -78,6 +79,7 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
 ];
 
 export const CheatSheetModal: React.FC<CheatSheetModalProps> = ({ isOpen, onClose }) => {
+  const { isLight } = useAppTheme();
   const modalRef = React.useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -129,7 +131,9 @@ export const CheatSheetModal: React.FC<CheatSheetModalProps> = ({ isOpen, onClos
 
   return (
     <div
-      className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-150"
+      className={`fixed inset-0 z-[300] flex items-center justify-center p-4 transition-colors animate-in fade-in duration-150 ${
+        isLight ? 'bg-black/20 backdrop-blur-sm' : 'bg-black/60 backdrop-blur-md'
+      }`}
       onClick={onClose}
       data-testid="cheatsheet-modal-overlay"
     >

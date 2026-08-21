@@ -1,18 +1,20 @@
 import React, { useState, useEffect } from "react";
-import { X, Minus, Square, Command } from "lucide-react";
+import { X, Minus, Square, Command, Info } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "../services/tauri";
 import { useAppTheme } from "../hooks/useAppTheme";
 import { useOcrStatus } from "../hooks/useOcrStatus";
+import appIcon from "../assets/app_icon.png";
 
 interface TitleBarProps {
   onTriggerCapture?: () => void;
   hotkey?: string;
   onQuickSearch?: () => void;
+  onOpenAbout?: () => void;
   onRequestClose?: () => void;
 }
 
-export const TitleBar: React.FC<TitleBarProps> = ({ onQuickSearch, onRequestClose }) => {
+export const TitleBar: React.FC<TitleBarProps> = ({ onQuickSearch, onOpenAbout, onRequestClose }) => {
   const [isMaximized, setIsMaximized] = useState(false);
 
   // 原生窗口拖拽处理（同步无延迟调用）
@@ -119,25 +121,56 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onQuickSearch, onRequestClos
     <header
       data-tauri-drag-region
       onMouseDown={handleStartDrag}
-      className="flex h-9 w-full shrink-0 items-center justify-between px-2 select-none z-50 sticky top-0 cursor-default"
+      className="flex h-10 w-full shrink-0 items-center justify-between px-2.5 select-none z-50 sticky top-0 cursor-default"
     >
-      {/* 左侧：品牌 Logo 与名称 */}
-      <div className="flex items-center gap-2 pl-1 select-none pointer-events-none">
+      {/* 左侧：品牌 Logo 与名称（可点击直达软件信息） */}
+      <button
+        type="button"
+        data-tauri-drag-region={false}
+        onClick={onOpenAbout}
+        className={`flex items-center gap-2 px-1.5 py-1 rounded-lg select-none transition cursor-pointer ${
+          onOpenAbout
+            ? (isLight ? 'hover:bg-black/5 active:bg-black/10' : 'hover:bg-white/10 active:bg-white/15')
+            : 'pointer-events-none'
+        }`}
+        title={onOpenAbout ? "点击查看软件信息与架构" : undefined}
+      >
         <img
-          src="/icon.png"
-          className="h-4.5 w-4.5 rounded-[5px] object-cover select-none shadow-sm"
+          src={appIcon}
+          className="h-6 w-6 rounded-[6px] object-cover select-none shadow-sm drop-shadow-sm shrink-0"
           alt="猫步翻译"
         />
-        <span className={`text-[12px] font-semibold tracking-wide ${isLight ? 'text-slate-800' : 'text-white/85'}`}>
+        <span className={`text-[13px] font-bold tracking-tight ${isLight ? 'text-slate-800' : 'text-white/90'}`}>
           猫步翻译
         </span>
-      </div>
+      </button>
 
       {/* 中间：原生窗口可拖拽区域 */}
       <div data-tauri-drag-region className="flex-1 h-full min-w-8" />
 
-      {/* 右侧：OCR 状态 + ⌘K + Windows 11 Fluent 风格窗口控制按钮组 */}
+      {/* 右侧：OCR 状态 + 软件信息 + ⌘K + Windows 11 Fluent 风格窗口控制按钮组 */}
       <div className="flex items-center gap-1.5" data-tauri-drag-region={false}>
+        {/* 软件信息 / 关于 顶部快捷按钮 */}
+        {onOpenAbout && (
+          <button
+            type="button"
+            data-tauri-drag-region={false}
+            onClick={onOpenAbout}
+            className={`group flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all duration-150 cursor-pointer shadow-sm ${
+              isLight
+                ? 'text-slate-600 hover:text-slate-900 bg-white/70 hover:bg-white/95 border border-slate-200/80 hover:border-slate-300 active:scale-95'
+                : 'text-zinc-300 hover:text-white bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.08] hover:border-white/15 active:scale-95'
+            }`}
+            title="查看软件信息、版本更新与技术架构"
+            aria-label="软件信息"
+          >
+            <Info className={`h-3.5 w-3.5 shrink-0 transition-colors ${
+              isLight ? 'text-blue-500 group-hover:text-blue-600' : 'text-blue-400 group-hover:text-blue-300'
+            }`} />
+            <span>软件信息</span>
+          </button>
+        )}
+
         {/* OCR 引擎真实状态 */}
         <div
           className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md select-none"

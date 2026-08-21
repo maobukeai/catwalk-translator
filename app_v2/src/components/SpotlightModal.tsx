@@ -84,7 +84,9 @@ export const SpotlightModal: React.FC<SpotlightModalProps> = ({ isOpen, onClose,
 
   return (
     <div
-      className="fixed inset-0 z-[300] flex items-start justify-center pt-[15vh] p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-150"
+      className={`fixed inset-0 z-[300] flex items-start justify-center pt-[15vh] p-4 transition-colors animate-in fade-in duration-150 ${
+        isLight ? 'bg-black/20 backdrop-blur-sm' : 'bg-black/60 backdrop-blur-md'
+      }`}
       onClick={() => {
         if (settings.miniWindowCloseAction !== 'minimize') {
           onClose();

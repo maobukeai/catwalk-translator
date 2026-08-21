@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { ChevronDown, Check, Globe } from "lucide-react";
+import { ChevronDown, Check, Globe, Search, X } from "lucide-react";
 import type { LanguageCode, LanguageOption } from "../../services/types";
 import { useAppTheme } from "../../hooks/useAppTheme";
 
@@ -25,11 +25,21 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
   align = 'left',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const { isLight } = useAppTheme();
 
   const selectedOption = options.find((opt) => opt.code === value) || options[0];
+
+  // Auto focus search input when opening
+  useEffect(() => {
+    if (isOpen) {
+      setSearchQuery("");
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    }
+  }, [isOpen]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -41,6 +51,14 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  const filteredOptions = searchQuery.trim()
+    ? options.filter(
+        (opt) =>
+          opt.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          opt.code.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : options;
 
   // Quick pills (optional)
   const availableQuickPills = options.filter((opt) => quickCodes.includes(opt.code));
@@ -119,41 +137,77 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
               : "bg-[#181822] border-zinc-700 text-zinc-100 shadow-[0_16px_40px_rgba(0,0,0,0.85)]"
           }`}
         >
-          <div className={`px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider border-b mb-1 flex items-center justify-between ${
+          <div className={`px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider border-b mb-1.5 flex items-center justify-between ${
             isLight ? "text-slate-500 border-slate-200" : "text-zinc-400 border-zinc-800"
           }`}>
             <span>选择语言 / Language</span>
             <span className={isLight ? "text-slate-400" : "text-zinc-500"}>({options.length} 种)</span>
           </div>
 
+          {/* Quick Search Input */}
+          <div className="px-1 mb-1.5">
+            <div className={`relative flex items-center rounded-lg border transition ${
+              isLight
+                ? "bg-slate-100/90 border-slate-200 focus-within:border-blue-500 focus-within:bg-white"
+                : "bg-zinc-800/90 border-zinc-700/80 focus-within:border-blue-500 focus-within:bg-zinc-800"
+            }`}>
+              <Search className={`h-3 w-3 absolute left-2.5 ${isLight ? "text-slate-400" : "text-zinc-400"}`} />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="搜索语言名称或代码 (如: ja, 日语)..."
+                className={`w-full bg-transparent text-xs pl-7 pr-7 py-1 outline-none font-medium placeholder:text-[11px] ${
+                  isLight ? "text-slate-800 placeholder:text-slate-400" : "text-zinc-100 placeholder:text-zinc-500"
+                }`}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
           <div
-            className={`max-h-60 overflow-y-auto space-y-1 pr-1.5 ${
+            className={`max-h-64 overflow-y-auto space-y-0.5 pr-1 ${
               isLight
                 ? "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent"
                 : "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent"
             }`}
           >
-            {options.map((opt) => {
-              const isSelected = value === opt.code;
-              return (
-                <button
-                  key={opt.code}
-                  type="button"
-                  onClick={() => {
-                    onChange(opt.code);
-                    setIsOpen(false);
-                  }}
-                  className={`flex items-center justify-between w-full text-left px-3 py-2 rounded-xl text-xs font-medium transition cursor-pointer ${
-                    isSelected
-                      ? (isLight ? "bg-blue-50 text-blue-700 font-bold border border-blue-200" : "bg-blue-600/25 text-blue-300 font-bold border border-blue-400/40")
-                      : (isLight ? "text-slate-700 hover:bg-slate-100 hover:text-slate-900" : "text-zinc-300 hover:bg-white/10 hover:text-white")
-                  }`}
-                >
-                  <span className="truncate pr-2">{opt.name}</span>
-                  {isSelected && <Check className="h-3.5 w-3.5 text-blue-400 shrink-0 ml-1" />}
-                </button>
-              );
-            })}
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((opt) => {
+                const isSelected = value === opt.code;
+                return (
+                  <button
+                    key={opt.code}
+                    type="button"
+                    onClick={() => {
+                      onChange(opt.code);
+                      setIsOpen(false);
+                    }}
+                    className={`flex items-center justify-between w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
+                      isSelected
+                        ? (isLight ? "bg-blue-50 text-blue-700 font-bold border border-blue-200" : "bg-blue-600/25 text-blue-300 font-bold border border-blue-400/40")
+                        : (isLight ? "text-slate-700 hover:bg-slate-100 hover:text-slate-900" : "text-zinc-300 hover:bg-white/10 hover:text-white")
+                    }`}
+                  >
+                    <span className="truncate pr-2">{opt.name}</span>
+                    {isSelected && <Check className="h-3.5 w-3.5 text-blue-500 shrink-0 ml-1" />}
+                  </button>
+                );
+              })
+            ) : (
+              <div className="py-4 text-center text-xs text-slate-400 dark:text-zinc-500">
+                未找到匹配的语言 "{searchQuery}"
+              </div>
+            )}
           </div>
         </div>
       )}

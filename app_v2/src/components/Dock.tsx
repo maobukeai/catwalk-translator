@@ -9,11 +9,12 @@ import {
   Clipboard,
   Keyboard,
   Zap,
+  Info,
 } from "lucide-react";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useOcrStatus } from "../hooks/useOcrStatus";
 
-export type AppTab = "translate" | "search" | "vocabulary" | "settings" | "ai";
+export type AppTab = "translate" | "search" | "vocabulary" | "settings" | "ai" | "about";
 
 interface DockProps {
   activeTab: AppTab;
@@ -27,7 +28,6 @@ interface DockProps {
 
 const DOCK_ITEMS: { id: AppTab; label: string; icon: React.ElementType }[] = [
   { id: "translate", label: "翻译器", icon: Languages },
-  { id: "search", label: "划词查词", icon: Search },
   { id: "ai", label: "AI 对话", icon: Bot },
   { id: "vocabulary", label: "生词本", icon: BookMarked },
   { id: "settings", label: "系统设置", icon: Settings },

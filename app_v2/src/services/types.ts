@@ -82,6 +82,7 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   model?: string;
+  mode?: string;
 }
 
 export interface TranslationResult {
@@ -275,7 +276,28 @@ export type LanguageCode =
   | 'fr'
   | 'de'
   | 'es'
-  | 'ru';
+  | 'ru'
+  | 'it'
+  | 'pt'
+  | 'nl'
+  | 'pl'
+  | 'ar'
+  | 'th'
+  | 'vi'
+  | 'id'
+  | 'tr'
+  | 'hi'
+  | 'uk'
+  | 'sv'
+  | 'cs'
+  | 'el'
+  | 'he'
+  | 'da'
+  | 'fi'
+  | 'no'
+  | 'hu'
+  | 'ro'
+  | string;
 
 export interface LanguageOption {
   code: LanguageCode;

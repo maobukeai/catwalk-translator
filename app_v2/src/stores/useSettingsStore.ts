@@ -616,6 +616,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       theme: normalizedTheme,
       appearance: updatedAppearance,
     };
+    // 毫秒级即时同步 CSS 根变量，消除 React 调度与 re-render 延迟
+    if (typeof document !== 'undefined') {
+      const bEnabled = updatedAppearance.enableBlur ?? true;
+      const bAmount = bEnabled ? (updatedAppearance.blurAmount ?? 24) : 0;
+      document.documentElement.style.setProperty('--glass-blur', `${bAmount}px`);
+    }
+
     // 毫秒级即时同步 UI 状态
     set({
       settings: updated,

@@ -69,6 +69,13 @@ const TARGET_LANG_OPTIONS: { code: LanguageCode; label: string }[] = [
   { code: 'de', label: '德' },
   { code: 'fr', label: '法' },
   { code: 'es', label: '西' },
+  { code: 'ru', label: '俄' },
+  { code: 'zh-TW', label: '繁' },
+  { code: 'it', label: '意' },
+  { code: 'pt', label: '葡' },
+  { code: 'ar', label: '阿' },
+  { code: 'th', label: '泰' },
+  { code: 'vi', label: '越' },
 ];
 
 const PRESET_COLORS = [
@@ -128,6 +135,21 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
 }) => {
   const storeSettings = useSettingsStore((s) => s.settings);
   const effectiveSettings = settingsProp || storeSettings;
+
+  const enabledLlmConfigs = (effectiveSettings.llmConfigs || []).filter(
+    (cfg) => !!cfg.apiKey?.trim() || cfg.endpoint?.includes('localhost') || cfg.endpoint?.includes('127.0.0.1')
+  );
+
+  const onlineEnginesList = [
+    { key: 'google', label: 'Google 翻译', enabled: effectiveSettings.onlineEngines?.google ?? true },
+    { key: 'bing', label: '微软 Bing 翻译', enabled: effectiveSettings.onlineEngines?.bing ?? true },
+    { key: 'youdao', label: '网易有道翻译', enabled: effectiveSettings.onlineEngines?.youdao ?? true },
+    { key: 'deepl', label: 'DeepL 极速翻译', enabled: !!effectiveSettings.onlineEngines?.deepl },
+    { key: 'baidu', label: '百度通用翻译', enabled: !!effectiveSettings.onlineEngines?.baidu },
+    { key: 'myMemory', label: 'MyMemory 记忆库', enabled: !!effectiveSettings.onlineEngines?.myMemory },
+    { key: 'tencent', label: '腾讯交互翻译', enabled: !!effectiveSettings.onlineEngines?.tencent },
+  ].filter((item) => item.enabled);
+
   return (
     <div
       data-testid={testId}
@@ -374,71 +396,30 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
           >
             <option value="auto">⚡ 默认多级队列 (智能回退)</option>
 
-            {/* 🤖 AI 深度翻译 */}
-            <optgroup label="🤖 AI 深度翻译">
-              {effectiveSettings.llmConfigs && effectiveSettings.llmConfigs.length > 0 ? (
-                effectiveSettings.llmConfigs.map((cfg) => {
+            {/* 🤖 AI 深度翻译（仅展示已配置/启用的模型） */}
+            {enabledLlmConfigs.length > 0 && (
+              <optgroup label="🤖 AI 深度翻译">
+                {enabledLlmConfigs.map((cfg) => {
                   const val = (cfg.model || cfg.provider || cfg.id || 'deepseek').toLowerCase();
                   return (
                     <option key={cfg.id || cfg.model} value={val}>
                       {cfg.provider} ({cfg.model || '默认'})
                     </option>
                   );
-                })
-              ) : (
-                <>
-                  <option value="deepseek">DeepSeek (deepseek-chat)</option>
-                  <option value="openai">OpenAI (gpt-4o-mini)</option>
-                </>
-              )}
-            </optgroup>
+                })}
+              </optgroup>
+            )}
 
-            {/* 🌐 在线翻译通道 */}
-            <optgroup label="🌐 在线翻译通道">
-              {effectiveSettings.onlineEngines?.google !== false && (
-                <option value="google">Google 翻译</option>
-              )}
-              {effectiveSettings.onlineEngines?.bing !== false && (
-                <option value="bing">微软 Bing 翻译</option>
-              )}
-              {effectiveSettings.onlineEngines?.youdao !== false && (
-                <option value="youdao">网易有道翻译</option>
-              )}
-              {effectiveSettings.onlineEngines?.deepl && (
-                <option value="deepl">DeepL 极速翻译</option>
-              )}
-              {effectiveSettings.onlineEngines?.baidu && (
-                <option value="baidu">百度通用翻译</option>
-              )}
-              {effectiveSettings.onlineEngines?.myMemory && (
-                <option value="myMemory">MyMemory 记忆库</option>
-              )}
-              {effectiveSettings.onlineEngines?.tencent && (
-                <option value="tencent">腾讯交互翻译</option>
-              )}
-            </optgroup>
-
-            {/* 📚 CG 术语词库 */}
-            <optgroup label="📚 CG 术语词库">
-              {effectiveSettings.presetDicts?.blender !== false && (
-                <option value="blender">Blender 词库</option>
-              )}
-              {effectiveSettings.presetDicts?.substance !== false && (
-                <option value="substance">Substance 材质库</option>
-              )}
-              {effectiveSettings.presetDicts?.unity !== false && (
-                <option value="unity">Unity 引擎词库</option>
-              )}
-              {effectiveSettings.presetDicts?.unreal !== false && (
-                <option value="unreal">Unreal 虚幻词库</option>
-              )}
-              {effectiveSettings.presetDicts?.maya !== false && (
-                <option value="maya">Maya 建模词库</option>
-              )}
-              {effectiveSettings.presetDicts?.houdini !== false && (
-                <option value="houdini">Houdini 特效词库</option>
-              )}
-            </optgroup>
+            {/* 🌐 在线翻译通道（仅展示已开启的引擎） */}
+            {onlineEnginesList.length > 0 && (
+              <optgroup label="🌐 在线翻译通道">
+                {onlineEnginesList.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </div>
 

@@ -1,4 +1,4 @@
-﻿# 🐾 猫步翻译 (Catwalk Translator)
+# 🐾 猫步翻译 (Catwalk Translator)
 
 <p align="center">
   <img src="app_icon.png" width="128" height="128" alt="猫步翻译 Logo" />
@@ -64,13 +64,13 @@
 
 ## 📦 下载与安装指南
 
-请进入 [GitHub Releases 发布页面](https://github.com/maobukeai/catwalk-translator/releases/tag/v0.0.1) 下载对应格式文件：
+请进入 [GitHub Releases 发布页面](https://github.com/maobukeai/catwalk-translator/releases/tag/v0.1.2) 下载对应格式文件：
 
 | 安装包类型 | 文件名 | 说明 |
 | :--- | :--- | :--- |
-| **Windows 中文安装包 (强烈推荐)** | `猫步翻译_0.0.1_x64-setup.exe` | 纯中文安装引导，体积仅 ~7.2MB，支持覆盖升级与自动桌面图标 |
-| **Windows MSI 安装包** | `猫步翻译_0.0.1_x64_zh-CN.msi` | 适用于 Windows 批量部署与标准 MSI 管理环境 |
-| **绿色便携免安装版** | `猫步翻译_0.0.1_x64_portable.exe` | 单文件独立运行，无需安装，解压即用 |
+| **Windows 中文安装包 (强烈推荐)** | `猫步翻译_0.1.2_x64-setup.exe` | 纯中文安装引导，体积仅 ~7.2MB，支持覆盖升级与自动桌面图标 |
+| **Windows MSI 安装包** | `猫步翻译_0.1.2_x64_zh-CN.msi` | 适用于 Windows 批量部署与标准 MSI 管理环境 |
+| **绿色便携免安装版** | `猫步翻译_0.1.2_x64_portable.exe` | 单文件独立运行，无需安装，解压即用 |
 
 ### 🔄 覆盖安装与升级说明
 - 安装包采用智能覆盖安装机制，直接运行最新安装包即可**自动就地升级**，无需手动卸载旧版本；

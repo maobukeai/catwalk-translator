@@ -100,11 +100,11 @@ pub fn sample_text_color(bmp: &[u8], full_w: u32, full_h: u32, bbox: BoundingBox
     median3(ink)
 }
 
-/// Grow the OCR box a few pixels so antialiased glyph edges are covered too.
+/// Grow the OCR box a few pixels so antialiased glyph edges and upper/lower strokes are completely covered too.
 pub fn pad_bbox(bbox: BoundingBox, full_w: u32, full_h: u32) -> (i32, i32, i32, i32) {
     let h = bbox.height.max(1) as f32;
-    let pad_x = (2.0 + h * 0.14) as i32;
-    let pad_y = (1.0 + h * 0.10) as i32;
+    let pad_x = (4.0 + h * 0.18) as i32;
+    let pad_y = (3.0 + h * 0.20) as i32;
     let x0 = (bbox.x - pad_x).max(0);
     let y0 = (bbox.y - pad_y).max(0);
     let x1 = (bbox.x + bbox.width as i32 + pad_x).min(full_w as i32 - 1);
