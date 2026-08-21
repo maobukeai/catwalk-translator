@@ -31,6 +31,21 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  build: {
+    minify: 'esbuild',
+    cssMinify: 'esbuild',
+    target: 'esnext',
+    reportCompressedSize: false,
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'zustand', 'clsx', 'tailwind-merge'],
+          icons: ['lucide-react'],
+        },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: "jsdom",

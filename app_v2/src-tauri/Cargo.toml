@@ -54,10 +54,11 @@ windows = { version = "0.58", features = [
 
 
 [profile.release]
-opt-level = 3
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
-strip = "symbols"
+strip = true
+overflow-checks = false
 
 
