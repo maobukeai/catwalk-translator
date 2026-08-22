@@ -587,6 +587,16 @@ pub fn run() {
                 }
             }
 
+            // 自动开启开机自启（首次运行 / 安装后默认激活自启）
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let autostart_mgr = app.autostart();
+                if let Ok(false) = autostart_mgr.is_enabled() {
+                    let _ = autostart_mgr.enable();
+                    eprintln!("[AutoStart] 默认开机自启已成功注册至 Windows 启动项");
+                }
+            }
+
             // Pre-warm OCR engines in background so first OCR call is instant.
             // Priority: Rust-native ONNX engine (if models exist) → RapidOCR daemon.
             crate::ocr::mark_ocr_warming();
@@ -671,6 +681,7 @@ pub fn run() {
             commands::cmd_offline_status,
             commands::cmd_image_ocr_translate,
             commands::cmd_exit_app,
+            commands::cmd_hide_main_window,
             lookup_monitor::cmd_get_lookup_payload,
             lookup_monitor::cmd_hide_lookup_popup,
             pin::cmd_open_pin,

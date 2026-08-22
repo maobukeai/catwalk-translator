@@ -139,7 +139,7 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
       return '';
     case 'cmd_import_backup_base64':
       return {
-        appVersion: '0.1.4',
+        appVersion: '0.1.5',
         createdAt: '2026-08-22 12:00:00',
         historyCount: 0,
         captureSessionCount: 0,
@@ -152,7 +152,7 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
       return [];
     case 'cmd_webdav_restore':
       return {
-        appVersion: '0.1.4',
+        appVersion: '0.1.5',
         createdAt: '2026-08-22 12:00:00',
         historyCount: 0,
         captureSessionCount: 0,

@@ -1,8 +1,7 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useAppTheme } from '../hooks/useAppTheme';
-import { cmdExitApp, isTauri } from '../services/tauri';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { cmdExitApp, cmdHideMainWindow, isTauri } from '../services/tauri';
 
 interface CloseConfirmModalProps {
   isOpen: boolean;
@@ -62,15 +61,7 @@ export const CloseConfirmModal: React.FC<CloseConfirmModalProps> = ({ isOpen, on
       await saveSettings();
     }
     onClose();
-    if (isTauri()) {
-      try {
-        await getCurrentWindow().hide();
-      } catch (err) {
-        console.warn('Hide window error:', err);
-      }
-    } else {
-      console.log('[Browser Mode] Minimize to tray confirmed');
-    }
+    await cmdHideMainWindow();
   };
 
   return (

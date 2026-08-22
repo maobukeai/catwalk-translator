@@ -45,6 +45,23 @@ export async function cmdExitApp(): Promise<void> {
   }
 }
 
+export async function cmdHideMainWindow(): Promise<void> {
+  if (isTauri()) {
+    try {
+      await invoke('cmd_hide_main_window');
+    } catch {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        await getCurrentWindow().hide();
+      } catch (err) {
+        console.warn('Hide window error:', err);
+      }
+    }
+  } else {
+    console.log('[Browser Mode] cmdHideMainWindow called');
+  }
+}
+
 export async function cmdShowOverlay(): Promise<void> {
   if (isTauri()) {
     await invoke('cmd_show_overlay');

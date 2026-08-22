@@ -469,3 +469,11 @@ pub fn cmd_exit_app(app: tauri::AppHandle) {
     crate::translator::shared_pipeline().cache.save_to_disk();
     app.exit(0);
 }
+
+#[tauri::command]
+pub fn cmd_hide_main_window(app: tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.hide();
+    }
+}
+
