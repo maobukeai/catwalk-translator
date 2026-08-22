@@ -13,7 +13,7 @@ import { SpotlightModal } from "./components/SpotlightModal";
 import { OnboardingModal } from "./components/OnboardingModal";
 import { ClipboardToast, type ClipboardPayload } from "./components/ClipboardToast";
 import { CloseConfirmModal } from "./components/CloseConfirmModal";
-import { isTauri, cmdQueryText, cmdSetWindowBlur, cmdExitApp } from "./services/tauri";
+import { isTauri, cmdQueryText, cmdSetWindowBlur, cmdExitApp, cmdGetAutoStart, cmdSetAutoStart } from "./services/tauri";
 import { matchesHotkey } from "./services/hotkeys";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useAppTheme } from "./hooks/useAppTheme";
@@ -37,6 +37,26 @@ function App() {
     window.addEventListener("open-onboarding", reopen);
     return () => window.removeEventListener("open-onboarding", reopen);
   }, []);
+
+  // 首次运行 / 安装后默认开启开机自启
+  useEffect(() => {
+    try {
+      const KEY = "catwalk_autostart_default_init_v1";
+      if (!localStorage.getItem(KEY)) {
+        localStorage.setItem(KEY, "true");
+        cmdGetAutoStart()
+          .then((enabled) => {
+            if (!enabled) {
+              void cmdSetAutoStart(true);
+            }
+          })
+          .catch(() => {});
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const closeOnboarding = () => {
     try {
       localStorage.setItem("catwalk_onboarding_v1", "1");
