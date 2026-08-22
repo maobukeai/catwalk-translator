@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useAppTheme } from '../hooks/useAppTheme';
 import { cmdExitApp, cmdHideMainWindow, isTauri } from '../services/tauri';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 interface CloseConfirmModalProps {
   isOpen: boolean;
