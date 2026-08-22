@@ -6,7 +6,7 @@
 
 use app_v2_lib::{
     capture::{CoordinateMapper, LogicalRect, PhysicalRect},
-    commands::{cmd_capture_and_ocr, cmd_sample_colors, cmd_translate_phrases},
+    commands::{cmd_capture_and_ocr, cmd_sample_colors},
     models::{BoundingBox, LlmConfig},
     sampler::ColorSampler,
     translator::{CgDictionaryEngine, MultiTierPipeline},
@@ -68,8 +68,7 @@ mod category_1_empty_text_dict_extremes {
     fn test_02_zero_length_phrase_translation() {
         tauri::async_runtime::block_on(async {
             let phrases = vec!["".to_string(), "   ".to_string(), "\t\n".to_string()];
-            let res = cmd_translate_phrases(phrases, "blender".to_string(), None)
-                .await
+            let res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, "blender", None, &[]).await)
                 .expect("Translate command failed");
 
             assert_eq!(res.len(), 3);
@@ -95,8 +94,7 @@ mod category_1_empty_text_dict_extremes {
             assert!(long_phrase.len() > 10000);
 
             let phrases = vec![long_phrase.clone()];
-            let res = cmd_translate_phrases(phrases, "blender".to_string(), None)
-                .await
+            let res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, "blender", None, &[]).await)
                 .expect("Translate command failed");
 
             assert_eq!(res.len(), 1);
@@ -147,7 +145,7 @@ mod category_1_empty_text_dict_extremes {
             let pipeline = MultiTierPipeline::new();
             let phrases = vec!["Principled BSDF".to_string()];
             let res = pipeline
-                .translate_phrases(&phrases, "corrupt_dict_name", None)
+                .translate_phrases(&phrases, "corrupt_dict_name", None, &[])
                 .await;
             assert_eq!(res.len(), 1);
             assert_eq!(res[0].translated, "原理化 BSDF");
@@ -338,7 +336,7 @@ mod category_3_network_api_failure_fallbacks {
 
             let phrases = vec!["Principled BSDF".to_string()];
             let results = pipeline
-                .translate_phrases(&phrases, "blender", Some(&timeout_config))
+                .translate_phrases(&phrases, "blender", Some(&timeout_config), &[])
                 .await;
 
             assert_eq!(results.len(), 1);
@@ -364,7 +362,7 @@ mod category_3_network_api_failure_fallbacks {
             };
 
             let err = pipeline
-                .translate_via_llm(&["UnknownTerm".to_string()], &config)
+                .translate_via_llm(&["UnknownTerm".to_string()], &config, &[])
                 .await;
             assert!(err.is_err(), "Invalid endpoint must return error");
 
@@ -374,7 +372,7 @@ mod category_3_network_api_failure_fallbacks {
                 "RandomUnknownTermXYZ".to_string(),
             ];
             let results = pipeline
-                .translate_phrases(&phrases, "substance", Some(&config))
+                .translate_phrases(&phrases, "substance", Some(&config), &[])
                 .await;
 
             assert_eq!(results.len(), 2);
@@ -409,7 +407,7 @@ mod category_3_network_api_failure_fallbacks {
 
             // Ensure pipeline handles unparseable LLM output gracefully for batch phrases
             let phrases = vec!["Roughness".to_string()];
-            let res = pipeline.translate_phrases(&phrases, "blender", None).await;
+            let res = pipeline.translate_phrases(&phrases, "blender", None, &[]).await;
             assert_eq!(res.len(), 1);
             assert_eq!(res[0].translated, "粗糙度");
         });
@@ -436,7 +434,7 @@ mod category_3_network_api_failure_fallbacks {
             ];
 
             let results = pipeline
-                .translate_phrases(&phrases, "blender", Some(&broken_config))
+                .translate_phrases(&phrases, "blender", Some(&broken_config), &[])
                 .await;
 
             assert_eq!(results.len(), 3);

@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "../services/tauri";
 import { useAppTheme } from "../hooks/useAppTheme";
 import { useOcrStatus } from "../hooks/useOcrStatus";
-import appIcon from "../assets/app_icon.png";
+import appIcon from "../assets/app_icon_v2.png";
 
 interface TitleBarProps {
   onTriggerCapture?: () => void;
@@ -137,7 +137,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onQuickSearch, onOpenAbout, 
       >
         <img
           src={appIcon}
-          className="h-6 w-6 rounded-[6px] object-cover select-none shadow-sm drop-shadow-sm shrink-0"
+          className="h-6 w-6 object-contain select-none shrink-0"
           alt="猫步翻译"
         />
         <span className={`text-[13px] font-bold tracking-tight ${isLight ? 'text-slate-800' : 'text-white/90'}`}>

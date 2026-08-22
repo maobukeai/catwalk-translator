@@ -82,6 +82,26 @@ pub fn parse_proxy_to_url(proxy_str: &str) -> String {
     }
 }
 
+/// 用户在设置中心手动指定的代理（如 http://127.0.0.1:7890）。
+/// 优先级高于系统代理自动探测；None 表示未启用，回落自动探测。
+static MANUAL_PROXY: RwLock<Option<String>> = RwLock::new(None);
+
+pub fn set_manual_proxy(proxy_url: Option<String>) {
+    if let Ok(mut lock) = MANUAL_PROXY.write() {
+        *lock = proxy_url.filter(|s| !s.trim().is_empty());
+    }
+}
+
+/// 手动代理 > 系统注册表自动探测
+pub fn effective_proxy() -> Option<String> {
+    if let Ok(lock) = MANUAL_PROXY.read() {
+        if let Some(manual) = lock.as_ref() {
+            return Some(manual.clone());
+        }
+    }
+    detect_windows_proxy()
+}
+
 /// 创建带系统代理自适应、Cookie Store 与标准 UA 的统一 reqwest Client
 pub fn create_http_client(timeout_ms: u64) -> Client {
     let mut builder = Client::builder()
@@ -89,7 +109,7 @@ pub fn create_http_client(timeout_ms: u64) -> Client {
         .cookie_store(true)
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
 
-    if let Some(proxy_str) = detect_windows_proxy() {
+    if let Some(proxy_str) = effective_proxy() {
         let proxy_url = parse_proxy_to_url(&proxy_str);
         if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
             let proxy = proxy.no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.1,::1,0.0.0.0"));
@@ -109,6 +129,119 @@ pub fn style_directive(style: Option<&str>) -> &'static str {
         Some("free") => " Style: translate naturally and idiomatically — prioritize fluent, readable output over literal fidelity.",
         _ => "",
     }
+}
+
+// ── 术语强制表(Glossary Enforcement)─────────────────────────────────────────
+// 用户自定义词库双重生效:① 精确命中在管线 Step 0.5 直接短路(确定性);
+// ② 未命中的短语把「相关术语」注入 LLM prompt 强制一致性。
+
+/// 术语对 (original → translated)。
+pub type GlossaryPairs = Vec<(String, String)>;
+
+/// 术语指纹(FNV-1a;空词库 = 0)。词库内容变化 → 翻译记忆整体失效,
+/// 避免旧词库下缓存的译文在术语强制表更新后继续命中。
+pub fn glossary_hash(pairs: &[(String, String)]) -> u64 {
+    if pairs.is_empty() {
+        return 0;
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    const SEP: u8 = 0x1f;
+    for (o, t) in pairs {
+        for b in o.as_bytes().iter().chain(t.as_bytes()).chain(std::iter::once(&SEP)) {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// 从设置中的自定义词条构建术语对(过滤空项并 trim)。
+pub fn glossary_from_settings(items: &[crate::models::CustomDictItem]) -> GlossaryPairs {
+    items
+        .iter()
+        .filter(|i| !i.original.trim().is_empty() && !i.translated.trim().is_empty())
+        .map(|i| {
+            (
+                i.original.trim().to_string(),
+                i.translated.trim().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// 自定义词库精确查找:外文→中文走正向匹配(精确 + 忽略大小写),
+/// 中文→外文按译文反向匹配 —— 与预置词典 `lookup_dict` 语义一致。
+pub fn lookup_glossary(pairs: &[(String, String)], phrase: &str) -> Option<String> {
+    let trimmed = phrase.trim();
+    if trimmed.is_empty() || pairs.is_empty() {
+        return None;
+    }
+    let has_chinese = trimmed
+        .chars()
+        .any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+    if has_chinese {
+        for (orig, trans) in pairs {
+            if trans == trimmed {
+                return Some(orig.clone());
+            }
+        }
+        let lower = trimmed.to_lowercase();
+        for (orig, trans) in pairs {
+            if trans.to_lowercase() == lower {
+                return Some(orig.clone());
+            }
+        }
+    } else {
+        for (orig, trans) in pairs {
+            if orig == trimmed {
+                return Some(trans.clone());
+            }
+        }
+        let lower = trimmed.to_lowercase();
+        for (orig, trans) in pairs {
+            if orig.to_lowercase() == lower {
+                return Some(trans.clone());
+            }
+        }
+    }
+    None
+}
+
+/// 构建注入 LLM 的强制术语指令:只保留与待译文本相关的词条
+/// (原文或译文在待译文本中出现,忽略大小写),上限 40 条防止 prompt 膨胀。
+/// `reverse = true` 表示翻译方向为 中→外,映射方向需对调展示。
+/// 无相关术语时返回空串,prompt 保持原样。
+pub fn glossary_directive(pairs: &[(String, String)], texts: &[&str], reverse: bool) -> String {
+    const MAX_TERMS: usize = 40;
+    if pairs.is_empty() {
+        return String::new();
+    }
+    let haystacks: Vec<String> = texts.iter().map(|t| t.to_lowercase()).collect();
+    let mut picked: Vec<String> = Vec::new();
+    for (orig, trans) in pairs {
+        if picked.len() >= MAX_TERMS {
+            break;
+        }
+        let o = orig.to_lowercase();
+        let t = trans.to_lowercase();
+        let relevant = haystacks.iter().any(|h| h.contains(&o) || h.contains(&t));
+        if relevant {
+            let (from, to) = if reverse { (trans, orig) } else { (orig, trans) };
+            // 引号转义,避免破坏指令文本
+            picked.push(format!(
+                "\"{}\"=\"{}\"",
+                from.replace('"', "'"),
+                to.replace('"', "'")
+            ));
+        }
+    }
+    if picked.is_empty() {
+        return String::new();
+    }
+    format!(
+        " Glossary (MANDATORY — these term translations are user-specified and MUST be used exactly as given wherever a term appears): {}.",
+        picked.join("; ")
+    )
 }
 
 pub fn get_cg_dicts() -> &'static HashMap<String, HashMap<String, String>> {
@@ -230,8 +363,37 @@ impl TranslatorEngine for CgDictionaryEngine {
     }
 }
 
+/// 常驻后台进程的翻译缓存必须设上限，否则长时间划词会让 HashMap 无限膨胀。
+const TRANSLATION_CACHE_CAPACITY: usize = 2000;
+
+struct TranslationCacheInner {
+    map: HashMap<String, TranslationResult>,
+    /// 插入顺序，用于容量超限时按 FIFO 淘汰最旧条目
+    order: std::collections::VecDeque<String>,
+    /// 自上次落盘以来的变更数，达到阈值自动持久化（翻译记忆跨重启复用）
+    dirty: u32,
+    /// 生成这批缓存时的术语指纹;词库变化后整体失效(见 ensure_glossary)
+    glossary_hash: u64,
+}
+
+/// 落盘格式:v2 带 glossary_hash 元数据;旧版纯 map 视为「指纹未知」,
+/// 加载后首次 ensure_glossary 会整体清空(一次性迁移损失,可接受)。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TmDiskFile {
+    glossary_hash: u64,
+    entries: HashMap<String, TranslationResult>,
+}
+
+/// 翻译记忆落盘路径（启动时由 lib.rs 注入 app_config_dir）
+static TM_FILE: OnceLock<std::path::PathBuf> = OnceLock::new();
+const TM_SAVE_THRESHOLD: u32 = 32;
+
+pub fn set_tm_path(path: std::path::PathBuf) {
+    let _ = TM_FILE.set(path);
+}
+
 pub struct TranslationCache {
-    store: RwLock<HashMap<String, TranslationResult>>,
+    inner: RwLock<TranslationCacheInner>,
 }
 
 impl Default for TranslationCache {
@@ -243,29 +405,161 @@ impl Default for TranslationCache {
 impl TranslationCache {
     pub fn new() -> Self {
         Self {
-            store: RwLock::new(HashMap::new()),
+            inner: RwLock::new(TranslationCacheInner {
+                map: HashMap::new(),
+                order: std::collections::VecDeque::new(),
+                dirty: 0,
+                glossary_hash: 0,
+            }),
         }
     }
 
     pub fn store(&self, result: TranslationResult) {
-        if let Ok(mut lock) = self.store.write() {
-            lock.insert(result.original.trim().to_string(), result);
+        let key = result.original.trim().to_string();
+        if key.is_empty() {
+            return;
+        }
+        let should_save = if let Ok(mut lock) = self.inner.write() {
+            if !lock.map.contains_key(&key) {
+                lock.order.push_back(key.clone());
+            }
+            lock.map.insert(key, result);
+            while lock.order.len() > TRANSLATION_CACHE_CAPACITY {
+                match lock.order.pop_front() {
+                    Some(oldest) => {
+                        lock.map.remove(&oldest);
+                    }
+                    None => break,
+                }
+            }
+            lock.dirty += 1;
+            if lock.dirty >= TM_SAVE_THRESHOLD {
+                lock.dirty = 0;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if should_save {
+            self.save_to_disk();
+        }
+    }
+
+    /// 启动时从磁盘加载翻译记忆（缺失/损坏时静默为空缓存）
+    pub fn load_from_disk(&self) {
+        let Some(path) = TM_FILE.get() else {
+            return;
+        };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return;
+        };
+        // v2 格式(带指纹)优先;旧版纯 map 以「指纹未知」哨兵加载
+        let (glossary_hash, map) =
+            if let Ok(file) = serde_json::from_str::<TmDiskFile>(&content) {
+                (file.glossary_hash, file.entries)
+            } else if let Ok(map) =
+                serde_json::from_str::<HashMap<String, TranslationResult>>(&content)
+            {
+                (u64::MAX, map)
+            } else {
+                return;
+            };
+        if let Ok(mut lock) = self.inner.write() {
+            if !lock.map.is_empty() {
+                return; // 运行期热缓存不覆盖
+            }
+            let mut order = std::collections::VecDeque::with_capacity(map.len());
+            for k in map.keys().take(TRANSLATION_CACHE_CAPACITY) {
+                order.push_back(k.clone());
+            }
+            let map = map
+                .into_iter()
+                .take(TRANSLATION_CACHE_CAPACITY)
+                .collect::<HashMap<_, _>>();
+            lock.map = map;
+            lock.order = order;
+            lock.dirty = 0;
+            lock.glossary_hash = glossary_hash;
+        }
+    }
+
+    /// 持久化到磁盘（best-effort；失败仅记日志不影响翻译）
+    pub fn save_to_disk(&self) {
+        let Some(path) = TM_FILE.get() else {
+            return;
+        };
+        let snapshot = match self.inner.read() {
+            Ok(lock) => lock.map.clone(),
+            Err(_) => return,
+        };
+        let glossary_hash = match self.inner.read() {
+            Ok(lock) => lock.glossary_hash,
+            Err(_) => return,
+        };
+        let file = TmDiskFile {
+            glossary_hash,
+            entries: snapshot,
+        };
+        match serde_json::to_string(&file) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(path, json) {
+                    eprintln!("[tm] 翻译记忆落盘失败: {}", e);
+                }
+            }
+            Err(e) => eprintln!("[tm] 翻译记忆序列化失败: {}", e),
         }
     }
 
     pub fn retrieve(&self, key: &str) -> Option<TranslationResult> {
-        if let Ok(lock) = self.store.read() {
-            lock.get(key.trim()).cloned()
+        if let Ok(lock) = self.inner.read() {
+            lock.map.get(key.trim()).cloned()
         } else {
             None
         }
     }
 
     pub fn clear(&self) {
-        if let Ok(mut lock) = self.store.write() {
-            lock.clear();
+        if let Ok(mut lock) = self.inner.write() {
+            lock.map.clear();
+            lock.order.clear();
+            lock.dirty = 0;
         }
+        self.save_to_disk();
     }
+
+    /// 术语指纹守卫:当前指纹与缓存生成时不一致 → 清空缓存(旧词库下的
+    /// 译文不能在术语强制表更新后继续命中)。幂等,读锁快路径零开销。
+    pub fn ensure_glossary(&self, hash: u64) {
+        let needs_clear = match self.inner.read() {
+            Ok(lock) => lock.glossary_hash != hash,
+            Err(_) => return,
+        };
+        if !needs_clear {
+            return;
+        }
+        if let Ok(mut lock) = self.inner.write() {
+            if lock.glossary_hash != hash {
+                lock.glossary_hash = hash;
+                lock.map.clear();
+                lock.order.clear();
+                lock.dirty = 0;
+            } else {
+                return;
+            }
+        }
+        self.save_to_disk();
+    }
+}
+
+/// 全局唯一翻译管线：此前 commands / commands_capture / clipboard_watch /
+/// execute_universal_translate 各自 OnceLock 造了多份实例（多份 HTTP 客户端
+/// + 多份互不相通的缓存），统一为一份，翻译记忆才能整体持久化复用。
+static SHARED_PIPELINE: OnceLock<MultiTierPipeline> = OnceLock::new();
+
+pub fn shared_pipeline() -> &'static MultiTierPipeline {
+    SHARED_PIPELINE.get_or_init(MultiTierPipeline::new)
 }
 
 pub struct MultiTierPipeline {
@@ -351,8 +645,9 @@ impl MultiTierPipeline {
         phrases: &[String],
         preset: &str,
         llm_config: Option<&LlmConfig>,
+        glossary: &[(String, String)],
     ) -> Vec<TranslationResult> {
-        self.translate_phrases_styled(phrases, preset, llm_config, None)
+        self.translate_phrases_styled(phrases, preset, llm_config, None, glossary)
             .await
     }
 
@@ -362,7 +657,10 @@ impl MultiTierPipeline {
         preset: &str,
         llm_config: Option<&LlmConfig>,
         style: Option<&str>,
+        glossary: &[(String, String)],
     ) -> Vec<TranslationResult> {
+        // 词库变化 → 翻译记忆整体失效(读锁快路径,通常零开销)
+        self.cache.ensure_glossary(glossary_hash(glossary));
         let mut results: Vec<Option<TranslationResult>> = vec![None; phrases.len()];
         let mut unmatched_indices: Vec<usize> = Vec::new();
         let offline_ready = crate::offline::status().installed;
@@ -386,6 +684,21 @@ impl MultiTierPipeline {
                     source_tier: format!("{} (Cached)", cached.source_tier),
                 });
                 continue;
+            }
+
+            // Step 0.5: 用户自定义词库(术语强制表)——精确命中直接短路。
+            // 用户手写的术语优先级高于预置词典,保证永远按用户指定译法输出。
+            if !glossary.is_empty() {
+                if let Some(translated) = lookup_glossary(glossary, trimmed) {
+                    let res = TranslationResult {
+                        original: phrase.clone(),
+                        translated,
+                        source_tier: "custom_dict".to_string(),
+                    };
+                    self.cache.store(res.clone());
+                    results[i] = Some(res);
+                    continue;
+                }
             }
 
             // Step 1 & 2: Local Preset Dictionary & CG Fallback Dictionary
@@ -430,7 +743,7 @@ impl MultiTierPipeline {
         // Step 3: Tier 3 (LLM API Client)
         if let Some(config) = llm_config {
             if !config.endpoint.is_empty() {
-                let llm_res = self.translate_via_llm_with_style(&unmatched_phrases, config, style).await;
+                let llm_res = self.translate_via_llm_with_style(&unmatched_phrases, config, style, glossary).await;
                 if let Ok(map) = llm_res {
                     if !map.is_empty() {
                         let tier_label = if !config.provider.is_empty() {
@@ -506,13 +819,15 @@ impl MultiTierPipeline {
             }
         }
 
-        // Final Fallback for remaining phrases
+        // Final Fallback:所有引擎(词典/离线/LLM/在线)均不可用时保留干净原文,
+        // 不追加 "(通用翻译)" 后缀——译文区直接显示原文,tier 标注真实状态。
+        // 不写入缓存,网络恢复后重试可拿到真实翻译。
         for idx in still_unmatched {
             let p = &phrases[idx];
             results[idx] = Some(TranslationResult {
                 original: p.clone(),
-                translated: format!("{} (通用翻译)", p),
-                source_tier: "Fallback API".to_string(),
+                translated: p.clone(),
+                source_tier: "翻译失败·点击重试".to_string(),
             });
         }
 
@@ -523,8 +838,9 @@ impl MultiTierPipeline {
         &self,
         phrases: &[String],
         config: &LlmConfig,
+        glossary: &[(String, String)],
     ) -> Result<HashMap<String, String>, String> {
-        self.translate_via_llm_with_style(phrases, config, None)
+        self.translate_via_llm_with_style(phrases, config, None, glossary)
             .await
     }
 
@@ -533,6 +849,7 @@ impl MultiTierPipeline {
         phrases: &[String],
         config: &LlmConfig,
         style: Option<&str>,
+        glossary: &[(String, String)],
     ) -> Result<HashMap<String, String>, String> {
         let endpoint = config.endpoint.trim_end_matches('/');
         let url = if endpoint.ends_with("/chat/completions") {
@@ -544,10 +861,15 @@ impl MultiTierPipeline {
         let has_chinese = phrases
             .iter()
             .any(|p| p.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)));
+        // 术语强制表:只注入与待译短语相关的词条;中→英方向反转映射
+        let directive = {
+            let texts: Vec<&str> = phrases.iter().map(|s| s.as_str()).collect();
+            glossary_directive(glossary, &texts, has_chinese)
+        };
         let system_prompt = if has_chinese {
-            format!("You are an expert translator. Translate the given Chinese text/terms into natural English. Return ONLY a valid JSON object mapping each original Chinese string to its English translation, without markdown formatting or extra text.{}", style_directive(style))
+            format!("You are an expert translator. Translate the given Chinese text/terms into natural English. Return ONLY a valid JSON object mapping each original Chinese string to its English translation, without markdown formatting or extra text.{}{}", style_directive(style), directive)
         } else {
-            format!("You are an expert translator. Translate the given foreign/English text/terms into simplified Chinese. Return ONLY a valid JSON object mapping each original string to its simplified Chinese translation, without markdown formatting or extra text.{}", style_directive(style))
+            format!("You are an expert translator. Translate the given foreign/English text/terms into simplified Chinese. Return ONLY a valid JSON object mapping each original string to its simplified Chinese translation, without markdown formatting or extra text.{}{}", style_directive(style), directive)
         };
         let user_prompt = serde_json::to_string(phrases).unwrap_or_else(|_| "[]".to_string());
 
@@ -601,6 +923,7 @@ impl MultiTierPipeline {
         text: &str,
         preset: &str,
         llm_config: Option<&LlmConfig>,
+        glossary: &[(String, String)],
     ) -> TextQueryResponse {
         let trimmed = text.trim();
         let mut results = Vec::new();
@@ -628,7 +951,7 @@ impl MultiTierPipeline {
         if let Some(config) = llm_config {
             if !config.endpoint.is_empty() && !config.api_key.is_empty() {
                 let phrases = vec![trimmed.to_string()];
-                if let Ok(llm_map) = self.translate_via_llm(&phrases, config).await {
+                if let Ok(llm_map) = self.translate_via_llm(&phrases, config, glossary).await {
                     if let Some(llm_trans) = llm_map.get(trimmed) {
                         let provider_name = if !config.provider.is_empty() {
                             format!("LLM ({})", config.provider)
@@ -647,9 +970,9 @@ impl MultiTierPipeline {
 
         if results.is_empty() {
             results.push(MultiEngineTranslation {
-                engine_name: "默认回退引擎".to_string(),
-                translated: format!("{} (通用翻译)", trimmed),
-                source_tier: "Fallback API".to_string(),
+                engine_name: "暂无可用引擎".to_string(),
+                translated: trimmed.to_string(),
+                source_tier: "翻译失败".to_string(),
             });
         }
 
@@ -1525,6 +1848,7 @@ pub async fn translate_with_llm(
     target_lang: &str,
     config: &LlmConfig,
     style: Option<&str>,
+    glossary: &[(String, String)],
 ) -> MultiEngineTranslation {
     let provider = if config.provider.trim().is_empty() {
         "LLM".to_string()
@@ -1630,9 +1954,12 @@ pub async fn translate_with_llm(
     candidate_urls.retain(|url| seen.insert(url.clone()));
 
     let target_display = get_target_lang_display_name(target_lang);
+    // 术语强制表:目标为中文时正向,否则反转映射方向;仅注入相关词条
+    let target_is_chinese = matches!(target_lang, "zh" | "zh-CN" | "zh-TW" | "zh_cn" | "zh_tw");
+    let directive = glossary_directive(glossary, &[q], !target_is_chinese);
     let prompt = format!(
-        "You are a professional, accurate translator. Translate the following text into {}. Preserve formatting, code, numbers, and technical terms accurately. Return ONLY the translated text without explanations.{}\n\n{}",
-        target_display, style_directive(style), q
+        "You are a professional, accurate translator. Translate the following text into {}. Preserve formatting, code, numbers, and technical terms accurately. Return ONLY the translated text without explanations.{}{}\n\n{}",
+        target_display, style_directive(style), directive, q
     );
 
     let mut last_status_code = 0;
@@ -1806,6 +2133,7 @@ pub fn is_retry_translation(text: &str) -> bool {
 
 pub async fn execute_universal_translate(
     req: UniversalTranslationRequest,
+    glossary: &[(String, String)],
 ) -> Result<UniversalTranslationResponse, String> {
     let trimmed = req.text.trim();
     if trimmed.is_empty() {
@@ -1865,8 +2193,7 @@ pub async fn execute_universal_translate(
     });
 
     if is_dict_forced || (dicts_opt.map_or(true, |dicts| dicts.blender || dicts.substance || dicts.unity || dicts.unreal || dicts.maya || dicts.houdini) && trimmed.split_whitespace().count() <= 8) {
-        static PIPELINE: OnceLock<MultiTierPipeline> = OnceLock::new();
-        let pipeline = PIPELINE.get_or_init(MultiTierPipeline::new);
+        let pipeline = shared_pipeline();
         let target_preset = if is_dict_forced {
             forced.as_deref().unwrap_or(preset)
         } else {
@@ -2097,9 +2424,10 @@ pub async fn execute_universal_translate(
             let tgt = actual_target.to_string();
             let llm_cfg = config.clone();
             let style = req.style.clone();
+            let glossary_owned = glossary.to_vec();
 
             tasks.push(tokio::spawn(async move {
-                translate_with_llm(&c, &q, &tgt, &llm_cfg, style.as_deref()).await
+                translate_with_llm(&c, &q, &tgt, &llm_cfg, style.as_deref(), &glossary_owned).await
             }));
         }
     }
@@ -2241,6 +2569,56 @@ pub async fn translate_online_fallback_with(
     Err("Online translation fallback failed".to_string())
 }
 
+// ── 翻译记忆持久化往返测试 ────────────────────────────────────────────────
+#[cfg(test)]
+mod tm_tests {
+    use super::*;
+
+    // 两个场景合并为单个测试串行执行:set_tm_path 是进程级 OnceLock,拆成
+    // 两个并行测试会竞争同一路径(第二个 set 被忽略)导致偶发失败。
+    #[test]
+    fn translation_memory_disk_roundtrip_and_hot_cache_precedence() {
+        let dir = std::env::temp_dir().join(format!("tm_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("tm.json");
+        let _ = std::fs::remove_file(&path);
+        set_tm_path(path.clone());
+
+        // 场景 1:落盘 → 新实例恢复(模拟应用重启)
+        let a = TranslationCache::new();
+        a.store(TranslationResult {
+            original: "hello".into(),
+            translated: "你好".into(),
+            source_tier: "Preset".into(),
+        });
+        a.save_to_disk();
+        let b = TranslationCache::new();
+        b.load_from_disk();
+        let hit = b.retrieve("hello").expect("TM roundtrip hit");
+        assert_eq!(hit.translated, "你好");
+        assert_eq!(hit.source_tier, "Preset");
+
+        // 场景 2:已有热数据时 load 不得覆盖
+        let c = TranslationCache::new();
+        c.store(TranslationResult {
+            original: "hot".into(),
+            translated: "热".into(),
+            source_tier: "X".into(),
+        });
+        c.store(TranslationResult {
+            original: "disk".into(),
+            translated: "盘".into(),
+            source_tier: "X".into(),
+        });
+        c.save_to_disk();
+        c.load_from_disk();
+        assert!(c.retrieve("disk").is_some());
+        assert!(c.retrieve("hot").is_some());
+
+        let _ = std::fs::remove_file(&dir);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2356,7 +2734,7 @@ mod tests {
             endpoint: "https://api.deepseek.com/v1".to_string(),
         };
 
-        let result = translate_with_llm(&client, "Roughness", "zh-CN", &config, None).await;
+        let result = translate_with_llm(&client, "Roughness", "zh-CN", &config, None, &[]).await;
         assert_eq!(result.source_tier, "LLM (Config Required)");
         assert_eq!(result.translated, "[未配置 API Key · 点击前往设置]");
         assert_eq!(result.engine_name, "🤖 AI 深度翻译 (DeepSeek)");
@@ -2402,7 +2780,7 @@ mod tests {
             deepl_custom_url: None,
         };
 
-        let res = execute_universal_translate(req).await;
+        let res = execute_universal_translate(req, &[]).await;
         assert!(res.is_ok());
         let resp = res.unwrap();
         // Since LLM, DeepL, and Baidu have no keys/credentials and are not forced,
@@ -2413,5 +2791,194 @@ mod tests {
             assert!(!eng.engine_name.contains("百度"));
             assert!(!eng.translated.contains("未配置"));
         }
+    }
+}
+
+#[cfg(test)]
+mod glossary_tests {
+    use super::*;
+
+    fn pairs() -> Vec<(String, String)> {
+        vec![
+            ("Principled BSDF".to_string(), "原理化 BSDF".to_string()),
+            ("Roughness".to_string(), "粗糙度".to_string()),
+            ("Nanite".to_string(), "Nanite 虚拟化几何体".to_string()),
+        ]
+    }
+
+    #[test]
+    fn glossary_exact_hit_english_forward() {
+        let g = pairs();
+        assert_eq!(lookup_glossary(&g, "Principled BSDF"), Some("原理化 BSDF".to_string()));
+        // 忽略大小写
+        assert_eq!(lookup_glossary(&g, "roughness"), Some("粗糙度".to_string()));
+        // 首尾空白
+        assert_eq!(lookup_glossary(&g, "  Nanite  "), Some("Nanite 虚拟化几何体".to_string()));
+    }
+
+    #[test]
+    fn glossary_chinese_reverse_lookup() {
+        let g = pairs();
+        // 中文→外文:按译文反向精确匹配(子串不应误命中)
+        assert_eq!(lookup_glossary(&g, "粗糙度"), Some("Roughness".to_string()));
+        assert_eq!(lookup_glossary(&g, "原理化 BSDF"), Some("Principled BSDF".to_string()));
+        assert_eq!(lookup_glossary(&g, "粗糙"), None);
+        assert_eq!(lookup_glossary(&g, "原理化"), None);
+    }
+
+    #[test]
+    fn glossary_miss_and_empty() {
+        let g = pairs();
+        assert_eq!(lookup_glossary(&g, "Completely Unknown Term"), None);
+        assert_eq!(lookup_glossary(&[], "Roughness"), None);
+        assert_eq!(lookup_glossary(&g, "   "), None);
+    }
+
+    #[test]
+    fn glossary_directive_filters_irrelevant_terms() {
+        let g = pairs();
+        // 只有 Roughness 与待译文本相关 → 指令只含该词条
+        let d = glossary_directive(&g, &["Adjust the Roughness value"], false);
+        assert!(d.contains("\"Roughness\"=\"粗糙度\""));
+        assert!(!d.contains("Nanite"));
+        assert!(!d.contains("Principled"));
+        assert!(d.starts_with(" Glossary (MANDATORY"));
+    }
+
+    #[test]
+    fn glossary_directive_reverse_swaps_mapping() {
+        let g = pairs();
+        // 中→英方向:映射反转(译文中出现术语原文)
+        let d = glossary_directive(&g, &["调整粗糙度参数"], true);
+        assert!(d.contains("\"粗糙度\"=\"Roughness\""));
+        assert!(!d.contains("\"Roughness\"=\"粗糙度\""));
+    }
+
+    #[test]
+    fn glossary_directive_empty_when_no_relevant_or_no_pairs() {
+        let g = pairs();
+        assert_eq!(glossary_directive(&g, &["Totally unrelated sentence"], false), "");
+        assert_eq!(glossary_directive(&[], &["Roughness"], false), "");
+    }
+
+    #[test]
+    fn glossary_directive_caps_at_40_terms() {
+        let g: Vec<(String, String)> = (0..80)
+            .map(|i| (format!("Term{}", i), format!("术语{}", i)))
+            .collect();
+        // 待译文本包含全部 80 个术语原文,确保全部「相关」
+        let haystack: String = g.iter().map(|(o, _)| o.as_str()).collect::<Vec<_>>().join(" ");
+        let d = glossary_directive(&g, &[&haystack], false);
+        assert_eq!(d.matches("\"=\"").count(), 40);
+        // 前 40 条入选,后 40 条被截断
+        assert!(d.contains("\"Term0\""));
+        assert!(d.contains("\"Term39\""));
+        assert!(!d.contains("\"Term40\""));
+    }
+
+    #[test]
+    fn glossary_from_settings_filters_empty_entries() {
+        use crate::models::CustomDictItem;
+        let items = vec![
+            CustomDictItem {
+                id: "1".into(),
+                original: "  Bevel  ".into(),
+                translated: " 倒角 ".into(),
+                category: "Blender".into(),
+                note: None,
+                created_at: String::new(),
+            },
+            CustomDictItem {
+                id: "2".into(),
+                original: "   ".into(),
+                translated: "空原词".into(),
+                category: String::new(),
+                note: None,
+                created_at: String::new(),
+            },
+        ];
+        let g = glossary_from_settings(&items);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0], ("Bevel".to_string(), "倒角".to_string()));
+    }
+
+    #[test]
+    fn glossary_hash_empty_deterministic_and_sensitive() {
+        assert_eq!(glossary_hash(&[]), 0);
+        let a = glossary_hash(&[("A".to_string(), "甲".to_string())]);
+        let b = glossary_hash(&[("A".to_string(), "甲".to_string())]);
+        assert_eq!(a, b);
+        assert_ne!(a, 0);
+        // 译文变化 → 指纹变化
+        assert_ne!(a, glossary_hash(&[("A".to_string(), "乙".to_string())]));
+        // 词条顺序也参与指纹
+        let p1 = [("A".to_string(), "甲".to_string()), ("B".to_string(), "乙".to_string())];
+        let p2 = [("B".to_string(), "乙".to_string()), ("A".to_string(), "甲".to_string())];
+        assert_ne!(glossary_hash(&p1), glossary_hash(&p2));
+    }
+
+    #[test]
+    fn cache_ensure_glossary_clears_only_on_change() {
+        let c = TranslationCache::new();
+        c.store(TranslationResult {
+            original: "hello".into(),
+            translated: "你好".into(),
+            source_tier: "Preset".into(),
+        });
+        // 指纹 0 → 7:清空
+        c.ensure_glossary(7);
+        assert!(c.retrieve("hello").is_none());
+        // 重新存入,同指纹重复调用:保留
+        c.store(TranslationResult {
+            original: "hello".into(),
+            translated: "你好".into(),
+            source_tier: "Preset".into(),
+        });
+        c.ensure_glossary(7);
+        c.ensure_glossary(7);
+        assert!(c.retrieve("hello").is_some());
+        // 指纹再变:再次清空
+        c.ensure_glossary(8);
+        assert!(c.retrieve("hello").is_none());
+    }
+
+    #[test]
+    fn tm_disk_file_serialization_roundtrip_with_hash() {
+        let mut entries = HashMap::new();
+        entries.insert(
+            "hello".to_string(),
+            TranslationResult {
+                original: "hello".into(),
+                translated: "你好".into(),
+                source_tier: "Preset".into(),
+            },
+        );
+        let file = TmDiskFile {
+            glossary_hash: 42,
+            entries,
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        // v2 格式包含指纹元数据
+        assert!(json.contains("\"glossary_hash\":42"));
+        let back: TmDiskFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.glossary_hash, 42);
+        assert!(back.entries.contains_key("hello"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_shortcircuits_on_glossary_exact_hit() {
+        // 无需网络:精确命中词库的短语根本不会进入 LLM/在线回退
+        let pipeline = shared_pipeline();
+        let results = pipeline
+            .translate_phrases(
+                &["Principled BSDF Glossary-Only Term".to_string()],
+                "blender",
+                None,
+                &[("Principled BSDF Glossary-Only Term".to_string(), "自定义译名".to_string())],
+            )
+            .await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].translated, "自定义译名");
+        assert_eq!(results[0].source_tier, "custom_dict");
     }
 }

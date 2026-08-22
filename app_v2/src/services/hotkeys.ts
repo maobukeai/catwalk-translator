@@ -27,3 +27,25 @@ export function matchesHotkey(e: KeyboardEvent, hotkeyStr?: string): boolean {
 
   return pressedKey === targetKey || e.key.toUpperCase() === targetKey;
 }
+
+/**
+ * 归一化快捷键字符串用于冲突比较：统一小写、修饰键排序、
+ * meta/cmd/super 归一为 win，使 "Ctrl+Shift+C" 与 "shift+ctrl+c" 判等。
+ */
+export function normalizeHotkeyForCompare(hk: string): string {
+  const MODS = ['ctrl', 'alt', 'shift', 'win'];
+  return hk
+    .split('+')
+    .map((k) => k.trim().toLowerCase())
+    .map((k) => (['meta', 'cmd', 'super'].includes(k) ? 'win' : k))
+    .filter(Boolean)
+    .sort((a, b) => {
+      const ai = MODS.indexOf(a);
+      const bi = MODS.indexOf(b);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+      return 0;
+    })
+    .join('+');
+}

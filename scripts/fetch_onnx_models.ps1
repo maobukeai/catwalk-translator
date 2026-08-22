@@ -48,7 +48,7 @@ if ($local) {
     exit 0
 }
 
-# 2. Official ModelScope (PaddleOCR isn't on HF officially; paddle mirror used)
+# 2. PaddleOCR official Baidu BOS mirror (cn, fastest overseas-agnostic)
 Write-Host "Local rapidocr not found; downloading official PaddleOCR ONNX..."
 try {
     $base = "https://paddleocr.bj.bcebos.com/PP-OCRv3/chinese"
@@ -57,15 +57,24 @@ try {
     Copy-Item (Join-Path $env:TEMP "inference\ch_PP-OCRv3_det_infer\*.onnx") $OutDir -ErrorAction Continue
     Write-Host "[WARN] Paddle tar contains Paddle model files; ONNX export may be needed."
 } catch {
-    Write-Warning "ModelScope download failed: $($_.Exception.Message)"
+    Write-Warning "Baidu BOS download failed: $($_.Exception.Message)"
 }
 
-$det = Join-Path $OutDir "ch_PP-OCRv3_det_infer.onnx"
-if (-not (Test-Path $det)) {
+# 三个模型必须全部就位才算成功（det/rec/cls），缺任何一个都要明确报错，
+# 否则 OCR 引擎在运行期才会失败，排查成本更高。
+$required = @(
+    "ch_PP-OCRv3_det_infer.onnx",
+    "ch_PP-OCRv3_rec_infer.onnx",
+    "ch_ppocr_mobile_v2.0_cls_infer.onnx"
+)
+$missing = @($required | Where-Object { -not (Test-Path (Join-Path $OutDir $_)) })
+
+if ($missing.Count -gt 0) {
     Write-Host @"
 
 =============================================================
-  ONNX models NOT staged. Manual step required:
+  ONNX models NOT staged. Missing: $($missing -join ', ')
+  Manual step required:
   - Install Python:  pip install rapidocr_onnxruntime   then
     re-run this script; or copy these three files manually:
       ch_PP-OCRv3_det_infer.onnx

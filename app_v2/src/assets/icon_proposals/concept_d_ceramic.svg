@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Light Background Shadow -->
+    <filter id="squircle-shadow-d" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#64748B" flood-opacity="0.28"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.12"/>
+    </filter>
+
+    <filter id="paw-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.18"/>
+    </filter>
+
+    <!-- Ceramic White Gradient -->
+    <linearGradient id="bg-ceramic" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="50%" stop-color="#F8FAFC"/>
+      <stop offset="100%" stop-color="#E2E8F0"/>
+    </linearGradient>
+
+    <!-- Ceramic Edge Stroke -->
+    <linearGradient id="border-ceramic" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#CBD5E1" stop-opacity="0.6"/>
+    </linearGradient>
+
+    <!-- Vibrant Pastel Gradient (Inside Basin) -->
+    <linearGradient id="pastel-prism" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="35%" stop-color="#6366F1"/>
+      <stop offset="70%" stop-color="#D946EF"/>
+      <stop offset="100%" stop-color="#F97316"/>
+    </linearGradient>
+
+    <filter id="soft-glow-d" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- 1. Squircle Base Plate -->
+  <rect x="36" y="36" width="440" height="440" rx="98" ry="98"
+        fill="url(#bg-ceramic)" filter="url(#squircle-shadow-d)"/>
+  <rect x="36.5" y="36.5" width="439" height="439" rx="97.5" ry="97.5"
+        fill="none" stroke="url(#border-ceramic)" stroke-width="1.5"/>
+
+  <!-- 2. Sculpted Prismatic Cat Head Basin -->
+  <path d="M 175 365
+           C 140 365 125 330 135 285
+           C 145 235 180 195 205 155
+           C 212 143 218 125 220 110
+           C 222 106 228 106 232 114
+           C 245 145 258 180 282 195
+           C 305 180 318 145 332 114
+           C 336 106 342 106 344 110
+           C 346 125 352 143 359 155
+           C 384 195 419 235 429 285
+           C 439 330 424 365 389 365
+           C 345 365 320 340 282 340
+           C 245 340 220 365 175 365 Z"
+        fill="url(#pastel-prism)"
+        filter="url(#paw-shadow)"/>
+
+  <!-- 3. Central White Frosted Paw Icon Overlay -->
+  <!-- Main Pad -->
+  <ellipse cx="282" cy="275" rx="38" ry="32" fill="#FFFFFF" opacity="0.96" filter="url(#paw-shadow)"/>
+  <!-- Toe 1 -->
+  <ellipse cx="242" cy="235" rx="14" ry="18" fill="#FFFFFF" opacity="0.96" transform="rotate(-15 242 235)"/>
+  <!-- Toe 2 -->
+  <ellipse cx="270" cy="222" rx="15" ry="20" fill="#FFFFFF" opacity="0.96" transform="rotate(-4 270 222)"/>
+  <!-- Toe 3 -->
+  <ellipse cx="298" cy="222" rx="15" ry="20" fill="#FFFFFF" opacity="0.96" transform="rotate(4 298 222)"/>
+  <!-- Toe 4 -->
+  <ellipse cx="326" cy="235" rx="14" ry="18" fill="#FFFFFF" opacity="0.96" transform="rotate(15 326 235)"/>
+
+  <!-- 4. Subtle Bilingual Character Engraving inside Paw Pad -->
+  <text x="282" y="284" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif"
+        font-size="22" font-weight="700" fill="url(#pastel-prism)" text-anchor="middle" letter-spacing="1">
+    文/A
+  </text>
+</svg>

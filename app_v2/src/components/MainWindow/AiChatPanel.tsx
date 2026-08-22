@@ -138,9 +138,19 @@ function sessionDisplayTime(ts: number): string {
 }
 
 /**
- * 格式化简单 Markdown（将 **bold** 渲染为高亮节点，将 - 渲染为列表项）
+ * 格式化简单 Markdown（将 **bold** 渲染为高亮节点，将 - 渲染为列表项）。
+ * React.memo：流式输出期间 delta 只重渲染正在生成的消息，
+ * 其余已完成消息 props 不变直接跳过（30 会话列表不再全量重算）。
  */
-function renderFormattedContent(text: string, isLight: boolean, streaming: boolean) {
+const FormattedContent = React.memo(function FormattedContent({
+  text,
+  isLight,
+  streaming,
+}: {
+  text: string;
+  isLight: boolean;
+  streaming: boolean;
+}) {
   const lines = text.split('\n');
   const nodes = (
     <div className="space-y-1.5 select-text text-[14.5px] leading-relaxed">
@@ -186,7 +196,7 @@ function renderFormattedContent(text: string, isLight: boolean, streaming: boole
     </div>
   );
   return streaming ? <span className="stream-caret">{nodes}</span> : nodes;
-}
+});
 
 export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', onOpenSettings }) => {
   const { settings, setLlmConfig } = useSettingsStore();
@@ -366,18 +376,33 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
       try {
         // 首选：流式增量输出
         setStreamingId(aiMsgId);
-        replyText = await cmdChatLlmStream(apiMessages, llm, (delta) => {
+        // delta 缓冲节流：每个 token 都全量 map 重建 sessions 数组会造成
+        // 流式长回复时的明显卡顿，按 80ms 批量刷新一次即可保持流畅观感
+        let pendingDelta = '';
+        let lastFlushTs = 0;
+        const flushDelta = (force = false) => {
+          const now = Date.now();
+          if (!pendingDelta) return;
+          if (!force && now - lastFlushTs < 80) return;
+          const chunk = pendingDelta;
+          pendingDelta = '';
+          lastFlushTs = now;
           setSessions((prev) =>
             prev.map((s) =>
               s.id !== activeId
                 ? s
                 : {
                     ...s,
-                    messages: s.messages.map((m) => (m.id === aiMsgId ? { ...m, content: m.content + delta } : m)),
+                    messages: s.messages.map((m) => (m.id === aiMsgId ? { ...m, content: m.content + chunk } : m)),
                   }
             )
           );
+        };
+        replyText = await cmdChatLlmStream(apiMessages, llm, (delta) => {
+          pendingDelta += delta;
+          flushDelta();
         });
+        flushDelta(true);
       } catch (streamErr) {
         // 回退：非流式一次性返回（旧后端 / 流式解析失败）
         console.warn('Streaming failed, falling back to non-stream chat:', streamErr);
@@ -432,10 +457,18 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
     }
   };
 
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    };
+  }, []);
+
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopiedId(null), 2000);
   };
 
   const handleNewSession = () => {
@@ -770,7 +803,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                       {isUser ? (
                         <p className="whitespace-pre-wrap select-text">{msg.content}</p>
                       ) : msg.content ? (
-                        renderFormattedContent(msg.content, isLight, isStreaming)
+                        <FormattedContent text={msg.content} isLight={isLight} streaming={isStreaming} />
                       ) : (
                         <span className="inline-flex items-center space-x-2">
                           <span className="h-2 w-2 rounded-full animate-ping" style={{ background: 'var(--accent)' }} />

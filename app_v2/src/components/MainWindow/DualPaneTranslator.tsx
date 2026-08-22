@@ -25,7 +25,9 @@ import {
   Image as ImageIcon,
   Settings,
 } from "lucide-react";
-import { cmdUniversalTranslate, detectLanguage, saveTranslationHistory, cmdImageOcrTranslate } from "../../services/tauri";
+import { cmdUniversalTranslate, detectLanguage, saveTranslationHistory, cmdImageOcrTranslate, cmdOpenPin } from "../../services/tauri";
+import { exportTranslationImage } from "../../services/exportImage";
+import { speakText } from "../../services/tts";
 import type { ImageTranslateResponse } from "../../services/tauri";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppTheme } from "../../hooks/useAppTheme";
@@ -37,6 +39,15 @@ import type {
 } from "../../services/types";
 import { LanguageDropdown } from "./LanguageDropdown";
 import { TranslationStyleDropdown } from "./TranslationStyleDropdown";
+
+/** 批量图片翻译队列中的单张图片条目 */
+interface ImageQueueItem {
+  id: string;
+  name: string;
+  dataUrl: string;
+  result: ImageTranslateResponse | null;
+  error: string | null;
+}
 
 interface DualPaneTranslatorProps {
   settings: AppSettings;
@@ -114,6 +125,7 @@ function isCgTermSource(sourceTier?: string, engineName?: string): boolean {
   const s = `${sourceTier || ''} ${engineName || ''}`.toLowerCase();
   return (
     s.includes('preset') ||
+    s.includes('custom_dict') ||
     s.includes('cg') ||
     s.includes('blender') ||
     s.includes('substance') ||
@@ -188,15 +200,15 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   const [hoveredMainCg, setHoveredMainCg] = useState<boolean>(false);
 
   // 图片翻译（Ctrl+V 粘贴 / 拖拽图片文件触发，走本地 OCR + 多级翻译管线）
-  const [imageResult, setImageResult] = useState<ImageTranslateResponse | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imageBusy, setImageBusy] = useState(false);
-  const [imageError, setImageError] = useState<string | null>(null);
+  // ── 批量图片翻译队列：粘贴 / 拖入多张图片，逐张排队识别翻译 ──
+  const [imageItems, setImageItems] = useState<ImageQueueItem[]>([]);
   const [imageDragOver, setImageDragOver] = useState(false);
   const [imageCopied, setImageCopied] = useState(false);
-  const lastImageFileRef = useRef<File | null>(null);
+  const [exportingImage, setExportingImage] = useState(false);
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 翻译请求序号：防止并发触发（切语言/交换/重译）时慢的旧请求覆盖新结果
+  const translationSeqRef = useRef(0);
 
   // Tab row scroll refs & helpers
   const tabsRef = useRef<HTMLDivElement | null>(null);
@@ -391,6 +403,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         return;
       }
 
+      const seq = ++translationSeqRef.current;
       setLoading(true);
       try {
         const res = await cmdUniversalTranslate({
@@ -408,6 +421,9 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           deeplApiKey: settings.deeplApiKey,
           deeplCustomUrl: settings.deeplCustomUrl,
         });
+
+        // 请求期间用户又触发了新翻译，丢弃本次过期结果
+        if (seq !== translationSeqRef.current) return;
 
         setResponse(res);
 
@@ -451,9 +467,11 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           setDetectedLangName("");
         }
       } catch (err) {
+        if (seq !== translationSeqRef.current) return;
         console.error("Translation error:", err);
       } finally {
-        setLoading(false);
+        // 过期请求不得清掉新请求的 loading 状态
+        if (seq === translationSeqRef.current) setLoading(false);
       }
     },
     [settings.defaultPreset, settings.llmConfig, settings.presetDicts, settings.onlineEngines, settings.translationTiers, settings.translationStyle]
@@ -510,7 +528,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
             const imgType = item.types.find((t) => t.startsWith("image/"));
             if (imgType) {
               const blob = await item.getType(imgType);
-              await translateImageFile(new File([blob], "clipboard.png", { type: imgType }));
+              await enqueueImages([new File([blob], "clipboard.png", { type: imgType })]);
               return;
             }
           }
@@ -525,60 +543,122 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
     }
   };
 
-  const translateImageFile = useCallback(
-    async (file: File) => {
-      if (!file.type.startsWith("image/")) return false;
-      lastImageFileRef.current = file;
-      setImageBusy(true);
-      setImageError(null);
-      setImageResult(null);
+  /** 翻译队列中的单张图片（结果与错误写回队列条目） */
+  const translateImageItem = useCallback(
+    async (item: ImageQueueItem) => {
       try {
+        const base64 = item.dataUrl.split(",")[1] || "";
+        const res = await cmdImageOcrTranslate(base64, settings.defaultPreset, settings.llmConfig);
+        setImageItems((prev) =>
+          prev.map((it) =>
+            it.id === item.id
+              ? {
+                  ...it,
+                  result: res,
+                  error: res.blocks.length ? null : "未在图片中识别到文本，请尝试更清晰的截图",
+                }
+              : it
+          )
+        );
+      } catch (err) {
+        setImageItems((prev) =>
+          prev.map((it) =>
+            it.id === item.id ? { ...it, error: err instanceof Error ? err.message : String(err) } : it
+          )
+        );
+      }
+    },
+    [settings.defaultPreset, settings.llmConfig]
+  );
+
+  /** 批量入口：多张图片全部入队后逐张顺序翻译（避免并发打爆 OCR / 配额） */
+  const enqueueImages = useCallback(
+    async (files: File[]) => {
+      const imgs = files.filter((f) => f.type.startsWith("image/"));
+      if (!imgs.length) return false;
+      const newItems: ImageQueueItem[] = [];
+      for (const file of imgs) {
         const dataUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result as string);
           reader.onerror = () => reject(reader.error);
           reader.readAsDataURL(file);
         });
-        setImagePreview(dataUrl);
-        const base64 = dataUrl.split(",")[1] || "";
-        const res = await cmdImageOcrTranslate(base64, settings.defaultPreset, settings.llmConfig);
-        setImageResult(res);
-        if (!res.blocks.length) {
-          setImageError("未在图片中识别到文本，请尝试更清晰的截图");
-        }
-      } catch (err) {
-        setImageError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setImageBusy(false);
+        newItems.push({
+          id: `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name: file.name || "剪贴板图片",
+          dataUrl,
+          result: null,
+          error: null,
+        });
+      }
+      setImageItems((prev) => [...prev, ...newItems]);
+      for (const item of newItems) {
+        await translateImageItem(item);
       }
       return true;
     },
-    [settings.defaultPreset, settings.llmConfig]
+    [translateImageItem]
   );
 
-  const handleImageRetry = () => {
-    if (lastImageFileRef.current) {
-      translateImageFile(lastImageFileRef.current);
-    }
+  const removeImageItem = (id: string) => {
+    setImageItems((prev) => prev.filter((it) => it.id !== id));
+  };
+
+  const retryImageItem = (id: string) => {
+    const item = imageItems.find((it) => it.id === id);
+    if (!item) return;
+    setImageItems((prev) => prev.map((it) => (it.id === id ? { ...it, error: null, result: null } : it)));
+    void translateImageItem(item);
   };
 
   const handleCopyAllImage = () => {
-    if (!imageResult?.blocks.length) return;
-    const all = imageResult.blocks
-      .map((b) => b.translated || b.original)
+    const all = imageItems
+      .map((it) => (it.result?.blocks || []).map((b) => b.translated || b.original).filter(Boolean).join("\n"))
       .filter(Boolean)
-      .join("\n");
+      .join("\n\n");
     if (!all) return;
     navigator.clipboard.writeText(all);
     setImageCopied(true);
     setTimeout(() => setImageCopied(false), 2000);
   };
 
-  const closeImagePanel = () => {
-    setImageResult(null);
-    setImagePreview(null);
-    setImageError(null);
-    setImageBusy(false);
+  const closeImagePanel = () => setImageItems([]);
+
+  /** 把当前译文贴图到桌面（独立置顶小窗） */
+  const handlePinTranslation = () => {
+    if (!currentTranslationText) return;
+    void cmdOpenPin({
+      id: `pin_${Date.now()}`,
+      title: "翻译结果",
+      blocks: [
+        {
+          original: sourceText.slice(0, 500),
+          translated: currentTranslationText,
+          sourceTier: currentEngine?.sourceTier || "多引擎",
+        },
+      ],
+      x: Math.max(8, (typeof window !== "undefined" ? window.screenX : 0) + 120),
+      y: Math.max(8, (typeof window !== "undefined" ? window.screenY : 0) + 160),
+      width: 380,
+      height: 210,
+    }).catch((e) => console.warn("贴图失败:", e));
+  };
+
+  /** 把当前原文+译文渲染成分享卡片 PNG 并保存到图片库 */
+  const handleExportImage = async () => {
+    if (!currentTranslationText) return;
+    setExportingImage(true);
+    try {
+      await exportTranslationImage({
+        title: "翻译结果",
+        lines: [{ original: sourceText.slice(0, 400), translated: currentTranslationText }],
+      });
+    } catch (e) {
+      console.warn("导出图片失败:", e);
+    } finally {
+      setExportingImage(false);
+    }
   };
 
   // 拦截原生粘贴：剪贴板里是图片时走 OCR 翻译，是文本时保持默认行为落入输入框
@@ -592,25 +672,25 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           const file = item.getAsFile();
           if (file) {
             e.preventDefault();
-            translateImageFile(file);
+            void enqueueImages([file]);
             return;
           }
         }
       }
     },
-    [translateImageFile]
+    [enqueueImages]
   );
 
   const handleNativeDrop = useCallback(
     (e: React.DragEvent) => {
       setImageDragOver(false);
-      const file = e.dataTransfer?.files?.[0];
-      if (file && file.type.startsWith("image/")) {
+      const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type.startsWith("image/"));
+      if (files.length) {
         e.preventDefault();
-        translateImageFile(file);
+        void enqueueImages(files);
       }
     },
-    [translateImageFile]
+    [enqueueImages]
   );
 
   const handleCopy = (textToCopy: string) => {
@@ -633,15 +713,12 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   };
 
   const handleSpeech = (text: string, lang: string) => {
-    if (!("speechSynthesis" in window) || !text) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang === "zh-CN" ? "zh-CN" : lang === "ja" ? "ja-JP" : "en-US";
-    utterance.rate = 0.95;
+    if (!text) return;
     setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
-    window.speechSynthesis.speak(utterance);
+    speakText(text, {
+      lang: lang === "zh-CN" ? "zh-CN" : lang === "ja" ? "ja-JP" : "en-US",
+      onEnd: () => setIsSpeaking(false),
+    });
   };
 
   const currentEngine = response?.engines[selectedEngineIndex];
@@ -764,7 +841,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           <div>
             <h1 className={`text-base font-bold tracking-tight ${isLight ? 'text-slate-900' : 'text-white'}`}>文本翻译</h1>
             <p className={`text-xs ${isLight ? 'text-slate-500 font-medium' : 'text-zinc-400'}`}>
-              多引擎对照 · 3D/CG 专业词库 · 支持直接粘贴或拖入图片
+              多引擎对照 · 3D/CG 专业词库 · 支持粘贴 / 拖入多张图片批量翻译
             </p>
           </div>
         </div>
@@ -776,134 +853,177 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         </span>
       </div>
 
-      {/* 图片翻译结果面板（粘贴 / 拖拽图片触发，本地 OCR + 多级翻译） */}
-      {(imagePreview || imageBusy) && (
+      {/* 图片翻译结果面板（粘贴 / 拖入多张图片，批量排队翻译） */}
+      {imageItems.length > 0 && (
         <div className={`relative p-4 rounded-2xl border transition-colors ${
           isLight ? 'bg-white/90 border-slate-200 shadow-sm' : 'bg-white/[0.04] border-white/10 backdrop-blur-md'
-        }`}>
+        }`} data-testid="image-translate-panel">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2 min-w-0">
               <ImageIcon className="h-4 w-4 text-sky-500 shrink-0" />
               <span className={`text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>图片翻译</span>
-              {imageResult && (
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-400/30 shrink-0">
-                  {imageResult.blocks.length} 行 · {imageResult.imageWidth}×{imageResult.imageHeight}
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-400/30 shrink-0">
+                {imageItems.length} 张 · 共 {imageItems.reduce((n, it) => n + (it.result?.blocks.length || 0), 0)} 行
+              </span>
+              {imageItems.some((it) => !it.result && !it.error) && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 border border-amber-400/30 shrink-0 animate-pulse">
+                  翻译中…
                 </span>
               )}
             </div>
-            {imageResult && imageResult.blocks.length > 0 && (
-              <button
-                type="button"
-                onClick={handleCopyAllImage}
-                className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
-                  isLight
-                    ? 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-300'
-                    : 'bg-white/5 hover:bg-white/10 text-zinc-300 border-white/10'
-                }`}
-                title="复制全部译文"
-              >
-                {imageCopied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-                <span>{imageCopied ? '已复制' : '复制全部'}</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={closeImagePanel}
-              className={`p-1.5 rounded-lg transition cursor-pointer shrink-0 ${
-                isLight ? 'text-slate-400 hover:text-rose-500 hover:bg-slate-100' : 'text-zinc-500 hover:text-rose-400 hover:bg-white/5'
-              }`}
-              title="关闭图片翻译"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          {imageError && (
-            <div className="mb-3 flex items-center justify-between gap-2 text-xs px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-400/30 text-amber-500">
-              <span className="min-w-0 truncate">{imageError}</span>
-              {lastImageFileRef.current && (
+            <div className="flex items-center gap-1.5">
+              {imageItems.some((it) => (it.result?.blocks || []).length > 0) && (
                 <button
                   type="button"
-                  onClick={handleImageRetry}
-                  disabled={imageBusy}
-                  className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-md border border-amber-400/40 hover:bg-amber-500/20 transition cursor-pointer disabled:opacity-50"
-                  title="用同一张图片重试"
+                  onClick={handleCopyAllImage}
+                  className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
+                    isLight
+                      ? 'bg-slate-100 hover:bg-slate-200 text-slate-600 border-slate-300'
+                      : 'bg-white/5 hover:bg-white/10 text-zinc-300 border-white/10'
+                  }`}
+                  title="复制全部图片的译文"
                 >
-                  <RotateCcw className="h-3 w-3" />
-                  <span>重试</span>
+                  {imageCopied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                  <span>{imageCopied ? '已复制' : '复制全部'}</span>
                 </button>
               )}
+              <button
+                type="button"
+                onClick={closeImagePanel}
+                className={`p-1.5 rounded-lg transition cursor-pointer shrink-0 ${
+                  isLight ? 'text-slate-400 hover:text-rose-500 hover:bg-slate-100' : 'text-zinc-500 hover:text-rose-400 hover:bg-white/5'
+                }`}
+                title="关闭图片翻译"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
-          )}
+          </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {/* 左：原图 + 识别区块原位叠加译文 */}
-            {imagePreview && (
-              <div className={`relative overflow-hidden rounded-xl border ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
-                <img src={imagePreview} alt="待翻译图片" className="w-full h-auto block" draggable={false} />
-                {(imageResult?.blocks || []).map((b, i) => {
-                  const sx = imageResult ? 100 / imageResult.imageWidth : 0;
-                  const sy = imageResult ? 100 / imageResult.imageHeight : 0;
-                  return (
-                    <div
-                      key={i}
-                      className="absolute overflow-hidden rounded-sm border border-sky-400/60"
-                      style={{
-                        left: `${b.x * sx}%`,
-                        top: `${b.y * sy}%`,
-                        width: `${b.width * sx}%`,
-                        height: `${b.height * sy}%`,
-                        background: b.bgCss,
-                        color: b.fgCss,
-                      }}
-                      title={`${b.original} → ${b.translated}`}
-                    >
-                      <span className="block px-1 truncate" style={{ fontSize: 'clamp(8px, 1.4vh, 13px)', lineHeight: 1.2 }}>
-                        {b.translated || b.original}
-                      </span>
-                    </div>
-                  );
-                })}
-                {imageBusy && !imageResult && (
-                  <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
-                    <span className="text-xs text-white font-mono animate-pulse">识别中…</span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 右：行级对照列表 */}
-            <div className="max-h-72 overflow-y-auto space-y-1.5 pr-1">
-              {imageBusy && !imageResult && (
-                <div className="space-y-1.5">
-                  {[0, 1, 2].map((i) => (
-                    <div key={i} className={`h-9 rounded-lg animate-pulse ${isLight ? 'bg-slate-100' : 'bg-white/5'}`} />
-                  ))}
-                </div>
-              )}
-              {(imageResult?.blocks || []).map((b, i) => (
+          <div className="space-y-3">
+            {imageItems.map((item) => {
+              const itemBusy = !item.result && !item.error;
+              return (
                 <div
-                  key={i}
-                  className={`px-2.5 py-1.5 rounded-lg border text-xs ${
-                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/[0.03] border-white/[0.06]'
-                  }`}
+                  key={item.id}
+                  className={`rounded-xl border p-2.5 ${isLight ? 'bg-slate-50/70 border-slate-200' : 'bg-white/[0.02] border-white/[0.06]'}`}
+                  data-testid="image-queue-item"
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`font-mono truncate ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>{b.original}</span>
-                    <span className="text-[9px] font-mono shrink-0 opacity-70">{(b.confidence * 100).toFixed(0)}%</span>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`text-[11px] font-semibold truncate ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
+                        {item.name}
+                      </span>
+                      {item.result && (
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-500 border border-sky-400/20 shrink-0">
+                          {item.result.blocks.length} 行 · {item.result.imageWidth}×{item.result.imageHeight}
+                        </span>
+                      )}
+                      {itemBusy && (
+                        <span className="text-[9px] font-mono text-amber-500 shrink-0 animate-pulse">识别中…</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {item.error && (
+                        <button
+                          type="button"
+                          onClick={() => retryImageItem(item.id)}
+                          className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium border border-amber-400/40 text-amber-500 hover:bg-amber-500/20 transition cursor-pointer"
+                          title="重试此图片"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          <span>重试</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeImageItem(item.id)}
+                        className={`p-1 rounded-md transition cursor-pointer ${
+                          isLight ? 'text-slate-400 hover:text-rose-500 hover:bg-slate-100' : 'text-zinc-500 hover:text-rose-400 hover:bg-white/5'
+                        }`}
+                        title="从队列移除此图片"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between gap-2 mt-0.5">
-                    <span className={`font-bold truncate ${isLight ? 'text-slate-900' : 'text-white'}`}>{b.translated}</span>
-                    <span className="text-[9px] font-mono shrink-0 px-1.5 rounded bg-sky-500/15 text-sky-400 border border-sky-400/25">
-                      {b.sourceTier}
-                    </span>
+
+                  {item.error && (
+                    <div className="mb-2 flex items-center gap-2 text-[11px] px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-400/30 text-amber-500">
+                      <span className="min-w-0 truncate">{item.error}</span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    {/* 左：原图 + 识别区块原位叠加译文 */}
+                    <div className={`relative overflow-hidden rounded-xl border ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
+                      <img src={item.dataUrl} alt={item.name} className="w-full h-auto block" draggable={false} />
+                      {(item.result?.blocks || []).map((b, bi) => {
+                        const sx = item.result ? 100 / item.result.imageWidth : 0;
+                        const sy = item.result ? 100 / item.result.imageHeight : 0;
+                        return (
+                          <div
+                            key={bi}
+                            className="absolute overflow-hidden rounded-sm border border-sky-400/60"
+                            style={{
+                              left: `${b.x * sx}%`,
+                              top: `${b.y * sy}%`,
+                              width: `${b.width * sx}%`,
+                              height: `${b.height * sy}%`,
+                              background: b.bgCss,
+                              color: b.fgCss,
+                            }}
+                            title={`${b.original} → ${b.translated}`}
+                          >
+                            <span className="block px-1 truncate" style={{ fontSize: 'clamp(8px, 1.4vh, 13px)', lineHeight: 1.2 }}>
+                              {b.translated || b.original}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {itemBusy && (
+                        <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
+                          <span className="text-xs text-white font-mono animate-pulse">识别中…</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 右：行级对照列表 */}
+                    <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+                      {itemBusy && (
+                        <div className="space-y-1.5">
+                          {[0, 1, 2].map((k) => (
+                            <div key={k} className={`h-9 rounded-lg animate-pulse ${isLight ? 'bg-slate-100' : 'bg-white/5'}`} />
+                          ))}
+                        </div>
+                      )}
+                      {(item.result?.blocks || []).map((b, bi) => (
+                        <div
+                          key={bi}
+                          className={`px-2.5 py-1.5 rounded-lg border text-xs ${
+                            isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/[0.03] border-white/[0.06]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`font-mono truncate ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>{b.original}</span>
+                            <span className="text-[9px] font-mono shrink-0 opacity-70">{(b.confidence * 100).toFixed(0)}%</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 mt-0.5">
+                            <span className={`font-bold truncate ${isLight ? 'text-slate-900' : 'text-white'}`}>{b.translated}</span>
+                            <span className="text-[9px] font-mono shrink-0 px-1.5 rounded bg-sky-500/15 text-sky-400 border border-sky-400/25">
+                              {b.sourceTier}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                      {item.result && !item.result.blocks.length && !item.error && (
+                        <p className={`text-xs ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>未识别到文本行</p>
+                      )}
+                    </div>
                   </div>
                 </div>
-              ))}
-              {imageResult && !imageResult.blocks.length && !imageError && (
-                <p className={`text-xs ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>未识别到文本行</p>
-              )}
-            </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1359,6 +1479,36 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                         <span>复制译文</span>
                       </>
                     )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handlePinTranslation}
+                    className={`flex items-center space-x-1.5 font-medium px-3 py-1.5 rounded-lg border transition cursor-pointer ${
+                      isLight
+                        ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
+                        : 'bg-zinc-800/80 hover:bg-zinc-700 border-zinc-700 text-zinc-200'
+                    }`}
+                    title="贴图到桌面（置顶小窗，可拖拽 / 滚轮缩放）"
+                    data-testid="pin-translation-button"
+                  >
+                    <Pin className="h-3.5 w-3.5" />
+                    <span>贴图</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleExportImage()}
+                    disabled={exportingImage}
+                    className={`flex items-center space-x-1.5 font-medium px-3 py-1.5 rounded-lg border transition cursor-pointer disabled:opacity-60 ${
+                      isLight
+                        ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
+                        : 'bg-zinc-800/80 hover:bg-zinc-700 border-zinc-700 text-zinc-200'
+                    }`}
+                    title="导出为分享图片（保存到 图片库/猫步翻译/exports）"
+                    data-testid="export-image-button"
+                  >
+                    <ImageIcon className={`h-3.5 w-3.5 ${exportingImage ? "animate-pulse" : ""}`} />
+                    <span>{exportingImage ? "导出中…" : "导出图片"}</span>
                   </button>
                 </>
               )}

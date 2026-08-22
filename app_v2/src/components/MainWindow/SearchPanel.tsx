@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { cmdQueryText, cmdGetHistory, cmdAddHistory, cmdToggleFavorite } from "../../services/tauri";
+import { speakText } from "../../services/tts";
 import type { TextQueryResponse, AppSettings, HistoryItem } from "../../services/types";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppTheme } from "../../hooks/useAppTheme";
@@ -66,15 +67,8 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
   };
 
   const handleSpeech = (text: string) => {
-    if (!("speechSynthesis" in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-US";
-    utterance.rate = 0.9;
     setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
-    window.speechSynthesis.speak(utterance);
+    speakText(text, { lang: "en-US", onEnd: () => setIsSpeaking(false) });
   };
 
   const handleCopy = (text: string, index: number) => {

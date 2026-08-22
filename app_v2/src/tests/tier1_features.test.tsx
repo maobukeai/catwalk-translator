@@ -379,7 +379,7 @@ describe('Tier 1 Feature Coverage Test Suite', () => {
 
       const initialValue = useSettingsStore.getState().settings.presetDicts.unity;
 
-      const titleEl = screen.getByText(/常用短语词典|Unity/i);
+      const titleEl = screen.getByText(/常用短语词典|Unity 引擎词库/i);
       const container = titleEl.closest('div.flex') || titleEl.closest('div');
       const parentContainer = container?.closest('.flex.items-center.justify-between') || container;
       const toggleBtn = parentContainer?.querySelector('button') as HTMLButtonElement;

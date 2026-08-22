@@ -4,7 +4,7 @@
 use app_v2_lib::{
     capture::{CoordinateMapper, LogicalRect, PhysicalRect},
     commands::{
-        cmd_capture_and_ocr, cmd_sample_colors, cmd_translate_phrases, AppSettings, AppState,
+        cmd_capture_and_ocr, cmd_sample_colors, AppSettings, AppState,
     },
     models::{BoundingBox, LlmConfig, OnlineEngines, PresetDicts, TextBlock, TranslationResult},
     reconstruction::{LineClusterer, WordMerger},
@@ -366,7 +366,7 @@ mod feature_4_multitier_translation {
     fn test_f4_01_preset_cg_dictionary_lookup() {
         tauri::async_runtime::block_on(async {
             let phrases = vec!["Principled BSDF".to_string()];
-            let res = cmd_translate_phrases(phrases, "blender".to_string(), None).await;
+            let res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, "blender", None, &[]).await);
             assert!(res.is_ok());
             let list = res.unwrap();
             assert_eq!(list.len(), 1);
@@ -403,12 +403,13 @@ mod feature_4_multitier_translation {
     #[test]
     fn test_f4_04_tier_priority_resolution() {
         tauri::async_runtime::block_on(async {
-            let res = cmd_translate_phrases(
-                vec!["Subsurface".to_string()],
-                "substance".to_string(),
+            let res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(
+                &vec!["Subsurface".to_string()],
+                "substance",
                 None,
+                &[],
             )
-            .await;
+            .await);
             assert!(res.is_ok());
             let list = res.unwrap();
             assert_eq!(list[0].source_tier, "substance");
@@ -433,7 +434,7 @@ mod feature_4_multitier_translation {
     fn test_f4_06_batch_phrase_processing() {
         tauri::async_runtime::block_on(async {
             let phrases = vec!["Roughness".to_string(), "Metallic".to_string()];
-            let res = cmd_translate_phrases(phrases, "blender".to_string(), None).await;
+            let res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, "blender", None, &[]).await);
             assert!(res.is_ok());
             let list = res.unwrap();
             assert_eq!(list.len(), 2);

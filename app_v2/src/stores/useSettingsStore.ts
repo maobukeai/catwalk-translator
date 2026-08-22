@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { cmdGetSettings, cmdSaveSettings } from '../services/tauri';
+import { DEFAULT_APPEARANCE, DEFAULT_SETTINGS } from '../services/defaultSettings';
 import type {
   AppSettings,
   LlmConfig,
@@ -10,113 +11,9 @@ import type {
   FontFamilyOption,
   FontSizeOption,
   CustomDictItem,
+  BackupSettings,
+  WebdavConfig,
 } from '../services/types';
-
-const DEFAULT_APPEARANCE: AppearanceSettings = {
-  theme: 'system',
-  enableBlur: true,
-  blurAmount: 24,
-  enableTransparency: true,
-  windowOpacity: 85,
-  fontFamily: 'system',
-  fontSize: 'medium',
-};
-
-const DEFAULT_SETTINGS: AppSettings = {
-  theme: 'system',
-  hotkey: 'F4',
-  spotlightHotkey: 'Alt+Space',
-  clipboardHotkey: 'Ctrl+Shift+C',
-  toggleWindowHotkey: 'Alt+Q',
-  captureHotkeyEnabled: true,
-  spotlightHotkeyEnabled: true,
-  clipboardHotkeyEnabled: true,
-  toggleWindowHotkeyEnabled: true,
-  defaultPreset: 'blender',
-  captureEngine: 'auto',
-  llmConfig: {
-    id: 'llm-deepseek-deepseek-chat',
-    provider: 'DeepSeek',
-    apiKey: '',
-    model: 'deepseek-chat',
-    endpoint: 'https://api.deepseek.com/v1',
-  },
-  llmConfigs: [
-    {
-      id: 'llm-deepseek-deepseek-chat',
-      provider: 'DeepSeek',
-      apiKey: '',
-      model: 'deepseek-chat',
-      endpoint: 'https://api.deepseek.com/v1',
-    },
-    {
-      id: 'llm-openai-gpt-4o-mini',
-      provider: 'OpenAI',
-      apiKey: '',
-      model: 'gpt-4o-mini',
-      endpoint: 'https://api.openai.com/v1',
-    },
-    {
-      id: 'llm-ollama-llama3',
-      provider: 'Ollama',
-      apiKey: '',
-      model: 'llama3',
-      endpoint: 'http://localhost:11434/v1',
-    },
-    {
-      id: 'llm-智谱-glm-4-flash',
-      provider: '智谱 GLM',
-      apiKey: '',
-      model: 'glm-4-flash',
-      endpoint: 'https://open.bigmodel.cn/api/paas/v4',
-    },
-    {
-      id: 'llm-custom-custom-model',
-      provider: 'Custom',
-      apiKey: '',
-      model: 'custom-model',
-      endpoint: 'https://api.custom-llm.com/v1',
-    },
-  ],
-  translationTiers: ['Preset Dictionary', 'LLM API', 'Online Fallback'],
-  presetDicts: {
-    blender: true,
-    substance: true,
-    unity: true,
-    unreal: true,
-    maya: true,
-    houdini: true,
-  },
-  onlineEngines: {
-    google: true,
-    bing: true,
-    youdao: true,
-    deepl: false,
-    myMemory: false,
-    baidu: false,
-    tencent: false,
-  },
-  appearance: DEFAULT_APPEARANCE,
-  offlineModel: {
-    installed: false,
-    activeModelId: 'opus-standard',
-    enabled: true,
-    installedModelIds: [],
-    modelName: 'Opus-MT 英汉标准版',
-    sizeMB: 38.5,
-  },
-  overlayViewMode: 'cover',
-  enableAabbAvoidance: true,
-  translationStyle: 'free',
-  sidebarCollapsed: false,
-  captureReleaseAction: 'auto',
-  watchIntervalMs: 3000,
-  clipboardWatchEnabled: false,
-  ocrEngine: 'auto',
-  ocrVersion: 'v4' as 'v3' | 'v4' | 'v5',
-  closeAction: 'ask',
-  miniWindowCloseAction: 'hide',
-};
 
 interface SettingsState {
   settings: AppSettings;
@@ -183,6 +80,18 @@ interface SettingsState {
   setDeeplConfig: (apiKey: string, customUrl: string) => void;
   setCloseAction: (action: 'ask' | 'minimize' | 'exit') => void;
   setMiniWindowCloseAction: (action: 'hide' | 'minimize') => void;
+  setAlwaysOnTop: (enabled: boolean) => void;
+  setProxyEnabled: (enabled: boolean) => void;
+  setProxyUrl: (url: string) => void;
+  setTtsRate: (rate: number) => void;
+  setAutoDetectPreset: (enabled: boolean) => void;
+  setBackupSettings: (patch: Partial<BackupSettings>) => void;
+  setOcrFilterEnabled: (enabled: boolean) => void;
+  setOcrFilterRules: (rules: string[]) => void;
+  setSelectionLookupEnabled: (enabled: boolean) => void;
+  setHoverLookupEnabled: (enabled: boolean) => void;
+  setHoverLookupModifier: (modifier: 'ctrl' | 'alt' | 'shift') => void;
+  setWebdavConfig: (patch: Partial<WebdavConfig>) => void;
   resetSettings: () => void;
   clearToast: () => void;
 }
@@ -204,22 +113,45 @@ const debouncedSaveSettings = (
     const { settings } = get();
     set({ isSaving: true });
     try {
-      await cmdSaveSettings(settings);
+      const savePromise = cmdSaveSettings(settings);
+      const timeoutPromise = new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('Save settings timeout')), 4000)
+      );
+      await Promise.race([savePromise, timeoutPromise]);
       set({
         initialSettings: settings,
         isDirty: false,
-        isSaving: false,
       });
     } catch (err) {
       console.error('Failed to save settings (debounced):', err);
-      set({ isSaving: false });
     } finally {
+      set({ isSaving: false });
       saveDebounceTimer = null;
     }
   }, 300);
 };
 
-export const useSettingsStore = create<SettingsState>((set, get) => ({
+export const useSettingsStore = create<SettingsState>((set, get) => {
+  /**
+   * 内部通用 patch:合并字段 → 重算 isDirty → 按模式持久化。
+   * 'now' 立即保存(离散开关/选择);'debounced' 300ms 防抖(滑杆/连续输入);
+   * 'none' 仅更新状态(由调用方自行决定何时保存)。
+   */
+  const applyPatch = (
+    partial: Partial<AppSettings>,
+    mode: 'now' | 'debounced' | 'none' = 'now'
+  ) => {
+    const { settings, initialSettings } = get();
+    const updated = { ...settings, ...partial };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    if (mode === 'now') get().saveSettings();
+    else if (mode === 'debounced') debouncedSaveSettings(get, set);
+  };
+
+  return {
   settings: DEFAULT_SETTINGS,
   initialSettings: DEFAULT_SETTINGS,
   isDirty: false,
@@ -265,6 +197,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         clipboardWatchEnabled: fetched.clipboardWatchEnabled ?? false,
         ocrEngine: fetched.ocrEngine || 'auto',
         ocrVersion: (fetched.ocrVersion as 'v3' | 'v4' | 'v5') || 'v4',
+        ocrFilterEnabled: fetched.ocrFilterEnabled ?? true,
+        ocrFilterRules: fetched.ocrFilterRules ?? [],
+        selectionLookupEnabled: fetched.selectionLookupEnabled ?? false,
+        hoverLookupEnabled: fetched.hoverLookupEnabled ?? false,
+        hoverLookupModifier: fetched.hoverLookupModifier ?? 'ctrl',
+        backupSettings: {
+          autoBackupEnabled: fetched.backupSettings?.autoBackupEnabled ?? false,
+          intervalHours: fetched.backupSettings?.intervalHours ?? 24,
+          maxLocalBackups: fetched.backupSettings?.maxLocalBackups ?? 10,
+          lastBackupAtMs: fetched.backupSettings?.lastBackupAtMs,
+        },
+        webdavConfig: {
+          ...fetched.webdavConfig,
+          remoteDir: fetched.webdavConfig?.remoteDir || 'MaobuTranslator',
+          retentionDays: fetched.webdavConfig?.retentionDays ?? 15,
+        },
       };
       set({
         settings: settingsWithAppearance,
@@ -286,101 +234,41 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const { settings } = get();
     set({ isSaving: true });
     try {
-      await cmdSaveSettings(settings);
+      const savePromise = cmdSaveSettings(settings);
+      const timeoutPromise = new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('Save settings timeout')), 4000)
+      );
+      await Promise.race([savePromise, timeoutPromise]);
       set({
         initialSettings: settings,
         isDirty: false,
-        isSaving: false,
         toastMessage: 'Settings saved successfully!',
       });
     } catch (err) {
       console.error('Failed to save settings:', err);
       set({
-        isSaving: false,
         toastMessage: 'Failed to save settings',
       });
+    } finally {
+      set({ isSaving: false });
     }
   },
 
-  setHotkey: (hotkey: string) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, hotkey };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setHotkey: (hotkey: string) => applyPatch({ hotkey }),
 
-  setSpotlightHotkey: (spotlightHotkey: string) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, spotlightHotkey };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setSpotlightHotkey: (spotlightHotkey: string) => applyPatch({ spotlightHotkey }),
 
-  setClipboardHotkey: (clipboardHotkey: string) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, clipboardHotkey };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setClipboardHotkey: (clipboardHotkey: string) => applyPatch({ clipboardHotkey }),
 
-  setToggleWindowHotkey: (toggleWindowHotkey: string) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, toggleWindowHotkey };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setToggleWindowHotkey: (toggleWindowHotkey: string) => applyPatch({ toggleWindowHotkey }),
 
-  setCaptureHotkeyEnabled: (enabled: boolean) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, captureHotkeyEnabled: enabled };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setCaptureHotkeyEnabled: (enabled: boolean) => applyPatch({ captureHotkeyEnabled: enabled }),
 
-  setSpotlightHotkeyEnabled: (enabled: boolean) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, spotlightHotkeyEnabled: enabled };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setSpotlightHotkeyEnabled: (enabled: boolean) => applyPatch({ spotlightHotkeyEnabled: enabled }),
 
-  setClipboardHotkeyEnabled: (enabled: boolean) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, clipboardHotkeyEnabled: enabled };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setClipboardHotkeyEnabled: (enabled: boolean) => applyPatch({ clipboardHotkeyEnabled: enabled }),
 
-  setToggleWindowHotkeyEnabled: (enabled: boolean) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, toggleWindowHotkeyEnabled: enabled };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setToggleWindowHotkeyEnabled: (enabled: boolean) => applyPatch({ toggleWindowHotkeyEnabled: enabled }),
 
   setLlmConfig: (updates: Partial<LlmConfig>) => {
     const { settings, initialSettings } = get();
@@ -475,23 +363,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     });
   },
 
-  setDefaultPreset: (preset: string) => {
-    const { settings, initialSettings } = get();
-    const updated = { ...settings, defaultPreset: preset };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-  },
+  setDefaultPreset: (preset: string) => applyPatch({ defaultPreset: preset }, 'none'),
 
-  setCaptureEngine: (engine: string) => {
-    const { settings, initialSettings } = get();
-    const updated = { ...settings, captureEngine: engine };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-  },
+  setCaptureEngine: (engine: string) => applyPatch({ captureEngine: engine }, 'none'),
 
   setPresetDictToggle: (dict: keyof PresetDicts, enabled: boolean) => {
     const { settings, initialSettings } = get();
@@ -577,14 +451,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     debouncedSaveSettings(get, set);
   },
 
-  setTranslationTiers: (tiers: string[]) => {
-    const { settings, initialSettings } = get();
-    const updated = { ...settings, translationTiers: tiers };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-  },
+  setTranslationTiers: (tiers: string[]) => applyPatch({ translationTiers: tiers }, 'none'),
 
   moveTier: (fromIndex: number, toIndex: number) => {
     const { settings, initialSettings } = get();
@@ -841,70 +708,42 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     });
   },
 
-  setOverlayViewMode: (mode: 'cover' | 'tooltip' | 'panel') => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, overlayViewMode: mode };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setOverlayViewMode: (mode: 'cover' | 'tooltip' | 'panel') => applyPatch({ overlayViewMode: mode }),
 
-  setEnableAabbAvoidance: (enabled: boolean) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, enableAabbAvoidance: enabled };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setEnableAabbAvoidance: (enabled: boolean) => applyPatch({ enableAabbAvoidance: enabled }),
 
-  setTranslationStyle: (style) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, translationStyle: style };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setTranslationStyle: (style) => applyPatch({ translationStyle: style }),
 
-  setSidebarCollapsed: (collapsed) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, sidebarCollapsed: collapsed };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setSidebarCollapsed: (collapsed) => applyPatch({ sidebarCollapsed: collapsed }),
 
-  setCaptureReleaseAction: (action) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, captureReleaseAction: action };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setCaptureReleaseAction: (action) => applyPatch({ captureReleaseAction: action }),
 
   setWatchIntervalMs: (ms) => {
-    const { settings, initialSettings, saveSettings } = get();
     const clamped = Math.min(10000, Math.max(1000, Math.round(ms)));
-    const updated = { ...settings, watchIntervalMs: clamped };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
+    applyPatch({ watchIntervalMs: clamped });
   },
 
-  setClipboardWatchEnabled: (enabled) => {
+  setClipboardWatchEnabled: (enabled) => applyPatch({ clipboardWatchEnabled: enabled }),
+
+  setOcrEngine: (engine) => applyPatch({ ocrEngine: engine }),
+
+  setOcrVersion: (version) => applyPatch({ ocrVersion: version }, 'debounced'),
+
+  setPrimaryTranslationEngine: (engine) => applyPatch({ primaryTranslationEngine: engine }),
+
+  setCloseAction: (action) => applyPatch({ closeAction: action }),
+
+  setMiniWindowCloseAction: (action) => applyPatch({ miniWindowCloseAction: action }),
+
+  setAlwaysOnTop: (enabled) => applyPatch({ alwaysOnTop: enabled }),
+
+  setProxyEnabled: (enabled) => applyPatch({ proxyEnabled: enabled }),
+
+  setProxyUrl: (url) => applyPatch({ proxyUrl: url }, 'debounced'),
+
+  setAutoDetectPreset: (enabled) => {
     const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, clipboardWatchEnabled: enabled };
+    const updated = { ...settings, autoDetectPreset: enabled };
     set({
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
@@ -912,58 +751,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     saveSettings();
   },
 
-  setOcrEngine: (engine) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, ocrEngine: engine };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
+  setTtsRate: (rate) => {
+    const clamped = Math.min(2, Math.max(0.5, Math.round(rate * 10) / 10));
+    applyPatch({ ttsRate: clamped }, 'debounced');
   },
 
-  setOcrVersion: (version) => {
-    const { settings, initialSettings } = get();
-    const updated = { ...settings, ocrVersion: version };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    debouncedSaveSettings(get, set);
-  },
+  setOcrFilterEnabled: (enabled) => applyPatch({ ocrFilterEnabled: enabled }),
+  setOcrFilterRules: (rules) => applyPatch({ ocrFilterRules: rules }),
+  setSelectionLookupEnabled: (enabled) => applyPatch({ selectionLookupEnabled: enabled }),
+  setHoverLookupEnabled: (enabled) => applyPatch({ hoverLookupEnabled: enabled }),
+  setHoverLookupModifier: (modifier) => applyPatch({ hoverLookupModifier: modifier }),
 
-  setPrimaryTranslationEngine: (engine) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, primaryTranslationEngine: engine };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setBackupSettings: (patch) =>
+    applyPatch({ backupSettings: { ...get().settings.backupSettings, ...patch } }),
 
-  setCloseAction: (action) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, closeAction: action };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
-
-  setMiniWindowCloseAction: (action) => {
-    const { settings, initialSettings, saveSettings } = get();
-    const updated = { ...settings, miniWindowCloseAction: action };
-    set({
-      settings: updated,
-      isDirty: checkIsDirty(updated, initialSettings),
-    });
-    saveSettings();
-  },
+  setWebdavConfig: (patch) =>
+    applyPatch({ webdavConfig: { ...get().settings.webdavConfig, ...patch } }),
 
   clearToast: () => {
     set({ toastMessage: null });
   },
-}));
+  };
+});
 

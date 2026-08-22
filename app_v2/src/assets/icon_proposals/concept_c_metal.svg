@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Shadow -->
+    <filter id="squircle-shadow-c" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.6"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.4"/>
+    </filter>
+
+    <!-- Space Black Titanium Gradient -->
+    <radialGradient id="bg-metal-c" cx="50%" cy="35%" r="75%">
+      <stop offset="0%" stop-color="#1A1C23"/>
+      <stop offset="60%" stop-color="#0D0E12"/>
+      <stop offset="100%" stop-color="#050608"/>
+    </radialGradient>
+
+    <!-- Titanium Border -->
+    <linearGradient id="border-titanium" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#94A3B8" stop-opacity="0.45"/>
+      <stop offset="50%" stop-color="#475569" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#1E293B" stop-opacity="0.1"/>
+    </linearGradient>
+
+    <!-- Siri / Apple Intelligence Chromatic Flow Gradient -->
+    <linearGradient id="chromatic-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="30%" stop-color="#6366F1"/>
+      <stop offset="70%" stop-color="#EC4899"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+
+    <!-- Laser Line Glow -->
+    <filter id="laser-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 1. Squircle Base Plate -->
+  <rect x="36" y="36" width="440" height="440" rx="98" ry="98"
+        fill="url(#bg-metal-c)" filter="url(#squircle-shadow-c)"/>
+  <rect x="36.5" y="36.5" width="439" height="439" rx="97.5" ry="97.5"
+        fill="none" stroke="url(#border-titanium)" stroke-width="1.5"/>
+
+  <!-- 2. Subtle Precision Grid Lines (Apple Engineering Aesthetic) -->
+  <circle cx="256" cy="256" r="140" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="1"/>
+  <circle cx="256" cy="256" r="85" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="1" stroke-dasharray="3 5"/>
+
+  <!-- 3. Continuous Single-Line Cat Profile in Laser Chromatic Gradient -->
+  <!-- Under-glow line -->
+  <path d="M 160 380
+           C 150 330 160 270 190 230
+           C 205 210 215 170 218 135
+           C 220 128 226 128 230 135
+           C 245 165 260 195 295 205
+           C 335 215 365 250 375 290
+           C 385 330 365 375 320 380
+           C 280 385 240 370 200 375
+           Z"
+        fill="none"
+        stroke="url(#chromatic-glow)"
+        stroke-width="14"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        opacity="0.35"
+        filter="url(#laser-glow)"/>
+
+  <!-- Crisp Titanium/White Core Stroke -->
+  <path d="M 160 380
+           C 150 330 160 270 190 230
+           C 205 210 215 170 218 135
+           C 220 128 226 128 230 135
+           C 245 165 260 195 295 205
+           C 335 215 365 250 375 290
+           C 385 330 365 375 320 380
+           C 280 385 240 370 200 375
+           Z"
+        fill="none"
+        stroke="url(#chromatic-glow)"
+        stroke-width="4.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+  <!-- 4. Precision Focal Scan Ring (Translation Scanner) -->
+  <circle cx="285" cy="275" r="42" fill="none" stroke="rgba(255,255,255,0.7)" stroke-width="2"/>
+  <circle cx="285" cy="275" r="42" fill="none" stroke="url(#chromatic-glow)" stroke-width="3" stroke-dasharray="25 40"/>
+  <!-- Focus Center Dot with Crosshairs -->
+  <circle cx="285" cy="275" r="4" fill="#FFFFFF"/>
+  <line x1="285" y1="225" x2="285" y2="231" stroke="#38BDF8" stroke-width="2"/>
+  <line x1="285" y1="319" x2="285" y2="325" stroke="#EC4899" stroke-width="2"/>
+  <line x1="235" y1="275" x2="241" y2="275" stroke="#6366F1" stroke-width="2"/>
+  <line x1="329" y1="275" x2="335" y2="275" stroke="#F59E0B" stroke-width="2"/>
+
+  <!-- 5. Optical Sweep Ray -->
+  <path d="M 285 275 L 390 230" stroke="url(#chromatic-glow)" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6"/>
+</svg>

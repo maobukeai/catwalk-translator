@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Star, Download, Search, BookMarked, Clock, Volume2, Trash2, Trash, Inbox, Play, X, Copy, Check, Camera, FileText, GraduationCap, Eye, RotateCcw, Library } from "lucide-react";
-import { cmdGetHistory, cmdToggleFavorite, cmdExportAnki, cmdDeleteHistoryEntry, cmdClearHistory, cmdGetCaptureSessions, cmdClearCaptureSessions } from "../../services/tauri";
+import { Star, Download, Search, BookMarked, Clock, Volume2, Trash2, Trash, Inbox, Play, X, Copy, Check, Camera, FileText, GraduationCap, Eye, RotateCcw, Library, ClipboardList } from "lucide-react";
+import { cmdGetHistory, cmdToggleFavorite, cmdExportAnki, cmdDeleteHistoryEntry, cmdClearHistory, cmdGetCaptureSessions, cmdClearCaptureSessions, cmdGetClipboardHistory, cmdClearClipboardHistory, type ClipboardHistoryEntry } from "../../services/tauri";
+import { speakText } from "../../services/tts";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppTheme } from "../../hooks/useAppTheme";
 import { detectSpeechLang } from "../../services/langDetect";
@@ -66,6 +67,12 @@ export const HistoryPanel: React.FC = () => {
 
   // ── 划词回放：整场截图翻译会话 ────────────────────────────────────────────
   const [sessions, setSessions] = useState<CaptureSession[]>([]);
+
+  // ── 剪贴板翻译历史：被动监听翻译成功的条目（上限 200 条） ─────────────────
+  const [clipHistory, setClipHistory] = useState<ClipboardHistoryEntry[]>([]);
+  useEffect(() => {
+    cmdGetClipboardHistory().then((list) => setClipHistory(list ?? [])).catch(() => undefined);
+  }, []);
   const [replay, setReplay] = useState<CaptureSession | null>(null);
   const [replayCopied, setReplayCopied] = useState(false);
 
@@ -153,11 +160,7 @@ export const HistoryPanel: React.FC = () => {
   };
 
   const handleSpeech = (text: string) => {
-    if (!("speechSynthesis" in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = detectSpeechLang(text);
-    window.speechSynthesis.speak(utterance);
+    speakText(text, { lang: detectSpeechLang(text) });
   };
 
   const handleDelete = async (id: string) => {
@@ -573,6 +576,71 @@ export const HistoryPanel: React.FC = () => {
               </div>
             );
           })
+        )}
+      </div>
+
+      {/* ── 剪贴板翻译历史 ─────────────────────────────────────────────────── */}
+      <div className="lg-panel p-5" data-testid="clipboard-history-section">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold flex items-center gap-2">
+            <ClipboardList className="h-4 w-4" style={{ color: "var(--accent-text)" }} />
+            剪贴板翻译历史
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full border" style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}>
+              {clipHistory.length}
+            </span>
+          </h3>
+          {clipHistory.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!window.confirm("确定清空全部剪贴板翻译历史吗？")) return;
+                cmdClearClipboardHistory()
+                  .then(() => setClipHistory([]))
+                  .catch(console.warn);
+              }}
+              className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2 py-1 border transition cursor-pointer hover:bg-rose-500/10 hover:text-rose-500"
+              style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}
+            >
+              <Trash className="h-3 w-3" />
+              <span>清空</span>
+            </button>
+          )}
+        </div>
+
+        {clipHistory.length === 0 ? (
+          <p className="text-xs" style={{ color: "var(--g-text-3)" }}>
+            在设置中开启「剪贴板静默翻译」后，复制的外文会自动翻译并记录在这里
+          </p>
+        ) : (
+          <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1 scrollbar-thin">
+            {clipHistory.map((entry, idx) => (
+              <div
+                key={`${entry.atMs}_${idx}`}
+                className="rounded-lg border px-3 py-2 text-xs"
+                style={{ borderColor: "var(--g-border)" }}
+                data-testid="clipboard-history-item"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono truncate" style={{ color: "var(--g-text-3)" }}>{entry.original}</span>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="text-[9px] font-mono px-1 rounded border" style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}>
+                      {entry.sourceTier}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard.writeText(entry.translated)}
+                      className="rounded p-0.5 transition cursor-pointer hover:text-sky-500"
+                      style={{ color: "var(--g-text-3)" }}
+                      title="复制译文"
+                    >
+                      <Copy className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-0.5 font-bold truncate">{entry.translated}</div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

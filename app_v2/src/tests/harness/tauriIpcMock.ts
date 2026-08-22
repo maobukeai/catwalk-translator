@@ -53,6 +53,15 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
       return state.colorSamples;
     case 'cmd_get_capture_sessions':
       return [];
+    case 'cmd_get_clipboard_history':
+      return [];
+    case 'cmd_clear_clipboard_history':
+      return null;
+    // ── 无感查词浮窗 ──
+    case 'cmd_get_lookup_payload':
+      return null;
+    case 'cmd_hide_lookup_popup':
+      return null;
     case 'cmd_save_capture_session':
     case 'cmd_clear_capture_sessions':
       return null;
@@ -112,6 +121,63 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
             ]
           : [],
       };
+    // ── Backup & WebDAV sync (backup.rs / webdav.rs) ──
+    case 'cmd_list_backups':
+      return [];
+    case 'cmd_create_backup':
+      return {
+        name: 'maobu_backup_20260822_120000.zip',
+        sizeBytes: 2048,
+        createdAtMs: Date.now(),
+        source: 'manual',
+      };
+    case 'cmd_delete_backup':
+    case 'cmd_restore_backup':
+    case 'cmd_open_backup_dir':
+      return null;
+    case 'cmd_export_backup_base64':
+      return '';
+    case 'cmd_import_backup_base64':
+      return {
+        appVersion: '0.1.4',
+        createdAt: '2026-08-22 12:00:00',
+        historyCount: 0,
+        captureSessionCount: 0,
+      };
+    case 'cmd_webdav_test':
+      return '连接成功（12 ms）';
+    case 'cmd_webdav_upload':
+      return { name: 'maobu_backup_20260822_120000.zip', sizeBytes: 2048, deletedOld: 0 };
+    case 'cmd_webdav_list':
+      return [];
+    case 'cmd_webdav_restore':
+      return {
+        appVersion: '0.1.4',
+        createdAt: '2026-08-22 12:00:00',
+        historyCount: 0,
+        captureSessionCount: 0,
+      };
+    case 'cmd_webdav_delete':
+      return null;
+    // ── 通用词典 (GeneralDictCard / general_dict 命令) ──
+    case 'cmd_general_dict_status':
+      return { installed: false, entries: 0, installedAt: '' };
+    case 'cmd_general_dict_lookup':
+      return null;
+    case 'cmd_general_dict_uninstall':
+      return null;
+    case 'cmd_general_dict_install':
+      return { installed: true, entries: 0, installedAt: '' };
+    // ── 剪贴板翻译历史 ──
+    case 'cmd_get_clipboard_history':
+      return [];
+    case 'cmd_clear_clipboard_history':
+      return null;
+    // ── 无感查词浮窗 ──
+    case 'cmd_get_lookup_payload':
+      return null;
+    case 'cmd_hide_lookup_popup':
+      return null;
     default:
       throw new Error(`Unhandled IPC command: ${cmd}`);
   }

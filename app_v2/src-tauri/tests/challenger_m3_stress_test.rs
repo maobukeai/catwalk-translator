@@ -7,7 +7,6 @@
 //! 5. Thread Lock Contention (RwLock cache, OnceLock dicts, concurrent read/write)
 
 use app_v2_lib::{
-    commands::cmd_translate_phrases,
     models::LlmConfig,
     translator::{MultiTierPipeline, TranslationCache, TranslationResult},
 };
@@ -34,7 +33,7 @@ async fn test_challenger_invalid_endpoint_connection_refused() {
     let phrases = vec!["Unmatched Test Term Refused".to_string()];
     let start = Instant::now();
     let results = pipeline
-        .translate_phrases(&phrases, "blender", Some(&config))
+        .translate_phrases(&phrases, "blender", Some(&config), &[])
         .await;
     let elapsed = start.elapsed();
 
@@ -74,7 +73,7 @@ async fn test_challenger_invalid_endpoint_http_404_500_errors() {
 
     let phrases = vec!["Unmatched 500 Phrase".to_string()];
     let results = pipeline
-        .translate_phrases(&phrases, "blender", Some(&config))
+        .translate_phrases(&phrases, "blender", Some(&config), &[])
         .await;
 
     assert_eq!(results.len(), 1);
@@ -117,7 +116,7 @@ async fn test_challenger_malformed_llm_json_response() {
 
     let phrases = vec!["Unmatched Malformed Phrase".to_string()];
     let results = pipeline
-        .translate_phrases(&phrases, "blender", Some(&config))
+        .translate_phrases(&phrases, "blender", Some(&config), &[])
         .await;
 
     assert_eq!(results.len(), 1);
@@ -159,7 +158,7 @@ async fn test_challenger_missing_api_key_401_unauthorized() {
 
     let phrases = vec!["Unmatched 401 Phrase".to_string()];
     let results = pipeline
-        .translate_phrases(&phrases, "blender", Some(&config))
+        .translate_phrases(&phrases, "blender", Some(&config), &[])
         .await;
 
     assert_eq!(results.len(), 1);
@@ -198,7 +197,7 @@ async fn test_challenger_http_timeout_4s_limit() {
     let start = Instant::now();
     let phrases = vec!["Timeout Phrase X".to_string()];
     let results = pipeline
-        .translate_phrases(&phrases, "blender", Some(&config))
+        .translate_phrases(&phrases, "blender", Some(&config), &[])
         .await;
     let elapsed = start.elapsed();
 
@@ -239,7 +238,7 @@ async fn test_challenger_50_plus_async_concurrent_calls() {
                 "  Bevel  ".to_string(),             // Whitespace preset term
                 "".to_string(),                      // Empty phrase
             ];
-            let res = cmd_translate_phrases(phrases, "blender".to_string(), None).await;
+            let res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, "blender", None, &[]).await);
             assert!(res.is_ok(), "Task {} failed", task_id);
             let results = res.unwrap();
             assert_eq!(results.len(), 6, "Task {} unexpected length", task_id);

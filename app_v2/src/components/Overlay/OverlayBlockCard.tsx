@@ -4,7 +4,45 @@ import type { OverlayBlock } from '../../services/types';
 // ── OverlayBlockCard: a single translated text block rendered in-place ─────────
 export type CardViewMode = 'translated' | 'original' | 'bilingual';
 
-export interface OverlayBlockCardProps {
+export const FALLBACK_FONT_FAMILY =
+  '"Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif';
+
+/**
+ * 用 canvas measureText 在应用字体下量出文本的真实渲染宽度（基准 100px 再等比折算）。
+ * 返回 0 表示测宽不可用（如 JSDOM 测试环境），调用方回退到字符数启发式。
+ * 相比按字符数×平均字宽估算，实测宽度让字号收缩一步到位，排版更贴近原位。
+ */
+let measureCtxState: { ctx: CanvasRenderingContext2D | null; family: string } | undefined;
+
+function measureTextWidth(text: string, fontSize: number): number {
+  try {
+    if (!measureCtxState) {
+      let family = FALLBACK_FONT_FAMILY;
+      if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+        const v = getComputedStyle(document.documentElement)
+          .getPropertyValue('--app-font-family')
+          .trim();
+        if (v) family = v;
+      }
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext && canvas.getContext('2d');
+      measureCtxState = {
+        ctx: ctx && typeof ctx.measureText === 'function' ? ctx : null,
+        family,
+      };
+    }
+    const { ctx, family } = measureCtxState;
+    if (!ctx || !text) return 0;
+    ctx.font = `100px ${family}`;
+    const w = ctx.measureText(text).width;
+    if (!Number.isFinite(w) || w <= 0) return 0;
+    return (w * fontSize) / 100;
+  } catch {
+    return 0;
+  }
+}
+
+interface OverlayBlockCardProps {
   block: OverlayBlock;
   /** Original index inside overlayResult.blocks (stable across re-sorts). */
   blockIndex: number;
@@ -176,7 +214,8 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   // refreshes) unless the user manually dragged this card somewhere.
   useEffect(() => {
     if (userDraggedRef.current) return;
-    if (Math.abs(pos.x - block.logicalX) > 4 || Math.abs(pos.y - block.logicalY) > 4) {
+    // 2px 死区：跟随重排纠偏，同时避免 watch 刷新时的轻微抖动
+    if (Math.abs(pos.x - block.logicalX) > 2 || Math.abs(pos.y - block.logicalY) > 2) {
       setPos({ x: block.logicalX, y: block.logicalY });
     }
   }, [block.logicalX, block.logicalY, pos.x, pos.y]);
@@ -222,6 +261,10 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   const primaryText = viewMode === 'original' ? block.original : displayText;
   const rawLines = (block.original || '').split('\n').filter(Boolean);
   const lineCount = Math.max(1, rawLines.length);
+  // 原文单行时,显示文本里的换行(LLM 偶尔在译文中返回换行符)合并为空格,
+  // 否则译文会被直接渲染成两行
+  const renderText =
+    lineCount === 1 ? primaryText.replace(/\s*\n+\s*/g, ' ').trim() : primaryText;
   const singleLineH = Math.max(10, block.logicalH / lineCount);
   const nonSpaceLen = Math.max(1, block.original.replace(/\s/g, '').length);
   const cjkCount = (block.original.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
@@ -229,32 +272,63 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   const baseFontSize = singleLineH * emFactor;
 
   // 自适应字号缩放计算 (Auto Font-Fit Calculation)
+  // 识别阶段(显示原文)同样应用：原文字体被替换为应用字体后常比 OCR 框更宽，
+  // 若不收缩会把卡片撑高、经 AABB 连锁推挤邻居，表现为「识别阶段排布凌乱」。
+  // 多行块（original 含 \n）按最长一行估宽，避免按总长度过度缩小字号。
+  // 卡片最大宽度收紧到原文 1.15 倍;提前计算以便单行适配时用视口安全值
+  const cardMaxWidth = Math.min(
+    vw - pos.x - 20,
+    Math.max(Math.round(block.logicalW * 1.15 + 12), 120)
+  );
   let targetFontSize = baseFontSize;
-  if (block.translated && viewMode !== 'original') {
-    const dispLen = Math.max(1, primaryText.length);
-    const dispCjkCount = (primaryText.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
-    const dispIsCjk = dispCjkCount / dispLen > 0.3;
-    // CJK 字符平均宽度约 1.05em，西文字符平均宽度约 0.52em
-    const charWidthRatio = dispIsCjk ? 1.05 : 0.52;
-    const estimatedWidth = dispLen * charWidthRatio * baseFontSize;
-    const allowedWidth = Math.max(block.logicalW * 1.2, 80);
+  // 原文单行 → 无条件锁定单行渲染(nowrap),不只限于触发了字号收缩的情况:
+  // 未收缩分支下 canvas 度量稍有偏差也会在 maxWidth 处折行
+  const singleLineLock = lineCount === 1;
+  if (renderText) {
+    const displayLines = renderText.split('\n').filter(Boolean);
+    const longestLen = displayLines.reduce((m, l) => Math.max(m, l.length), 1);
+    const dispCjkCount = (renderText.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
+    const dispIsCjk = dispCjkCount / Math.max(1, renderText.replace(/\s/g, '').length) > 0.3;
+    // 优先用 canvas 实测最长一行的真实渲染宽度；不可用时退回字符数×平均字宽
+    // 启发式（CJK 约 1.05em，西文约 0.52em）
+    let estimatedWidth = 0;
+    for (const line of displayLines) {
+      const w = measureTextWidth(line, baseFontSize);
+      if (w > estimatedWidth) estimatedWidth = w;
+    }
+    if (estimatedWidth <= 0) {
+      const charWidthRatio = dispIsCjk ? 1.05 : 0.52;
+      estimatedWidth = longestLen * charWidthRatio * baseFontSize;
+    }
+    // 译文贴合原文:允许超出 5%;贴屏边时以视口安全宽度为准(否则仍会被迫换行)
+    const allowedWidth = Math.min(
+      Math.max(block.logicalW * 1.05, 60),
+      Math.max(cardMaxWidth - 4, 40)
+    );
 
     if (estimatedWidth > allowedWidth) {
-      const minSafeFontSize = Math.max(9, singleLineH * 0.55);
-      // 优先尝试单行缩放
-      const singleLineFitSize = baseFontSize * (allowedWidth / estimatedWidth);
-      if (singleLineFitSize >= minSafeFontSize && lineCount === 1) {
-        targetFontSize = singleLineFitSize;
+      if (lineCount === 1) {
+        // 原文单行 → 译文强制单行自适应缩放,绝不折行。
+        // 3% 安全余量抵消字体度量误差,下限 6px(比原来 minSafe 门槛更激进,
+        // 避免长译文掉进"双行折行"分支把一行原文变成两行卡片)
+        const fitSize = baseFontSize * (allowedWidth / estimatedWidth) * 0.97;
+        targetFontSize = Math.max(6, Math.min(baseFontSize, fitSize));
       } else {
-        // 多行或单行较长时折为双行分配
-        const twoLineFitSize = baseFontSize * ((allowedWidth * 1.85) / estimatedWidth);
+        // 多行原文:按双行预算分配,保留可读下限
+        const minSafeFontSize = Math.max(8, singleLineH * 0.5);
+        const twoLineFitSize = baseFontSize * ((allowedWidth * 1.6) / estimatedWidth);
         targetFontSize = Math.max(minSafeFontSize, Math.min(baseFontSize * 0.88, twoLineFitSize));
       }
     }
   }
 
-  const fontSize = Math.round(Math.min(64, Math.max(9, targetFontSize)) * scale);
-  const maxWidth = Math.min(vw - pos.x - 20, Math.max(Math.round(block.logicalW * 1.35 + 24), 140));
+  // 单行锁定时下限放到 6px,否则最终 Math.max(9) 会把算好的适配字号顶回去,
+  // 文字比 allowedWidth 宽照样换行——这正是"一行原文译成两行"的来源之一
+  const fontSize = Math.round(
+    Math.min(64, Math.max(singleLineLock ? 6 : 9, targetFontSize)) * scale
+  );
+  // 卡片最大宽度收紧到原文 1.15 倍,译文不再明显超出原文区域
+  const maxWidth = cardMaxWidth;
   const isLight = isLightBg(block.bgCss, block.fgCss);
   const hasPatch = !!block.patchPng && (block.patchW ?? 0) > 0;
 
@@ -321,10 +395,15 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         borderRadius: 2,
         border: 'none',
         boxShadow: cardBoxShadow,
-        whiteSpace: 'normal',
+        // pre-wrap：合并块 original 里的 \n 必须真实换行（normal 会折叠成空格
+        // 导致整段在 maxWidth 处乱换行、卡片被撑高）
+        // 单行锁定时用 nowrap 双保险:配合已收缩的字号,度量误差也绝不折行
+        whiteSpace: singleLineLock ? 'nowrap' : 'pre-wrap',
         wordBreak: 'break-word',
         overflowWrap: 'break-word',
-        padding: '1px 3px',
+        // 仅保留侧边余量，左/上 padding 为 0：文字与 OCR 框逐像素对齐
+        // （patch 层是绝对定位，本就不受 padding 影响，此前 1px/3px 只偏移了正文）
+        padding: '0 2px 0 0',
       }}
       title={`${block.original} → ${block.translated || '翻译中…'} [${block.sourceTier}]`}
       onMouseDown={onMouseDown}
@@ -343,19 +422,35 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         onCardContextMenu?.(e);
       }}
     >
-      {/* 保底实色抹除底板：全向外扩 3px，带微圆角，杜绝任何 OCR 边界误差导致的边缘/上下笔画露字 */}
+      {/* 保底实色抹除底板：与插值 patch 边界完全重合（作为 PNG 加载失败的兜底）。
+          任何外扩都会在渐变/纹理背景上露出中位数色边——即用户看到的「不干净」色边 */}
       <div
         aria-hidden
         className="pointer-events-none absolute"
-        style={{
-          top: -3,
-          left: -4,
-          right: -4,
-          bottom: -3,
-          background: toSolidBg(block.bgCss, block.fgCss),
-          borderRadius: 3,
-          zIndex: 0,
-        }}
+        style={
+          hasPatch
+            ? {
+                // 锚定屏幕坐标而非卡片坐标：卡片被 AABB 推挤或拖动时，patch 若
+                // 跟着移动会把「别处的背景」盖到新位置上——横穿邻行字形，呈现
+                // 为一条划掉邻文的横线。绝对定位内 left/top 用屏幕值减 pos 即可。
+                top: (block.patchY ?? pos.y) - pos.y,
+                left: (block.patchX ?? pos.x) - pos.x,
+                width: block.patchW ?? block.logicalW,
+                height: block.patchH ?? block.logicalH,
+                background: toSolidBg(block.bgCss, block.fgCss),
+                borderRadius: 0,
+                zIndex: 0,
+              }
+            : {
+                top: -3,
+                left: -4,
+                right: -4,
+                bottom: -3,
+                background: toSolidBg(block.bgCss, block.fgCss),
+                borderRadius: 3,
+                zIndex: 0,
+              }
+        }
       />
 
       {/* 抹除补丁：OCR 框外扩区域经背景插值抹掉字形后的 PNG。边缘像素与
@@ -365,14 +460,17 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
           aria-hidden
           className="pointer-events-none absolute"
           style={{
-            left: (block.patchX ?? block.logicalX) - block.logicalX,
-            top: (block.patchY ?? block.logicalY) - block.logicalY,
+            // 同底板：锚定屏幕坐标，卡片被推挤/拖动后 patch 仍精确盖住它
+            // 所来源的屏幕区域（其像素本就是从那里插值来的）
+            left: (block.patchX ?? pos.x) - pos.x,
+            top: (block.patchY ?? pos.y) - pos.y,
             width: block.patchW ?? block.logicalW,
             height: block.patchH ?? block.logicalH,
             backgroundImage: `url(data:image/png;base64,${block.patchPng})`,
             backgroundSize: '100% 100%',
             backgroundRepeat: 'no-repeat',
-            borderRadius: 3,
+            // patch 边缘需与屏幕真实背景逐像素衔接，圆角会裁掉对齐的边角出现接缝
+            borderRadius: 0,
             zIndex: 1,
           }}
         />
@@ -398,7 +496,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         style={{ userSelect: 'text', lineHeight: 'inherit' }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {primaryText}
+        {renderText}
       </span>
 
       {/* 📌 Pin indicator on card top-right when pinned */}

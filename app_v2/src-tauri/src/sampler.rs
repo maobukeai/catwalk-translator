@@ -31,9 +31,10 @@ impl ColorSampler {
 
                 if is_outer_ring {
                     let idx = ((y * width + x) * 4) as usize;
-                    r_vals.push(image_bytes[idx]);
+                    // 输入是 32bpp BMP（BGRA 字节序），此前按 RGB 直读导致红蓝颠倒
+                    r_vals.push(image_bytes[idx + 2]);
                     g_vals.push(image_bytes[idx + 1]);
-                    b_vals.push(image_bytes[idx + 2]);
+                    b_vals.push(image_bytes[idx]);
                 }
             }
         }

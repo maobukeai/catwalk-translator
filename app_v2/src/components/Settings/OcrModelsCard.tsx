@@ -293,46 +293,73 @@ export const OcrModelsCard: React.FC = () => {
       </div>
 
       {/* ── Version Tabs ── */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 gap-2.5">
         {VERSION_CONFIGS.map((cfg) => {
           const tabModels = models.filter((m) => getModelVersion(m) === cfg.id);
           const installedCount = tabModels.filter((m) => m.installed).length;
+          const isFullyInstalled = tabModels.length > 0 && installedCount === tabModels.length;
           const isSelected = selectedTab === cfg.id;
           const isThisActive = activeVersion === cfg.id;
+
+          const handleCardClick = async () => {
+            setSelectedTab(cfg.id);
+            if (isFullyInstalled && activeVersion !== cfg.id) {
+              await handleSwitchVersion(cfg.id);
+            }
+          };
 
           return (
             <button
               key={cfg.id}
               type="button"
-              onClick={() => setSelectedTab(cfg.id)}
-              className={`flex flex-col p-2.5 rounded-xl border text-left transition-all duration-200 cursor-pointer relative overflow-hidden ${
-                isSelected
-                  ? 'border-violet-500 bg-violet-600/10 shadow-sm'
-                  : 'border-slate-300/40 dark:border-white/10 hover:border-slate-400 dark:hover:border-white/20 bg-black/5 dark:bg-white/[0.02]'
+              onClick={() => void handleCardClick()}
+              className={`flex flex-col p-3 rounded-xl border text-left transition-all duration-200 cursor-pointer relative overflow-hidden ${
+                isThisActive
+                  ? (isLight
+                      ? 'border-emerald-500/80 bg-emerald-50/70 shadow-sm ring-2 ring-emerald-500/20'
+                      : 'border-emerald-500/80 bg-emerald-500/10 shadow-sm ring-2 ring-emerald-500/20')
+                  : isSelected
+                  ? (isLight
+                      ? 'border-violet-500 bg-violet-50/60 shadow-xs'
+                      : 'border-violet-500/80 bg-violet-600/10 shadow-xs')
+                  : (isLight
+                      ? 'border-slate-200/90 hover:border-slate-300 bg-white/70 hover:bg-white'
+                      : 'border-white/10 hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.05]')
               }`}
             >
               <div className="flex items-center justify-between gap-1 w-full">
                 <span
                   className={`text-xs font-bold ${
-                    isSelected
-                      ? 'text-violet-500 dark:text-violet-400'
+                    isThisActive
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : isSelected
+                      ? 'text-violet-600 dark:text-violet-400'
                       : 'text-slate-700 dark:text-slate-200'
                   }`}
                 >
                   {cfg.label}
                 </span>
-                {isThisActive && (
-                  <span className="text-[9px] font-semibold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-500 border border-emerald-500/30">
+                {isThisActive ? (
+                  <span className="text-[9.5px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/40 flex items-center gap-1 shadow-2xs">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
                     当前生效
+                  </span>
+                ) : isFullyInstalled ? (
+                  <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/10 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-white/10">
+                    点击启用
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                    需下载
                   </span>
                 )}
               </div>
 
-              <div className="flex items-center justify-between gap-1 mt-1.5 w-full">
+              <div className="flex items-center justify-between gap-1 mt-2 w-full">
                 <span className="text-[10px]" style={{ color: 'var(--g-text-3)' }}>
                   {cfg.recommendNote}
                 </span>
-                <span className="text-[10px] font-mono text-slate-400">
+                <span className="text-[10.5px] font-mono font-medium text-slate-500 dark:text-slate-400">
                   {tabModels.length > 0 ? `${installedCount}/${tabModels.length}` : '0/3'}
                 </span>
               </div>

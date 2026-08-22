@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveAABBCollisions, calculateTooltipPosition } from '../services/overlayLayout';
+import { resolveAABBCollisions } from '../services/overlayLayout';
 import { OverlayBlock } from '../services/types';
 import { toTranslucentBg, toSolidBg, isLightBg } from '../components/Overlay/OverlayBlockCard';
 
@@ -97,45 +97,6 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
       // block2 should be pushed past block1's aabbH: 100 + 40 + 4 = 144
       expect(resolved[1].logicalY).toBe(144);
       expect(resolved[1].logicalH).toBe(20);
-    });
-  });
-
-  describe('calculateTooltipPosition', () => {
-    it('places tooltip on top when space is sufficient', () => {
-      const block = { logicalX: 100, logicalY: 100, logicalW: 80, logicalH: 20 };
-      const pos = calculateTooltipPosition(block, 800, 600, 120, 40);
-      
-      expect(pos.placement).toBe('top');
-      // y should be: block.logicalY - tooltipH - 8 = 100 - 40 - 8 = 52
-      expect(pos.y).toBe(52);
-      // x should be centered: 100 + (80 - 120)/2 = 80
-      expect(pos.x).toBe(80);
-    });
-
-    it('flips tooltip to bottom when top space is insufficient (< 10px)', () => {
-      const block = { logicalX: 100, logicalY: 30, logicalW: 80, logicalH: 20 };
-      // tooltipH is 40. candidateY = 30 - 40 - 8 = -18 (which is < 10)
-      const pos = calculateTooltipPosition(block, 800, 600, 120, 40);
-      
-      expect(pos.placement).toBe('bottom');
-      // y should be: block.logicalY + block.logicalH + 8 = 30 + 20 + 8 = 58
-      expect(pos.y).toBe(58);
-    });
-
-    it('clamps tooltip X coordinate to screen boundaries', () => {
-      // Near left boundary
-      const blockLeft = { logicalX: 10, logicalY: 100, logicalW: 20, logicalH: 20 };
-      const posLeft = calculateTooltipPosition(blockLeft, 800, 600, 100, 30);
-      // Centered X would be: 10 + (20 - 100)/2 = -30
-      // Clamped to minimum 8
-      expect(posLeft.x).toBe(8);
-
-      // Near right boundary
-      const blockRight = { logicalX: 770, logicalY: 100, logicalW: 20, logicalH: 20 };
-      const posRight = calculateTooltipPosition(blockRight, 800, 600, 100, 30);
-      // Centered X would be: 770 + (20 - 100)/2 = 730
-      // Max boundary: 800 - 100 - 8 = 692
-      expect(posRight.x).toBe(692);
     });
   });
 

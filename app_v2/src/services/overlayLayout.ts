@@ -68,44 +68,10 @@ export function resolveAABBCollisions<T extends OverlayBlock>(
   for (let i = 0; i < n; i++) {
     const b = resolved[i];
     const bh = getH(b);
-    b.logicalY = Math.max(0, Math.min(containerHeight - bh, b.logicalY));
+    // 整数像素位置：AABB 推挤/上压产生的分数坐标会让文字亚像素渲染发虚
+    b.logicalY = Math.round(Math.max(0, Math.min(containerHeight - bh, b.logicalY)));
   }
 
   return resolved;
 }
 
-/**
- * Calculates adaptive position for a tooltip relative to a block.
- * Default position is on top of the block. If space is less than 10px, it flips to the bottom.
- * The x-coordinate is centered and clamped to [8, containerWidth - tooltipW - 8].
- */
-export function calculateTooltipPosition(
-  block: { logicalX: number; logicalY: number; logicalW: number; logicalH: number },
-  containerWidth: number,
-  containerHeight: number,
-  tooltipW: number,
-  tooltipH: number
-): { x: number; y: number; placement: 'top' | 'bottom' } {
-  // Y placement logic
-  const candidateY = block.logicalY - tooltipH - 8;
-  let placement: 'top' | 'bottom' = 'top';
-  let y = candidateY;
-
-  if (candidateY < 10) {
-    placement = 'bottom';
-    y = block.logicalY + block.logicalH + 8;
-  }
-
-  // X placement logic
-  const centerX = block.logicalX + (block.logicalW - tooltipW) / 2;
-  const minX = 8;
-  const maxX = Math.max(8, containerWidth - tooltipW - 8);
-  const x = Math.max(minX, Math.min(maxX, centerX));
-
-  // Clamp Y to container boundaries just in case
-  const minY = 8;
-  const maxY = Math.max(8, containerHeight - tooltipH - 8);
-  y = Math.max(minY, Math.min(maxY, y));
-
-  return { x, y, placement };
-}

@@ -1,7 +1,7 @@
 //! Empirical Challenger Stress Tests for Rust Models, Serde camelCase Mappings, Mutex Thread Safety, and IPC Command Stubs
 
 use app_v2_lib::{
-    commands::{cmd_capture_and_ocr, cmd_sample_colors, cmd_translate_phrases, AppState},
+    commands::{cmd_capture_and_ocr, cmd_sample_colors, AppState},
     models::{
         AppSettings, BoundingBox, ColorSample, LlmConfig, OcrResult, PhysicalRect, TextBlock,
         TranslationResult,
@@ -221,7 +221,7 @@ fn test_ipc_cmd_translate_phrases_stub() {
             "Normal Map".to_string(),
         ];
         let preset = "blender".to_string();
-        let result = cmd_translate_phrases(phrases.clone(), preset.clone(), None).await;
+        let result = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, &preset, None, &[]).await);
 
         assert!(result.is_ok());
         let list = result.unwrap();
@@ -268,7 +268,7 @@ fn test_async_tokio_concurrency_stress_test() {
                 assert!(ocr_res.is_ok());
 
                 let phrases = vec![format!("Phrase {}", i)];
-                let trans_res = cmd_translate_phrases(phrases, "blender".to_string(), None).await;
+                let trans_res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, "blender", None, &[]).await);
                 assert!(trans_res.is_ok());
 
                 let boxes = vec![BoundingBox {

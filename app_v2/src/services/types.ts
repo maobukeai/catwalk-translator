@@ -10,6 +10,8 @@ export interface ScreenCapturePayload {
   width: number;
   height: number;
   scaleFactor: number;
+  /** 截图瞬间检测到的前台 3D/CG 软件（自动切换词库用） */
+  detectedApp?: { preset: string; appName: string } | null;
 }
 
 
@@ -180,6 +182,57 @@ export interface OfflineModelSettings {
   downloadDate?: string;
 }
 
+/** 本地备份设置：定期自动备份、保留策略与最近备份时间 */
+export interface BackupSettings {
+  autoBackupEnabled?: boolean;
+  /** 自动备份间隔（小时），默认 24 */
+  intervalHours?: number;
+  /** 本地最多保留份数，超过淘汰最旧；0 = 不限制，默认 10 */
+  maxLocalBackups?: number;
+  /** 最近一次备份时间（epoch 毫秒） */
+  lastBackupAtMs?: number;
+}
+
+/** WebDAV 云同步配置（如坚果云 https://dav.jiangguoyun.com/dav/） */
+export interface WebdavConfig {
+  url?: string;
+  username?: string;
+  /** 应用密码（明文保存于 settings.json，与引擎 API Key 一致）；留空表示未修改 */
+  password?: string;
+  /** 远端目录，默认 MaobuTranslator */
+  remoteDir?: string;
+  /** 云端备份保留天数，默认 15 */
+  retentionDays?: number;
+  lastUploadAtMs?: number;
+  lastUploadName?: string;
+  lastRestoreAtMs?: number;
+}
+
+/** 本地备份列表条目 */
+export interface BackupEntry {
+  name: string;
+  sizeBytes: number;
+  createdAtMs: number;
+  /** 'auto' | 'manual' */
+  source: string;
+}
+
+/** WebDAV 远端备份条目 */
+export interface RemoteBackupEntry {
+  name: string;
+  sizeBytes: number;
+  /** 服务器 HTTP 日期串，new Date() 可直接解析 */
+  modifiedAt?: string;
+}
+
+/** 恢复/导入备份的结果摘要 */
+export interface RestoreSummary {
+  appVersion: string;
+  createdAt: string;
+  historyCount: number;
+  captureSessionCount: number;
+}
+
 export interface AppSettings {
   theme: string;
   hotkey: string;
@@ -232,6 +285,30 @@ export interface AppSettings {
   closeAction?: 'ask' | 'minimize' | 'exit';
   /** Spotlight 查词小窗口关闭行为：'hide' (自动隐藏) | 'minimize' (最小化) */
   miniWindowCloseAction?: 'hide' | 'minimize';
+  /** OCR 内容过滤：命中规则的识别块(时间戳/纯数字/水印)不参与翻译 */
+  ocrFilterEnabled?: boolean;
+  /** 过滤规则(正则，一条一行；空 = 默认规则集) */
+  ocrFilterRules?: string[];
+  /** 无感查词①：拖选/双击选中文字自动弹翻译浮窗 */
+  selectionLookupEnabled?: boolean;
+  /** 无感查词②：按住修饰键悬停屏幕文字弹词卡 */
+  hoverLookupEnabled?: boolean;
+  /** 悬停取词修饰键：'ctrl' | 'alt' | 'shift' */
+  hoverLookupModifier?: 'ctrl' | 'alt' | 'shift';
+  /** 主窗口置顶显示（默认关闭） */
+  alwaysOnTop?: boolean;
+  /** 手动代理开关：开启后使用 proxyUrl，优先于系统代理自动探测 */
+  proxyEnabled?: boolean;
+  /** 手动代理地址，如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080 */
+  proxyUrl?: string;
+  /** TTS 朗读语速 (0.5 ~ 2.0，默认 1.0) */
+  ttsRate?: number;
+  /** 截图划词时自动识别前台 3D/CG 软件并切换对应专业词库（默认开启） */
+  autoDetectPreset?: boolean;
+  /** 本地备份设置（自动备份 / 保留策略） */
+  backupSettings?: BackupSettings;
+  /** WebDAV 云同步配置 */
+  webdavConfig?: WebdavConfig;
 }
 
 export interface OfflineModelStatus {
@@ -338,3 +415,21 @@ export interface OcrEngineStatus {
   detail: string;
 }
 
+
+/** 贴图卡片中的单个文本块 */
+export interface PinBlock {
+  original: string;
+  translated: string;
+  sourceTier: string;
+}
+
+/** 贴图（Pin）窗口内容：位置尺寸为逻辑像素（CSS px） */
+export interface PinPayload {
+  id: string;
+  title: string;
+  blocks: PinBlock[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}

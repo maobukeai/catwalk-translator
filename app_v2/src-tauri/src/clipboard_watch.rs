@@ -12,7 +12,7 @@
 //!    stop and is restarted on the next enable.
 
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Serialize, Clone, Debug)]
@@ -27,6 +27,10 @@ static WATCH_RUNNING: AtomicBool = AtomicBool::new(false);
 /// Generation counter: fixes the stop→start race where the OLD thread's exit
 /// path would clear the running flag and silently kill a NEWLY started thread.
 static WATCH_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// 无感查词模块模拟复制/恢复剪贴板造成的序号上限:这些「自发变更」不是
+/// 用户复制,监听跳过(取词结果由 lookup_monitor 自己的浮窗展示)。
+pub static SELF_CAUSED_SEQ: AtomicU32 = AtomicU32::new(0);
 
 /// Pure filter (unit-tested): is this clipboard text worth translating?
 pub fn clipboard_text_worth_translating(text: &str, last_accepted: &str) -> bool {
@@ -70,6 +74,10 @@ pub fn start_clipboard_watch(app_handle: tauri::AppHandle) {
                 continue;
             }
             last_seq = seq;
+            // 无感查词的自发复制/恢复不当作用户复制
+            if seq <= SELF_CAUSED_SEQ.load(Ordering::SeqCst) {
+                continue;
+            }
 
             let text = match read_clipboard_text() {
                 Some(t) => t,
@@ -85,7 +93,7 @@ pub fn start_clipboard_watch(app_handle: tauri::AppHandle) {
             last_fire = Instant::now();
 
             // Translate through the shared pipeline with the user's preset/LLM
-            let (preset, llm) = {
+            let (preset, llm, glossary) = {
                 use tauri::Manager;
                 let state = app_handle.try_state::<crate::commands::AppState>();
                 match state {
@@ -95,21 +103,20 @@ pub fn start_clipboard_watch(app_handle: tauri::AppHandle) {
                             Ok(cfg) => (
                                 cfg.default_preset.clone(),
                                 cfg.llm_config.clone(),
+                                crate::translator::glossary_from_settings(&cfg.custom_dict_items),
                             ),
-                            Err(_) => ("blender".to_string(), None),
+                            Err(_) => ("blender".to_string(), None, Vec::new()),
                         }
                     }
-                    None => ("blender".to_string(), None),
+                    None => ("blender".to_string(), None, Vec::new()),
                 }
             };
 
             let phrase = last_accepted.clone();
             let result = tauri::async_runtime::block_on(async {
-                static PIPELINE: std::sync::OnceLock<crate::translator::MultiTierPipeline> =
-                    std::sync::OnceLock::new();
-                let pipeline = PIPELINE.get_or_init(crate::translator::MultiTierPipeline::new);
+                let pipeline = crate::translator::shared_pipeline();
                 let phrases = vec![phrase];
-                pipeline.translate_phrases(&phrases, &preset, llm.as_ref()).await
+                pipeline.translate_phrases(&phrases, &preset, llm.as_ref(), &glossary).await
             });
 
             if let Some(tr) = result.first() {
@@ -120,7 +127,14 @@ pub fn start_clipboard_watch(app_handle: tauri::AppHandle) {
                         translated: tr.translated.clone(),
                         source_tier: tr.source_tier.clone(),
                     };
-                    let _ = app_handle.emit("clipboard-watched", payload);
+                    let _ = app_handle.emit("clipboard-watched", payload.clone());
+                    // 持久化到剪贴板翻译历史（生词本页可回看，上限 200 条）
+                    crate::clipboard_history::push(
+                        &app_handle,
+                        &payload.original,
+                        &payload.translated,
+                        &payload.source_tier,
+                    );
                 }
             }
         }
@@ -149,13 +163,18 @@ fn clipboard_sequence_number() -> u32 {
     unsafe { GetClipboardSequenceNumber() }
 }
 
+/// 供 lookup_monitor 读取剪贴板序号(模拟复制后等待变化)。
+pub fn clipboard_sequence_number_pub() -> u32 {
+    clipboard_sequence_number()
+}
+
 #[cfg(not(target_os = "windows"))]
 fn clipboard_sequence_number() -> u32 {
     0
 }
 
 #[cfg(target_os = "windows")]
-fn read_clipboard_text() -> Option<String> {
+pub fn read_clipboard_text() -> Option<String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::DataExchange::{
         CloseClipboard, GetClipboardData, OpenClipboard,
@@ -204,7 +223,7 @@ fn read_clipboard_text() -> Option<String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn read_clipboard_text() -> Option<String> {
+pub fn read_clipboard_text() -> Option<String> {
     None
 }
 

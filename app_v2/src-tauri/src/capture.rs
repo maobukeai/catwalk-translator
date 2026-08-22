@@ -8,6 +8,9 @@ pub struct ScreenCapturePayload {
     pub width: u32,
     pub height: u32,
     pub scale_factor: f64,
+    /// 截图瞬间检测到的前台 3D/CG 软件（用于自动切换专业词库）
+    #[serde(default)]
+    pub detected_app: Option<crate::app_detect::DetectedApp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -309,6 +312,7 @@ pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
             width: w,
             height: h,
             scale_factor,
+            detected_app: None,
         })
     }
 }

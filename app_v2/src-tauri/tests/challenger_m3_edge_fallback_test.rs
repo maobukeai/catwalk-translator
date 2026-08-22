@@ -61,7 +61,7 @@ fn test_challenger_cache_key_mismatch_bug_demonstration() {
         // 1st call with un-trimmed phrase
         let phrase_with_space = "   Roughness \n".to_string();
         let res1 = pipeline
-            .translate_phrases(&[phrase_with_space.clone()], "blender", None)
+            .translate_phrases(&[phrase_with_space.clone()], "blender", None, &[])
             .await;
         assert_eq!(res1.len(), 1);
         assert_eq!(res1[0].translated, "粗糙度");
@@ -69,7 +69,7 @@ fn test_challenger_cache_key_mismatch_bug_demonstration() {
 
         // 2nd call with identical un-trimmed phrase
         let res2 = pipeline
-            .translate_phrases(&[phrase_with_space.clone()], "blender", None)
+            .translate_phrases(&[phrase_with_space.clone()], "blender", None, &[])
             .await;
         assert_eq!(res2.len(), 1);
         assert_eq!(res2[0].translated, "粗糙度");
@@ -87,7 +87,7 @@ fn test_challenger_cache_key_mismatch_bug_demonstration() {
 
         // Check trimmed variant cache hit
         let res3 = pipeline
-            .translate_phrases(&["Roughness".to_string()], "blender", None)
+            .translate_phrases(&["Roughness".to_string()], "blender", None, &[])
             .await;
         let cache_hit_trimmed = res3[0].source_tier.contains("(Cached)");
         println!(
@@ -107,14 +107,14 @@ fn test_challenger_4tier_fallback_transitions() {
 
         // Tier 1: Direct Preset Dict match
         let t1_res = pipeline
-            .translate_phrases(&["Principled BSDF".to_string()], "blender", None)
+            .translate_phrases(&["Principled BSDF".to_string()], "blender", None, &[])
             .await;
         assert_eq!(t1_res[0].translated, "原理化 BSDF");
         assert_eq!(t1_res[0].source_tier, "blender");
 
         // Tier 2: CG Fallback Dict match (Term exists in substance.json, active preset is "blender")
         let t2_res = pipeline
-            .translate_phrases(&["AO Mixing Mode".to_string()], "blender", None)
+            .translate_phrases(&["AO Mixing Mode".to_string()], "blender", None, &[])
             .await;
         assert_eq!(t2_res[0].translated, "AO混合模式");
         assert_eq!(t2_res[0].source_tier, "substance");
@@ -167,6 +167,7 @@ fn test_challenger_4tier_fallback_transitions() {
                 &["Unknown Term LLM".to_string()],
                 "blender",
                 Some(&llm_config),
+                &[],
             )
             .await;
         assert_eq!(t3_res[0].translated, "未知术语 LLM");
@@ -174,7 +175,7 @@ fn test_challenger_4tier_fallback_transitions() {
 
         // Tier 4: Online Fallback API or Untranslated Fallback Tag
         let t4_res = pipeline
-            .translate_phrases(&["Unmatched XYZ Term 12345".to_string()], "blender", None)
+            .translate_phrases(&["Unmatched XYZ Term 12345".to_string()], "blender", None, &[])
             .await;
         assert_eq!(t4_res[0].original, "Unmatched XYZ Term 12345");
         assert!(

@@ -52,26 +52,38 @@ impl LineClusterer {
             let h2 = (block.box_rect.height as i32).max(1);
 
             for line in lines.iter_mut() {
-                if let Some(first) = line.first() {
-                    let y1 = first.box_rect.y;
-                    let h1 = (first.box_rect.height as i32).max(1);
+                // Compare against the line's running union bbox (not just its first
+                // block): once a line has merged several blocks, its first block
+                // alone must not let the group swallow the next visual line.
+                let (union_y, union_bottom) = line.iter().fold(
+                    (i32::MAX, i32::MIN),
+                    |(min_y, max_y), b| {
+                        (
+                            min_y.min(b.box_rect.y),
+                            max_y.max(b.box_rect.y + b.box_rect.height as i32),
+                        )
+                    },
+                );
+                let y1 = union_y;
+                let h1 = (union_bottom - union_y).max(1);
 
-                    let overlap = (y1 + h1).min(y2 + h2) - y1.max(y2);
-                    let min_h = (h1.min(h2) as f32).max(1.0);
-                    let max_h = (h1.max(h2) as f32).max(1.0);
+                let overlap = (y1 + h1).min(y2 + h2) - y1.max(y2);
+                let min_h = (h1.min(h2) as f32).max(1.0);
 
-                    let c1 = y1 as f32 + h1 as f32 * 0.5;
-                    let c2 = y2 as f32 + h2 as f32 * 0.5;
-                    let center_diff = (c1 - c2).abs();
+                let c1 = y1 as f32 + h1 as f32 * 0.5;
+                let c2 = y2 as f32 + h2 as f32 * 0.5;
+                let center_diff = (c1 - c2).abs();
 
-                    let is_same_line = (overlap > 0 && (overlap as f32 / min_h) >= 0.40)
-                        || (center_diff <= max_h * 0.5);
+                // Same line = real vertical overlap, or centers within 0.6× the
+                // SHORTER height. Using min_h (instead of the old max_h*0.5) keeps
+                // tall blocks from absorbing the neighbouring line.
+                let is_same_line = (overlap > 0 && (overlap as f32 / min_h) >= 0.40)
+                    || (center_diff <= min_h * 0.6);
 
-                    if is_same_line {
-                        line.push(block.clone());
-                        added = true;
-                        break;
-                    }
+                if is_same_line {
+                    line.push(block.clone());
+                    added = true;
+                    break;
                 }
             }
 
@@ -106,6 +118,41 @@ impl WordMerger {
             };
         }
 
+        // Defensive multi-line split: when clustering still groups two visual
+        // lines together, split by vertical center and join with '\n' so the
+        // frontend can divide the union box height by the real line count for
+        // font-size inference (otherwise the font is sized to the full height
+        // and the translated card renders twice as large as the original).
+        let mut valid: Vec<&TextBlock> = line_blocks
+            .iter()
+            .filter(|b| !b.text.trim().is_empty())
+            .collect();
+        if valid.is_empty() {
+            let first = &line_blocks[0];
+            return TextBlock {
+                text: String::new(),
+                confidence: first.confidence,
+                box_rect: first.box_rect,
+            };
+        }
+
+        let mut heights: Vec<f32> = valid.iter().map(|b| b.box_rect.height as f32).collect();
+        heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median_h = heights[heights.len() / 2].max(1.0);
+
+        valid.sort_by_key(|b| b.box_rect.y + (b.box_rect.height as i32) / 2);
+        let mut sub_lines: Vec<Vec<&TextBlock>> = Vec::new();
+        let mut last_center = f32::MIN;
+        for b in valid.iter().copied() {
+            let center = b.box_rect.y as f32 + b.box_rect.height as f32 * 0.5;
+            if sub_lines.is_empty() || (center - last_center).abs() > median_h * 0.6 {
+                sub_lines.push(vec![b]);
+            } else {
+                sub_lines.last_mut().unwrap().push(b);
+            }
+            last_center = center;
+        }
+
         let mut merged_text = String::new();
         let mut min_x = i32::MAX;
         let mut min_y = i32::MAX;
@@ -114,38 +161,48 @@ impl WordMerger {
         let mut total_confidence = 0.0f32;
         let mut valid_blocks_count = 0;
 
-        for b in line_blocks.iter() {
-            if b.text.trim().is_empty() {
+        for sub in &sub_lines {
+            let mut sorted: Vec<&TextBlock> = sub.iter().copied().collect();
+            sorted.sort_by_key(|b| b.box_rect.x);
+
+            let mut sub_text = String::new();
+            for b in sorted {
+                if !sub_text.is_empty() {
+                    let prev_char = sub_text.chars().last();
+                    let next_char = b.text.chars().next();
+
+                    let needs_space = match (prev_char, next_char) {
+                        (Some(p), Some(n)) => {
+                            !p.is_whitespace()
+                                && !n.is_whitespace()
+                                && !is_cjk_or_fullwidth(p)
+                                && !is_cjk_or_fullwidth(n)
+                        }
+                        _ => false,
+                    };
+
+                    if needs_space {
+                        sub_text.push(' ');
+                    }
+                }
+
+                sub_text.push_str(&b.text);
+                total_confidence += b.confidence;
+                valid_blocks_count += 1;
+
+                min_x = min_x.min(b.box_rect.x);
+                min_y = min_y.min(b.box_rect.y);
+                max_x = max_x.max(b.box_rect.x + b.box_rect.width as i32);
+                max_y = max_y.max(b.box_rect.y + b.box_rect.height as i32);
+            }
+
+            if sub_text.is_empty() {
                 continue;
             }
-
             if !merged_text.is_empty() {
-                let prev_char = merged_text.chars().last();
-                let next_char = b.text.chars().next();
-
-                let needs_space = match (prev_char, next_char) {
-                    (Some(p), Some(n)) => {
-                        !p.is_whitespace()
-                            && !n.is_whitespace()
-                            && !is_cjk_or_fullwidth(p)
-                            && !is_cjk_or_fullwidth(n)
-                    }
-                    _ => false,
-                };
-
-                if needs_space {
-                    merged_text.push(' ');
-                }
+                merged_text.push('\n');
             }
-
-            merged_text.push_str(&b.text);
-            total_confidence += b.confidence;
-            valid_blocks_count += 1;
-
-            min_x = min_x.min(b.box_rect.x);
-            min_y = min_y.min(b.box_rect.y);
-            max_x = max_x.max(b.box_rect.x + b.box_rect.width as i32);
-            max_y = max_y.max(b.box_rect.y + b.box_rect.height as i32);
+            merged_text.push_str(&sub_text);
         }
 
         if valid_blocks_count == 0 {

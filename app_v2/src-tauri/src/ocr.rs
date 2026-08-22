@@ -1,6 +1,6 @@
 pub use crate::models::{BoundingBox, OcrResult, PhysicalRect, TextBlock};
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -185,10 +185,21 @@ pub fn crop_bmp(
 // response — no cold-start overhead, ~100-300ms per recognition (vs 3-8s).
 
 struct OcrDaemon {
-    _child: Child,
+    child: Child,
     stdin: ChildStdin,
-    reader: BufReader<ChildStdout>,
+    /// 后台读线程持续泵送 daemon 输出，调用方用 recv_timeout 消费：
+    /// 子进程卡死时读取端 20s 超时返回错误并重建 daemon，
+    /// 而不是在全局锁内永久阻塞 read_line 拖挂全部 OCR 调用。
+    rx: std::sync::mpsc::Receiver<String>,
     next_id: u64,
+}
+
+impl Drop for OcrDaemon {
+    fn drop(&mut self) {
+        // 主动终止子进程并回收，避免残留 python 僵尸进程
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 /// Global singleton — None until first call to `execute_native_ocr`.
@@ -249,13 +260,36 @@ fn launch_daemon() -> Result<OcrDaemon, String> {
     let stdin = child.stdin.take().ok_or("Could not get daemon stdin")?;
     let stdout = child.stdout.take().ok_or("Could not get daemon stdout")?;
 
-    let mut reader = BufReader::new(stdout);
+    // 后台读线程：把 daemon 输出逐行泵进通道（EOF/管道错误时退出）
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if tx.send(line).is_err() {
+                        break; // 接收端已销毁（daemon 被重建），退出泵线程
+                    }
+                }
+            }
+        }
+    });
 
-    // Wait for the "ready" handshake (model pre-warm complete)
-    let mut ready_line = String::new();
-    reader
-        .read_line(&mut ready_line)
-        .map_err(|e| format!("Waiting for OCR daemon ready: {}", e))?;
+    // Wait for the "ready" handshake (model pre-warm), 60s timeout
+    let ready_line = match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(line) => line,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            return Err("OCR daemon ready handshake timed out (60s)".to_string());
+        }
+        // Disconnected = 读线程已退出：子进程启动后立刻死亡（如 python 存根/脚本缺失）
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            return Err(
+                "OCR daemon exited before ready handshake (process died at startup)".to_string(),
+            )
+        }
+    };
 
     let val: serde_json::Value =
         serde_json::from_str(ready_line.trim()).unwrap_or(serde_json::Value::Null);
@@ -270,9 +304,9 @@ fn launch_daemon() -> Result<OcrDaemon, String> {
     }
 
     Ok(OcrDaemon {
-        _child: child,
+        child,
         stdin,
-        reader,
+        rx,
         next_id: 1,
     })
 }
@@ -431,12 +465,19 @@ fn clean_ocr_text(raw: &str) -> String {
 /// Run OCR on a cropped BMP byte slice.
 /// Engine priority: Rust-native ONNX (PP-OCRv3, offline) → WinRT → RapidOCR daemon.
 pub fn execute_native_ocr(crop_bmp_bytes: &[u8]) -> Result<OcrResult, String> {
+    execute_native_ocr_with_retry(crop_bmp_bytes, 0)
+}
+
+/// daemon 死亡后的重启重试有硬上限（1 次）。无上限的"重启即递归"会在
+/// daemon 持续秒退的环境（无 python / 脚本缺失）里无限递归直到栈溢出。
+fn execute_native_ocr_with_retry(crop_bmp_bytes: &[u8], restart_depth: u32) -> Result<OcrResult, String> {
     // 0: Rust 原生 ONNX 引擎 (PP-OCRv3) 优先 — 纯离线推理，中文/混合场景精度高
     if onnx_available() {
         let engine = crate::onnx_ocr::get_engine();
         match engine.recognize_bmp(crop_bmp_bytes) {
             Ok(res) if !res.blocks.is_empty() => {
-                eprintln!("[OCR] Rust 原生 ONNX OCR (PP-OCRv3) 完成 — 纯离线推理");
+                let ver = crate::onnx_ocr::get_active_version().to_uppercase();
+                eprintln!("[OCR] Rust 原生 ONNX OCR (PP-OCR{}) 完成 — 纯离线推理", ver);
                 return Ok(res);
             }
             Ok(_) => {
@@ -504,27 +545,36 @@ pub fn execute_native_ocr(crop_bmp_bytes: &[u8]) -> Result<OcrResult, String> {
         eprintln!("[OCR] Write to daemon failed ({}). Restarting.", e);
         *guard = None;
         drop(guard);
-        return execute_native_ocr(crop_bmp_bytes); // retry with fresh daemon
+        if restart_depth >= 1 {
+            return Err("OCR daemon 重启后仍不可用（write 持续失败）".to_string());
+        }
+        return execute_native_ocr_with_retry(crop_bmp_bytes, restart_depth + 1);
     }
 
-    // Read response
-    let mut response_line = String::new();
-    match daemon.reader.read_line(&mut response_line) {
-        Err(e) => {
-            eprintln!("[OCR] Read from daemon failed ({}). Restarting.", e);
+    // Read response —— recv_timeout：子进程卡死时超时返回并重建 daemon，
+    // 不再在全局锁内永久阻塞
+    let response_line = match daemon.rx.recv_timeout(std::time::Duration::from_secs(20)) {
+        Ok(line) => line,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!("[OCR] Daemon response timed out (20s). Restarting.");
             *guard = None;
             drop(guard);
-            return execute_native_ocr(crop_bmp_bytes);
+            if restart_depth >= 1 {
+                return Err("OCR daemon 响应超时（重启后仍无响应）".to_string());
+            }
+            return execute_native_ocr_with_retry(crop_bmp_bytes, restart_depth + 1);
         }
-        Ok(0) => {
-            // EOF — daemon died
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            // 读线程退出 = daemon 死亡
             eprintln!("[OCR] Daemon exited unexpectedly. Restarting.");
             *guard = None;
             drop(guard);
-            return execute_native_ocr(crop_bmp_bytes);
+            if restart_depth >= 1 {
+                return Err("OCR daemon 重启后仍不可用（EOF）".to_string());
+            }
+            return execute_native_ocr_with_retry(crop_bmp_bytes, restart_depth + 1);
         }
-        Ok(_) => {}
-    }
+    };
 
     parse_daemon_response(&response_line)
 }

@@ -7,7 +7,7 @@
 //!   4. begin_capture -> capture_and_ocr -> translate -> overlay flow
 use app_v2_lib::{
     capture::set_latest_capture,
-    commands::{cmd_capture_and_ocr, cmd_sample_colors_core_logic, cmd_translate_phrases},
+    commands::{cmd_capture_and_ocr, cmd_sample_colors_core_logic},
     models::{BoundingBox, LlmConfig, PhysicalRect, TextBlock},
     translator::{CgDictionaryEngine, MultiTierPipeline},
 };
@@ -44,7 +44,7 @@ async fn translate_and_sample(
 ) -> (String, [u8; 3], String, BoundingBox) {
     let pipeline = MultiTierPipeline::new();
     let results = pipeline
-        .translate_phrases(&[block.text.clone()], preset, None::<&LlmConfig>)
+        .translate_phrases(&[block.text.clone()], preset, None::<&LlmConfig>, &[])
         .await;
     let tr = results
         .first()
@@ -147,13 +147,12 @@ fn e2e_empty_ocr_degrades_gracefully() {
 
         // a) translate_phrases with empty list returns empty vec, no panic.
         let empty_res = pipeline
-            .translate_phrases(&[], "blender", None::<&LlmConfig>)
+            .translate_phrases(&[], "blender", None::<&LlmConfig>, &[])
             .await;
         assert!(empty_res.is_empty(), "empty phrase list -> empty translations");
 
         // b) cmd_translate_phrases empty input also degrades cleanly.
-        let cmd_res = cmd_translate_phrases(vec![], "blender".to_string(), None)
-            .await
+        let cmd_res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&[], "blender", None, &[]).await)
             .expect("empty translate must succeed");
         assert!(cmd_res.is_empty(), "cmd_translate_phrases empty -> empty");
 
@@ -308,8 +307,7 @@ fn e2e_begin_capture_then_ocr_flow() {
         // 2) Feed the OCR blocks into the real translate pipeline.
         let phrases: Vec<String> = ocr.blocks.iter().map(|b| b.text.clone()).collect();
         let translations =
-            cmd_translate_phrases(phrases, "blender".to_string(), None::<LlmConfig>)
-                .await
+            Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, "blender", None::<&LlmConfig>, &[]).await)
                 .expect("translate_phrases on OCR output must succeed");
         assert_eq!(
             translations.len(),

@@ -1,4 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
+import { APP_VERSION, compareVersions } from '../version';
+import { DEFAULT_SETTINGS } from './defaultSettings';
 import type {
   AppSettings,
   BoundingBox,
@@ -7,6 +9,9 @@ import type {
   OcrResult,
   PhysicalRect,
   TranslationResult,
+  BackupEntry,
+  RemoteBackupEntry,
+  RestoreSummary,
 } from './types';
 
 export const isTauri = (): boolean => {
@@ -14,31 +19,6 @@ export const isTauri = (): boolean => {
 };
 
 const MOCK_STORAGE_KEY = 'cg_translator_settings_v2';
-
-const DEFAULT_SETTINGS: AppSettings = {
-  theme: 'system',
-  hotkey: 'F4',
-  defaultPreset: 'blender',
-  llmConfig: {
-    provider: 'DeepSeek',
-    apiKey: '',
-    model: 'deepseek-chat',
-    endpoint: 'https://api.deepseek.com/v1',
-  },
-  translationTiers: ['Preset Dictionary', 'LLM API', 'Online Fallback'],
-  presetDicts: {
-    blender: true,
-    substance: true,
-    unity: true,
-    unreal: true,
-    maya: true,
-    houdini: true,
-  },
-  onlineEngines: {
-    google: true,
-    myMemory: true,
-  },
-};
 
 /// Trigger backend-driven screen capture:
 /// Rust hides the window, waits 150ms, takes GDI screenshot, stores BMP globally, returns payload
@@ -1625,23 +1605,23 @@ export async function cmdCheckAppUpdate(): Promise<UpdateCheckResult> {
         return {
           latest: null,
           has_update: false,
-          current_version: '0.1.3',
+          current_version: APP_VERSION,
           error: '未找到已发布的 Release 版本 (404)',
         };
       }
       return {
         latest: null,
         has_update: false,
-        current_version: '0.1.3',
+        current_version: APP_VERSION,
         error: `GitHub API 返回 HTTP ${res.status}`,
       };
     }
     const json = await res.json();
     const tag = String(json.tag_name || '').replace(/^[vV]/, '');
-    const has_update = tag > '0.1.3';
+    const has_update = compareVersions(tag, APP_VERSION) > 0;
     return {
       latest: {
-        version: tag || '0.1.3',
+        version: tag || APP_VERSION,
         release_date: json.published_at || '',
         download_url: json.html_url || 'https://github.com/maobukeai/catwalk-translator/releases',
         release_notes: json.body || '',
@@ -1653,14 +1633,14 @@ export async function cmdCheckAppUpdate(): Promise<UpdateCheckResult> {
         })),
       },
       has_update,
-      current_version: '0.1.3',
+      current_version: APP_VERSION,
       error: null,
     };
   } catch (err) {
     return {
       latest: null,
       has_update: false,
-      current_version: '0.1.3',
+      current_version: APP_VERSION,
       error: `检查更新失败: ${String(err)}`,
     };
   }
@@ -1672,8 +1652,257 @@ export async function cmdGetAppInfo(): Promise<AppInfo> {
   }
   return {
     name: '猫步翻译',
-    version: '0.1.3',
+    version: APP_VERSION,
     repo_url: 'https://github.com/maobukeai/catwalk-translator',
   };
 }
 
+
+// ── 备份与同步（backup.rs / webdav.rs）──
+
+/** 浏览器/测试环境下的备份功能统一降级文案 */
+const backupDesktopOnly = '备份功能仅在桌面端可用';
+
+export async function cmdCreateBackup(): Promise<BackupEntry> {
+  if (isTauri()) {
+    return await invoke<BackupEntry>('cmd_create_backup');
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+export async function cmdListBackups(): Promise<BackupEntry[]> {
+  if (isTauri()) {
+    return await invoke<BackupEntry[]>('cmd_list_backups');
+  }
+  return [];
+}
+
+export async function cmdDeleteBackup(name: string): Promise<void> {
+  if (isTauri()) {
+    await invoke('cmd_delete_backup', { name });
+    return;
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+export async function cmdRestoreBackup(name: string): Promise<RestoreSummary> {
+  if (isTauri()) {
+    return await invoke<RestoreSummary>('cmd_restore_backup', { name });
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+export async function cmdOpenBackupDir(): Promise<void> {
+  if (isTauri()) {
+    await invoke('cmd_open_backup_dir');
+    return;
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+/** 导出当前数据为备份 zip（base64），由前端转 Blob 下载 */
+export async function cmdExportBackupBase64(): Promise<string> {
+  if (isTauri()) {
+    return await invoke<string>('cmd_export_backup_base64');
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+/** 从 base64 备份包导入并覆盖当前数据 */
+export async function cmdImportBackupBase64(data: string): Promise<RestoreSummary> {
+  if (isTauri()) {
+    return await invoke<RestoreSummary>('cmd_import_backup_base64', { data });
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+/** WebDAV 连接测试（直传表单值，无需先保存），成功返回如 "连接成功（230 ms）"。
+ *  password 传空字符串表示沿用已保存密码。 */
+export async function cmdWebdavTest(url: string, username: string, password: string): Promise<string> {
+  if (isTauri()) {
+    return await invoke<string>('cmd_webdav_test', { url, username, password });
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+export interface WebdavUploadResult {
+  name: string;
+  sizeBytes: number;
+  deletedOld: number;
+}
+
+export async function cmdWebdavUpload(): Promise<WebdavUploadResult> {
+  if (isTauri()) {
+    return await invoke<WebdavUploadResult>('cmd_webdav_upload');
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+export async function cmdWebdavList(): Promise<RemoteBackupEntry[]> {
+  if (isTauri()) {
+    return await invoke<RemoteBackupEntry[]>('cmd_webdav_list');
+  }
+  return [];
+}
+
+export async function cmdWebdavRestore(name: string): Promise<RestoreSummary> {
+  if (isTauri()) {
+    return await invoke<RestoreSummary>('cmd_webdav_restore', { name });
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+export async function cmdWebdavDelete(name: string): Promise<void> {
+  if (isTauri()) {
+    await invoke('cmd_webdav_delete', { name });
+    return;
+  }
+  throw new Error(backupDesktopOnly);
+}
+
+// ── 开机自启（tauri-plugin-autostart；OS 级注册表/启动项状态，不落 settings.json） ──
+
+export async function cmdGetAutoStart(): Promise<boolean> {
+  if (!isTauri()) return false;
+  try {
+    const { isEnabled } = await import('@tauri-apps/plugin-autostart');
+    return await isEnabled();
+  } catch (err) {
+    console.warn('查询开机自启状态失败:', err);
+    return false;
+  }
+}
+
+export async function cmdSetAutoStart(enabled: boolean): Promise<void> {
+  if (!isTauri()) return;
+  const plugin = await import('@tauri-apps/plugin-autostart');
+  if (enabled) {
+    await plugin.enable();
+  } else {
+    await plugin.disable();
+  }
+}
+
+// ── 贴图（Pin）：译文卡片钉在桌面置顶小窗 ──
+
+export async function cmdOpenPin(payload: import('./types').PinPayload): Promise<void> {
+  if (!isTauri()) {
+    console.warn('贴图为桌面端功能，浏览器演示环境不可用');
+    return;
+  }
+  await invoke('cmd_open_pin', { payload });
+}
+
+export async function cmdGetPinPayload(id: string): Promise<import('./types').PinPayload | null> {
+  if (!isTauri()) return null;
+  return await invoke<import('./types').PinPayload | null>('cmd_get_pin_payload', { id });
+}
+
+export async function cmdClosePin(id: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke('cmd_close_pin', { id });
+}
+
+// ── 网络诊断 ──────────────────────────────────────────────────────────────
+
+export interface DiagItem {
+  name: string;
+  kind: string;
+  ok: boolean;
+  skipped: boolean;
+  latencyMs: number;
+  detail: string;
+}
+
+export async function cmdNetworkDiagnose(): Promise<DiagItem[]> {
+  if (isTauri()) {
+    return await invoke<DiagItem[]>('cmd_network_diagnose');
+  }
+  // 浏览器演示：返回模拟结果
+  return [
+    { name: 'Google 翻译', kind: 'engine', ok: true, skipped: false, latencyMs: 320, detail: 'HTTP 200 (演示)' },
+    { name: '代理链路', kind: 'proxy', ok: true, skipped: false, latencyMs: 0, detail: '浏览器演示环境' },
+  ];
+}
+
+// ── 通用离线词典（ECDICT） ────────────────────────────────────────────────
+
+export interface GeneralDictStatus {
+  installed: boolean;
+  entries: number;
+  installedAt: string;
+}
+
+export interface GeneralDictHit {
+  word: string;
+  phonetic: string;
+  definitions: string[];
+}
+
+export async function cmdGeneralDictStatus(): Promise<GeneralDictStatus> {
+  if (isTauri()) return await invoke<GeneralDictStatus>('cmd_general_dict_status');
+  return { installed: false, entries: 0, installedAt: '' };
+}
+
+export async function cmdGeneralDictLookup(word: string): Promise<GeneralDictHit | null> {
+  if (isTauri()) return await invoke<GeneralDictHit | null>('cmd_general_dict_lookup', { word });
+  return null;
+}
+
+export async function cmdGeneralDictUninstall(): Promise<void> {
+  if (isTauri()) await invoke('cmd_general_dict_uninstall');
+}
+
+/// 安装（下载 63MB + 解析），onProgress 为增量回调（channel 方式与 LLM 流一致）
+export async function cmdGeneralDictInstall(
+  onProgress: (downloaded: number, total: number, phase: string, detail: string) => void
+): Promise<GeneralDictStatus> {
+  if (!isTauri()) {
+    throw new Error('词典下载为桌面端功能，浏览器演示环境不可用');
+  }
+  const { Channel } = await import('@tauri-apps/api/core');
+  const channel = new Channel<{ downloaded: number; total: number; phase: string; detail: string }>();
+  channel.onmessage = (msg) => onProgress(msg.downloaded, msg.total, msg.phase, msg.detail);
+  return await invoke<GeneralDictStatus>('cmd_general_dict_install', { onProgress: channel });
+}
+
+// ── 剪贴板翻译历史 ────────────────────────────────────────────────────────
+
+export interface ClipboardHistoryEntry {
+  original: string;
+  translated: string;
+  sourceTier: string;
+  timestamp: string;
+  atMs: number;
+}
+
+export async function cmdGetClipboardHistory(): Promise<ClipboardHistoryEntry[]> {
+  if (isTauri()) return await invoke<ClipboardHistoryEntry[]>('cmd_get_clipboard_history');
+  return [];
+}
+
+export async function cmdClearClipboardHistory(): Promise<void> {
+  if (isTauri()) await invoke('cmd_clear_clipboard_history');
+}
+
+// ── 译文导出图片 ──────────────────────────────────────────────────────────
+
+export async function cmdSaveExportPng(dataUrl: string, suggestedName: string): Promise<string> {
+  if (!isTauri()) throw new Error('导出图片为桌面端功能，浏览器演示环境不可用');
+  return await invoke<string>('cmd_save_export_png', { dataUrl, suggestedName });
+}
+
+// ── 无感查词浮窗(lookup_monitor.rs)──
+
+export async function cmdGetLookupPayload(): Promise<unknown | null> {
+  if (isTauri()) {
+    return await invoke('cmd_get_lookup_payload');
+  }
+  return null;
+}
+
+export async function cmdHideLookupPopup(): Promise<void> {
+  if (isTauri()) {
+    await invoke('cmd_hide_lookup_popup');
+  }
+}

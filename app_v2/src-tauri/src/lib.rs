@@ -1,16 +1,27 @@
+pub mod app_detect;
+pub mod backup;
 pub mod capture;
+pub mod clipboard_history;
 pub mod clipboard_watch;
+pub mod diagnose;
+pub mod general_dict;
 pub mod commands;
+pub mod commands_capture;
+pub mod commands_chat;
+pub mod commands_history;
 pub mod inpaint;
+pub mod lookup_monitor;
 pub mod models;
 pub mod ocr;
 pub mod offline;
+pub mod pin;
 pub mod offline_models;
 pub mod onnx_ocr;
 pub mod reconstruction;
 pub mod sampler;
 pub mod translator;
 pub mod updater;
+pub mod webdav;
 
 use commands::AppState;
 use std::str::FromStr;
@@ -253,6 +264,10 @@ pub fn register_all_user_shortcuts(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -439,10 +454,44 @@ pub fn run() {
             // Register all 4 global shortcuts with OS
             let _ = register_all_user_shortcuts(app.handle(), &current_settings);
 
+            // 翻译记忆持久化：启动加载历史缓存（跨重启复用，重复划词零网络延迟）
+            translator::set_tm_path(
+                commands::get_app_config_dir(app.handle()).join("translation_memory.json"),
+            );
+            translator::shared_pipeline().cache.load_from_disk();
+
+            // 启动时应用手动代理（优先于系统代理自动探测）
+            let manual_proxy = if current_settings.proxy_enabled.unwrap_or(false) {
+                current_settings
+                    .proxy_url
+                    .clone()
+                    .filter(|u| !u.trim().is_empty())
+            } else {
+                None
+            };
+            translator::set_manual_proxy(manual_proxy);
+
+            // 启动时应用主窗口置顶设置
+            if current_settings.always_on_top.unwrap_or(false) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_always_on_top(true);
+                }
+            }
+
             // Passive clipboard watch (off by default; purely settings-driven)
             if current_settings.clipboard_watch_enabled.unwrap_or(false) {
                 clipboard_watch::start_clipboard_watch(app.handle().clone());
             }
+
+            // 无感查词:划词即弹窗 / 修饰键悬停取词(设置驱动)
+            if current_settings.selection_lookup_enabled.unwrap_or(false)
+                || current_settings.hover_lookup_enabled.unwrap_or(false)
+            {
+                lookup_monitor::start_lookup_monitor(app.handle().clone());
+            }
+
+            // Periodic local auto-backup (purely settings-driven)
+            backup::ensure_auto_backup_thread(app.handle().clone());
 
             // Local OCR model downloads land in the app-data models directory
             onnx_ocr::set_models_dir_override(
@@ -465,6 +514,7 @@ pub fn run() {
                 .menu(&tray_menu)
                 .tooltip("猫步翻译软件");
 
+            // 猫步翻译全新苹果极简纯白底主图标 (W1 Aurora Lens White Cat)
             let app_icon_opt =
                 tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png")).ok();
 
@@ -500,6 +550,7 @@ pub fn run() {
                         }
                     }
                     "quit" => {
+                        crate::translator::shared_pipeline().cache.save_to_disk();
                         app_handle.exit(0);
                     }
                     _ => {}
@@ -554,7 +605,8 @@ pub fn run() {
                     let engine = crate::onnx_ocr::get_engine();
                     match engine.ensure_loaded() {
                         Ok(()) => {
-                            eprintln!("[OCR] Rust 原生 ONNX 引擎已就绪 (PP-OCRv3, 无需 Python)");
+                            let ver = crate::onnx_ocr::get_active_version().to_uppercase();
+                            eprintln!("[OCR] Rust 原生 ONNX 引擎已就绪 (PP-OCR{}, 无需 Python)", ver);
                             crate::ocr::mark_onnx_ready();
                         }
                         Err(e) => {
@@ -619,6 +671,31 @@ pub fn run() {
             commands::cmd_offline_status,
             commands::cmd_image_ocr_translate,
             commands::cmd_exit_app,
+            lookup_monitor::cmd_get_lookup_payload,
+            lookup_monitor::cmd_hide_lookup_popup,
+            pin::cmd_open_pin,
+            pin::cmd_get_pin_payload,
+            pin::cmd_close_pin,
+            diagnose::cmd_network_diagnose,
+            general_dict::cmd_general_dict_status,
+            general_dict::cmd_general_dict_install,
+            general_dict::cmd_general_dict_uninstall,
+            general_dict::cmd_general_dict_lookup,
+            clipboard_history::cmd_get_clipboard_history,
+            clipboard_history::cmd_clear_clipboard_history,
+            commands::cmd_save_export_png,
+            backup::cmd_create_backup,
+            backup::cmd_list_backups,
+            backup::cmd_delete_backup,
+            backup::cmd_restore_backup,
+            backup::cmd_open_backup_dir,
+            backup::cmd_export_backup_base64,
+            backup::cmd_import_backup_base64,
+            webdav::cmd_webdav_test,
+            webdav::cmd_webdav_upload,
+            webdav::cmd_webdav_list,
+            webdav::cmd_webdav_restore,
+            webdav::cmd_webdav_delete,
             updater::cmd_check_app_update,
             updater::cmd_get_app_info,
         ])
@@ -780,7 +857,7 @@ mod tests {
             deepl_api_key: None,
             deepl_custom_url: None,
         };
-        let res = translator::execute_universal_translate(req).await;
+        let res = translator::execute_universal_translate(req, &[]).await;
         assert!(res.is_ok());
         let val = res.unwrap();
         assert!(

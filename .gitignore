@@ -51,3 +51,5 @@ agy_*.log
 .agent/*.log*
 .agent/*.json
 loop*.sh
+# Agent 工作区整体不入库（历史遗留的已追踪文件用 git rm --cached 移除）
+.agent/

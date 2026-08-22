@@ -10,6 +10,7 @@ import { HistoryPanel } from "./components/Vocabulary/HistoryPanel";
 import { CaptureOverlay } from "./components/Overlay/CaptureOverlay";
 import { CheatSheetModal } from "./components/Overlay/CheatSheetModal";
 import { SpotlightModal } from "./components/SpotlightModal";
+import { OnboardingModal } from "./components/OnboardingModal";
 import { ClipboardToast, type ClipboardPayload } from "./components/ClipboardToast";
 import { CloseConfirmModal } from "./components/CloseConfirmModal";
 import { isTauri, cmdQueryText, cmdSetWindowBlur, cmdExitApp } from "./services/tauri";
@@ -24,9 +25,30 @@ function App() {
   const [isOverlayOpen, setIsOverlayOpen] = useState(false);
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
   const [isCheatSheetOpen, setIsCheatSheetOpen] = useState(false);
+  // 首次使用引导:localStorage 记忆只展示一次;设置页可发 open-onboarding 重看
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem("catwalk_onboarding_v1")) setIsOnboardingOpen(true);
+    } catch {
+      /* localStorage 不可用则不展示 */
+    }
+    const reopen = () => setIsOnboardingOpen(true);
+    window.addEventListener("open-onboarding", reopen);
+    return () => window.removeEventListener("open-onboarding", reopen);
+  }, []);
+  const closeOnboarding = () => {
+    try {
+      localStorage.setItem("catwalk_onboarding_v1", "1");
+    } catch {
+      /* 忽略写入失败 */
+    }
+    setIsOnboardingOpen(false);
+  };
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false);
   const [clipboardPayload, setClipboardPayload] = useState<ClipboardPayload | null>(null);
-  const [transferredText, setTransferredText] = useState<string>("");
+  // seq 保证从划词 overlay 二次发送「相同文本」时也能强制重挂载 DualPaneTranslator
+  const [transferred, setTransferred] = useState<{ text: string; seq: number }>({ text: "", seq: 0 });
   const [openInHoverMode, setOpenInHoverMode] = useState(false);
   const { settings, fetchSettings, setClipboardWatchEnabled } = useSettingsStore();
   const { isLight } = useAppTheme();
@@ -55,12 +77,16 @@ function App() {
   const lastHoverTimeRef = useRef(0);
 
   // Handle instant clipboard translation
+  // seq 序号防止并发触发时慢的旧请求后到覆盖新结果
+  const clipboardReqSeqRef = useRef(0);
   const handleTriggerClipboard = useCallback(async () => {
+    const seq = ++clipboardReqSeqRef.current;
     try {
       const text = await navigator.clipboard.readText();
       if (text && text.trim()) {
         const curSettings = useSettingsStore.getState().settings;
         const res = await cmdQueryText(text.trim(), curSettings.defaultPreset, curSettings.llmConfig);
+        if (seq !== clipboardReqSeqRef.current) return;
         if (res.results && res.results.length > 0) {
           const top = res.results[0];
           setClipboardPayload({
@@ -121,14 +147,10 @@ function App() {
         } catch {
           import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().close().catch(() => {}));
         }
-      } else {
-        console.log('[Browser Mode] Exit App');
       }
     } else if (curCloseAction === 'minimize') {
       if (isTauri()) {
         import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().hide().catch(() => {}));
-      } else {
-        console.log('[Browser Mode] Minimize to tray');
       }
     } else {
       setIsCloseConfirmOpen(true);
@@ -136,8 +158,17 @@ function App() {
   }, []);
 
   // Browser-level hotkey listener fallback (matches exact configured hotkey strings)
+  // 依赖数组只登记 handler 实际读取的快捷键标量，避免 settings 任意字段
+  // 变化（如拖动模糊滑杆）都重挂 window 级监听器。
+  const captureHotkeyEnabled = settings.captureHotkeyEnabled ?? settings.hotkeyEnabled ?? true;
+  const captureHotkey = settings.hotkey || 'F4';
+  const spotlightHotkeyEnabled = settings.spotlightHotkeyEnabled ?? true;
+  const spotlightHotkey = settings.spotlightHotkey || 'Alt+Space';
+  const clipboardHotkeyEnabled = settings.clipboardHotkeyEnabled ?? true;
+  const clipboardHotkey = settings.clipboardHotkey || 'Ctrl+Shift+C';
+
   useEffect(() => {
-    const handleGlobalKeyDown = async (e: KeyboardEvent) => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
       // While the capture overlay is open it handles every key itself
       // (F4 / Esc / capture hotkey are pin-aware there) — do not double-handle.
       if (isOverlayOpenRef.current) return;
@@ -152,26 +183,23 @@ function App() {
       }
 
       // Capture Overlay hotkey (F4 or configured hotkey)
-      if (
-        (settings.captureHotkeyEnabled ?? settings.hotkeyEnabled ?? true) &&
-        (matchesHotkey(e, settings.hotkey || 'F4') || e.key === 'F4')
-      ) {
+      if (captureHotkeyEnabled && (matchesHotkey(e, captureHotkey) || e.key === 'F4')) {
         e.preventDefault();
         setIsOverlayOpen((prev) => !prev);
         return;
       }
 
       // Spotlight hotkey
-      if ((settings.spotlightHotkeyEnabled ?? true) && matchesHotkey(e, settings.spotlightHotkey || 'Alt+Space')) {
+      if (spotlightHotkeyEnabled && matchesHotkey(e, spotlightHotkey)) {
         e.preventDefault();
         setIsSpotlightOpen((prev) => !prev);
         return;
       }
 
-      // Clipboard hotkey
-      if ((settings.clipboardHotkeyEnabled ?? true) && matchesHotkey(e, settings.clipboardHotkey || 'Ctrl+Shift+C')) {
+      // Clipboard hotkey（走 triggerClipboard 的 250ms 防抖，避免连按并发）
+      if (clipboardHotkeyEnabled && matchesHotkey(e, clipboardHotkey)) {
         e.preventDefault();
-        await handleTriggerClipboard();
+        triggerClipboard();
         return;
       }
 
@@ -187,7 +215,7 @@ function App() {
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [settings, isCheatSheetOpen, handleTriggerClipboard]);
+  }, [captureHotkeyEnabled, captureHotkey, spotlightHotkeyEnabled, spotlightHotkey, clipboardHotkeyEnabled, clipboardHotkey, isCheatSheetOpen, triggerClipboard]);
 
   // OS-level Tauri global shortcut and DOM CustomEvent listeners (dual insurance for wakeup from tray/sleep)
   useEffect(() => {
@@ -203,13 +231,23 @@ function App() {
     window.addEventListener('trigger-hover', onDomHover);
 
     // 2. Tauri event listeners
+    // listen() 异步 resolve；若 effect 在 resolve 前被清理（StrictMode 双挂载必现），
+    // 迟到的 unlisten 必须立即执行，否则监听器残留导致热键双触发。
+    let disposed = false;
     const unlistens: (() => void)[] = [];
+    const trackUnlisten = (u: () => void) => {
+      if (disposed) {
+        u();
+      } else {
+        unlistens.push(u);
+      }
+    };
     if (isTauri()) {
       import('@tauri-apps/api/event').then(({ listen }) => {
-        listen('trigger-capture', () => triggerCapture()).then((u) => unlistens.push(u));
-        listen('trigger-spotlight', () => triggerSpotlight()).then((u) => unlistens.push(u));
-        listen('trigger-clipboard', () => triggerClipboard()).then((u) => unlistens.push(u));
-        listen('trigger-hover', () => triggerHover()).then((u) => unlistens.push(u));
+        listen('trigger-capture', () => triggerCapture()).then(trackUnlisten);
+        listen('trigger-spotlight', () => triggerSpotlight()).then(trackUnlisten);
+        listen('trigger-clipboard', () => triggerClipboard()).then(trackUnlisten);
+        listen('trigger-hover', () => triggerHover()).then(trackUnlisten);
 
         // Passive clipboard watch: Rust translated a freshly copied text.
         // Suppressed while the capture overlay is open (its own copy actions
@@ -225,11 +263,12 @@ function App() {
             sourceTier: p.sourceTier,
             fromWatch: true,
           });
-        }).then((u) => unlistens.push(u));
+        }).then(trackUnlisten);
       });
     }
 
     return () => {
+      disposed = true;
       window.removeEventListener('trigger-capture', onDomCapture);
       window.removeEventListener('trigger-spotlight', onDomSpotlight);
       window.removeEventListener('trigger-clipboard', onDomClipboard);
@@ -291,8 +330,8 @@ function App() {
         boxShadow: isSolid
           ? 'none'
           : (isLight
-              ? 'inset 0 1px 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 0 rgba(0, 0, 0, 0.03), 0 20px 50px rgba(15, 23, 42, 0.08)'
-              : 'inset 0 1px 1px 0 rgba(255, 255, 255, 0.25), inset 0 -1px 0 0 rgba(255, 255, 255, 0.04), 0 24px 60px rgba(0, 0, 0, 0.35)'),
+              ? '0 20px 50px rgba(15, 23, 42, 0.08)'
+              : '0 24px 60px rgba(0, 0, 0, 0.35)'),
       };
 
   const textColorClass = isLight ? 'text-slate-800' : 'text-zinc-100';
@@ -381,8 +420,6 @@ function App() {
       {/* Real Frosted Glass Grain & Specular Top Reflection Layer */}
       {blurEnabled && !isSolid && !isOverlayOpen && (
         <>
-          {/* Top Specular Glass Reflection Spotlight */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(ellipse_80%_60%_at_50%_-20%,rgba(255,255,255,0.12),transparent_70%)] z-[1]" />
           {/* Frosted Micro-Grain Texture Overlay */}
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.1)_1px,transparent_1px)] [background-size:8px_8px] opacity-25 mix-blend-overlay z-[1]" />
           {/* Physical Noise Texture (SVG feTurbulence) */}
@@ -415,15 +452,16 @@ function App() {
             <div key={activeTab} className="page-in mx-auto h-full max-w-5xl">
               {activeTab === "translate" && (
                 <DualPaneTranslator
-                  key={transferredText}
+                  key={`transfer_${transferred.seq}`}
                   settings={settings}
-                  initialText={transferredText}
+                  initialText={transferred.text}
                   onOpenSettings={() => setActiveTab("settings")}
                 />
               )}
               {activeTab === "ai" && <AiChatPanel onOpenSettings={() => setActiveTab("settings")} />}
               {activeTab === "vocabulary" && <HistoryPanel />}
-              {(activeTab === "search" || activeTab === "about") && (
+              {activeTab === "search" && <SearchPanel settings={settings} />}
+              {activeTab === "about" && (
                 <AboutPanel onOpenSettings={() => setActiveTab("settings")} />
               )}
               {activeTab === "settings" && (
@@ -467,10 +505,13 @@ function App() {
           setOpenInHoverMode(false);
         }}
         onSendToMainWindow={(text) => {
-          setTransferredText(text);
+          setTransferred((t) => ({ text, seq: t.seq + 1 }));
           setActiveTab("translate");
         }}
       />
+
+      {/* 首次使用引导 */}
+      <OnboardingModal isOpen={isOnboardingOpen} onClose={closeOnboarding} />
 
       {/* Spotlight Instant Search Float Window */}
       <SpotlightModal

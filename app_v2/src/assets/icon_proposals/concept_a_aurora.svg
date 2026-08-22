@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Shadow -->
+    <filter id="squircle-shadow-a" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.55"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+
+    <!-- Squircle Gradients -->
+    <linearGradient id="bg-grad-a" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E2330"/>
+      <stop offset="50%" stop-color="#121622"/>
+      <stop offset="100%" stop-color="#090B10"/>
+    </linearGradient>
+
+    <!-- Inner Border Glow -->
+    <linearGradient id="border-glow-a" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.25"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.02"/>
+    </linearGradient>
+
+    <!-- Aurora Core Gradient -->
+    <linearGradient id="aurora-grad-a" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="40%" stop-color="#818CF8"/>
+      <stop offset="70%" stop-color="#C084FC"/>
+      <stop offset="100%" stop-color="#F472B6"/>
+    </linearGradient>
+
+    <!-- Amber Glow -->
+    <linearGradient id="amber-pulse-a" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#EF4444"/>
+    </linearGradient>
+
+    <!-- Glass Fill Gradient -->
+    <linearGradient id="glass-fill-a" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.03"/>
+    </linearGradient>
+
+    <filter id="core-glow-a" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- 1. Squircle Base Plate -->
+  <rect x="36" y="36" width="440" height="440" rx="98" ry="98"
+        fill="url(#bg-grad-a)" filter="url(#squircle-shadow-a)"/>
+  <rect x="36.5" y="36.5" width="439" height="439" rx="97.5" ry="97.5"
+        fill="none" stroke="url(#border-glow-a)" stroke-width="1.5"/>
+
+  <!-- 2. Ambient Internal Glow -->
+  <circle cx="256" cy="260" r="130" fill="url(#aurora-grad-a)" opacity="0.15" filter="url(#core-glow-a)"/>
+
+  <!-- 3. Minimalist Cat Silhouette (Apple Smooth Bezier Curves) -->
+  <path d="M 175 375
+           C 140 375 125 340 135 295
+           C 145 245 180 205 205 165
+           C 212 153 218 135 220 120
+           C 222 116 228 116 232 124
+           C 245 155 258 190 282 205
+           C 305 190 318 155 332 124
+           C 336 116 342 116 344 120
+           C 346 135 352 153 359 165
+           C 384 205 419 245 429 295
+           C 439 340 424 375 389 375
+           C 345 375 320 350 282 350
+           C 245 350 220 375 175 375 Z"
+        fill="url(#glass-fill-a)"
+        stroke="url(#border-glow-a)"
+        stroke-width="2"
+        stroke-linejoin="round"/>
+
+  <!-- 4. Optical Prism Translation Lens (The Eye/Core) -->
+  <circle cx="282" cy="275" r="72" fill="none" stroke="url(#aurora-grad-a)" stroke-width="6.5" filter="url(#core-glow-a)" opacity="0.95"/>
+  <circle cx="282" cy="275" r="52" fill="none" stroke="url(#amber-pulse-a)" stroke-width="3" opacity="0.85"/>
+  <circle cx="282" cy="275" r="36" fill="#0C0E14" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+  <!-- Specular Lens Highlights -->
+  <circle cx="268" cy="262" r="5" fill="#FFFFFF" opacity="0.9"/>
+  <circle cx="295" cy="286" r="2.5" fill="#38BDF8" opacity="0.8"/>
+
+  <!-- 5. Minimal Cat Nose & Whiskers -->
+  <path d="M 282 315 L 285 321 L 279 321 Z" fill="#F472B6" opacity="0.85"/>
+  <path d="M 225 316 Q 185 313 155 323" stroke="rgba(255,255,255,0.22)" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <path d="M 225 328 Q 185 333 155 348" stroke="rgba(255,255,255,0.16)" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <path d="M 340 316 Q 380 313 410 323" stroke="rgba(255,255,255,0.22)" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <path d="M 340 328 Q 380 333 410 348" stroke="rgba(255,255,255,0.16)" stroke-width="2" stroke-linecap="round" fill="none"/>
+</svg>

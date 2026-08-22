@@ -81,11 +81,10 @@
     --accent-text: #0066cc;
     --ok: #16a34a;
     --warn: #f5a623;
-    --danger: #ef4444;
-    --g-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 0 rgba(0, 0, 0, 0.03), 0 12px 36px rgba(15, 23, 42, 0.08);
-    --g-shadow-soft: inset 0 1px 1px 0 rgba(255, 255, 255, 0.75), 0 4px 16px rgba(15, 23, 42, 0.05);
-    --g-inset-top: inset 0 1px 1px 0 rgba(255, 255, 255, 0.85);
-    --g-inset-top-strong: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.95);
+    --g-shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
+    --g-shadow-soft: 0 4px 16px rgba(15, 23, 42, 0.05);
+    --g-inset-top: none;
+    --g-inset-top-strong: none;
     --g-dock-bg: rgba(255, 255, 255, 0.88);
     --g-dock-border: rgba(255, 255, 255, 0.75);
     --g-dock-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 1px 0 rgba(0, 0, 0, 0.04), 0 16px 36px -4px rgba(15, 23, 42, 0.14), 0 4px 12px rgba(15, 23, 42, 0.06);

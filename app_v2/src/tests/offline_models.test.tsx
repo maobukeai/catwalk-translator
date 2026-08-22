@@ -168,16 +168,12 @@ describe('OcrModelsCard (real OCR model downloads)', () => {
     expect(screen.getByTestId('ocr-download-ppocrv5-det')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /一键下载整套/i })).toBeInTheDocument();
 
-    // Click on PP-OCRv3 tab
+    // Click on PP-OCRv3 tab (instantly activates v3 since all 3 models are installed)
     const v3Tab = screen.getByRole('button', { name: /PP-OCRv3/i });
     fireEvent.click(v3Tab);
 
-    // v3 models should now be shown
+    // v3 models should now be shown and active
     expect(await screen.findByTestId('ocr-model-ppocrv3-det')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /启用此版本/i })).toBeInTheDocument();
-
-    // Click enable v3
-    fireEvent.click(screen.getByRole('button', { name: /启用此版本/i }));
     await waitFor(() => {
       expect(calls.some((c) => c.cmd === 'cmd_switch_ocr_version' && c.args?.version === 'v3')).toBe(true);
     });
@@ -236,11 +232,9 @@ describe('OcrModelsCard (real OCR model downloads)', () => {
     // Verify WeChat OCR option is completely absent
     expect(screen.queryByText(/微信 OCR/i)).not.toBeInTheDocument();
 
-    // Switch to v3
+    // Switch to v3 (1-click activation)
     const v3Tab = screen.getByRole('button', { name: /PP-OCRv3/i });
     fireEvent.click(v3Tab);
-    const enableBtn = await screen.findByRole('button', { name: /启用此版本/i });
-    fireEvent.click(enableBtn);
 
     // Global store ocrVersion should now be v3
     await waitFor(() => {

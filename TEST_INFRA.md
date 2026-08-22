@@ -59,15 +59,21 @@
 ```
 app_v2/
 ├── src-tauri/
-│   └── tests/
-│       ├── tier1_feature_coverage.rs
-│       ├── tier2_boundary_corner.rs
-│       ├── tier3_cross_feature.rs
-│       └── tier4_real_world_workloads.rs
+│   ├── src/                       # 单元测试与实现同文件(#[cfg(test)] mod tests)
+│   │   └── e.g. commands_capture.rs / inpaint.rs / translator.rs
+│   └── tests/                     # 跨模块集成测试(如仍有)
 └── src/
-    └── tests/
+    └── tests/                     # 27 个 vitest 文件(~221 用例)
         ├── tier1_features.test.tsx
         ├── tier2_boundaries.test.tsx
-        ├── tier3_combinations.test.tsx
-        └── tier4_workloads.test.tsx
+        ├── overlay_layout.test.tsx / review_mode.test.tsx / robustness.test.tsx ...
+        └── harness/
+            └── tauriIpcMock.ts     # 全局 invoke mock(按命令名 switch)
 ```
+
+## Harness Conventions (维护约定)
+- **新增 Tauri 命令必须同步**在 `src/tests/harness/tauriIpcMock.ts` 加 safe-default 分支,否则任何渲染该组件的测试都会抛 `Unhandled IPC command` 并污染整轮结果。
+- Rust 侧单元测试写在被测代码同文件底部的 `#[cfg(test)] mod tests`(测试随模块迁移,如 mapping_tests 随选区代码住在 `commands_capture.rs`)。
+- 运行命令:`cargo test --manifest-path app_v2/src-tauri/Cargo.toml --lib`(Rust)、`npm --prefix app_v2 test`(前端,= `vitest run`)。
+- 前端测试环境为 JSDOM:凡依赖 canvas/真实 IPC 的代码路径需保留浏览器降级分支(见 `services/tauri.ts` 的 `isTauri()` 约定与 `OverlayBlockCard` 的 measureText 回退)。
+

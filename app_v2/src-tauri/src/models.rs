@@ -370,7 +370,82 @@ impl Default for AppearanceSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// 本地备份设置：定期自动备份、保留策略与最近备份时间。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSettings {
+    #[serde(default)]
+    pub auto_backup_enabled: Option<bool>,
+    /// 自动备份间隔（小时），默认 24。
+    #[serde(default)]
+    pub interval_hours: Option<u32>,
+    /// 本地最多保留的备份份数，超过后淘汰最旧；0 = 不限制，默认 10。
+    #[serde(default)]
+    pub max_local_backups: Option<u32>,
+    /// 最近一次备份时间（epoch 毫秒）。
+    #[serde(default)]
+    pub last_backup_at_ms: Option<u64>,
+}
+
+/// WebDAV 云同步配置（如坚果云 https://dav.jiangguoyun.com/dav/）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavConfig {
+    /// 服务地址，需以 http(s) 开头。
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    /// 应用密码，与现有引擎 API Key 一致明文保存在 settings.json。
+    #[serde(default)]
+    pub password: Option<String>,
+    /// 远端目录（可多级，如 MaobuTranslator），默认 MaobuTranslator。
+    #[serde(default)]
+    pub remote_dir: Option<String>,
+    /// 云端备份保留天数，超过后上传时自动清理，默认 15。
+    #[serde(default)]
+    pub retention_days: Option<u32>,
+    /// 最近一次上传时间（epoch 毫秒）。
+    #[serde(default)]
+    pub last_upload_at_ms: Option<u64>,
+    /// 最近一次上传的备份文件名。
+    #[serde(default)]
+    pub last_upload_name: Option<String>,
+    /// 最近一次从云端恢复的时间（epoch 毫秒）。
+    #[serde(default)]
+    pub last_restore_at_ms: Option<u64>,
+}
+
+/// 默认 OCR 过滤规则集:时间/日期/纯数字百分比/游戏数值条/URL。
+/// 用户在设置中自定义规则后整体替换。
+pub const DEFAULT_OCR_FILTER_RULES: &[&str] = &[
+    r"^\d{1,2}:\d{2}(:\d{2})?$",                 // 时间 12:34 / 12:34:56
+    r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$",          // 日期 2026-08-22
+    r"^\d+([.,]\d+)?%?$",                          // 纯数字/百分比
+    r"^(?i)(HP|MP|SP|EXP|Stamina)\s*[:：]?\s*\d+(/\d+)?%?$", // 游戏数值条
+    r"^https?://\S+$",                              // URL
+    r"(?i)^(live|直播中|rec)\s*$",                     // 直播角标
+];
+
+/// 用户自定义词库词条。作为术语强制表参与所有翻译:
+/// 精确命中直接短路出结果,未命中的短语会把相关术语注入 LLM prompt。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomDictItem {
+    #[serde(default)]
+    pub id: String,
+    pub original: String,
+    pub translated: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+// 注意：tts_rate 为 f32，不可派生 Eq，仅保留 PartialEq
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub theme: String,
@@ -440,6 +515,45 @@ pub struct AppSettings {
     /// Mini window (Spotlight) close action: "hide" | "minimize"
     #[serde(default)]
     pub mini_window_close_action: Option<String>,
+    /// 主窗口置顶显示（默认关闭）
+    #[serde(default)]
+    pub always_on_top: Option<bool>,
+    /// 手动代理开关：开启后使用 proxy_url，优先于系统代理自动探测
+    #[serde(default)]
+    pub proxy_enabled: Option<bool>,
+    /// 手动代理地址，如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    /// TTS 朗读语速 (0.5 ~ 2.0，默认 1.0)，由前端 Web Speech API 消费
+    #[serde(default)]
+    pub tts_rate: Option<f32>,
+    /// 截图划词时自动识别前台 3D/CG 软件并切换对应专业词库（默认开启）
+    #[serde(default)]
+    pub auto_detect_preset: Option<bool>,
+    /// OCR 内容过滤:命中规则的识别块(时间戳/纯数字/水印等)不参与翻译(默认开启)
+    #[serde(default)]
+    pub ocr_filter_enabled: Option<bool>,
+    /// 过滤规则(正则,整行匹配一条;无效正则自动跳过)。空 = 使用默认规则集。
+    #[serde(default)]
+    pub ocr_filter_rules: Option<Vec<String>>,
+    /// 无感查词①:在任何应用中拖选/双击选中文字后自动弹出翻译浮窗(默认关闭)
+    #[serde(default)]
+    pub selection_lookup_enabled: Option<bool>,
+    /// 无感查词②:按住修饰键悬停屏幕文字即弹出词卡(默认关闭)
+    #[serde(default)]
+    pub hover_lookup_enabled: Option<bool>,
+    /// 悬停取词的修饰键:"ctrl" | "alt" | "shift"(默认 "ctrl")
+    #[serde(default)]
+    pub hover_lookup_modifier: Option<String>,
+    /// 本地备份设置（自动备份 / 保留策略）
+    #[serde(default)]
+    pub backup_settings: Option<BackupSettings>,
+    /// WebDAV 云同步配置
+    #[serde(default)]
+    pub webdav_config: Option<WebdavConfig>,
+    /// 用户自定义词库(术语强制表):前端 CRUD,随 settings.json 持久化
+    #[serde(default)]
+    pub custom_dict_items: Vec<CustomDictItem>,
 }
 
 impl Default for AppSettings {
@@ -455,6 +569,12 @@ impl Default for AppSettings {
             clipboard_hotkey_enabled: Some(true),
             toggle_window_hotkey_enabled: Some(true),
             default_preset: "blender".to_string(),
+            auto_detect_preset: Some(true),
+            ocr_filter_enabled: Some(true),
+            ocr_filter_rules: None,
+            selection_lookup_enabled: Some(false),
+            hover_lookup_enabled: Some(false),
+            hover_lookup_modifier: Some("ctrl".to_string()),
             llm_config: Some(LlmConfig::new(
                 "DeepSeek",
                 "",
@@ -508,6 +628,13 @@ impl Default for AppSettings {
             deepl_custom_url: None,
             close_action: Some("ask".to_string()),
             mini_window_close_action: Some("hide".to_string()),
+            always_on_top: Some(false),
+            proxy_enabled: Some(false),
+            proxy_url: None,
+            tts_rate: Some(1.0),
+            backup_settings: None,
+            webdav_config: None,
+            custom_dict_items: Vec::new(),
         }
     }
 }

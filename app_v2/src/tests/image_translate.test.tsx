@@ -164,11 +164,40 @@ describe('DualPaneTranslator 图片粘贴与拖拽翻译', () => {
     pasteImage(screen.getByRole('textbox'));
 
     await waitFor(() => expect(screen.getAllByText('粗糙度').length).toBeGreaterThanOrEqual(1));
-    fireEvent.click(screen.getByTitle('复制全部译文'));
+    fireEvent.click(screen.getByTitle('复制全部图片的译文'));
 
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledWith('粗糙度\n次表面散射');
     await waitFor(() => expect(screen.getByText('已复制')).toBeInTheDocument());
+  });
+
+
+  it('批量模式：一次拖入两张图片全部入队并逐张翻译', async () => {
+    const spy = vi
+      .spyOn(tauriService, 'cmdImageOcrTranslate')
+      .mockResolvedValue(MOCK_IMAGE_RESULT);
+
+    render(<DualPaneTranslator settings={DEFAULT_SETTINGS} initialText="" />);
+    const fileA = makePngFile();
+    const fileB = new File([new Uint8Array([137, 80, 78, 71])], 'shot2.png', {
+      type: 'image/png',
+    });
+    fireEvent.drop(screen.getByRole('textbox'), {
+      dataTransfer: { files: [fileA, fileB] },
+    });
+
+    // 两张图片都出现在队列中
+    await waitFor(() => {
+      expect(screen.getAllByTestId('image-queue-item').length).toBe(2);
+    });
+    // 逐张顺序翻译：两条都完成
+    await waitFor(() => {
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText('shot.png')).toBeInTheDocument();
+    expect(screen.getByText('shot2.png')).toBeInTheDocument();
+    // 队列摘要显示 2 张图片
+    expect(screen.getByText(/2 张/)).toBeInTheDocument();
   });
 
   it('翻译失败后可通过重试按钮用同一张图片恢复', async () => {
@@ -183,7 +212,7 @@ describe('DualPaneTranslator 图片粘贴与拖拽翻译', () => {
     await waitFor(() => {
       expect(screen.getByText(/OCR 引擎忙/)).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTitle('用同一张图片重试'));
+    fireEvent.click(screen.getByTitle('重试此图片'));
 
     await waitFor(() => {
       expect(screen.getAllByText('粗糙度').length).toBeGreaterThanOrEqual(1);

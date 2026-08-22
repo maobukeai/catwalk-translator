@@ -28,6 +28,7 @@ interface DockProps {
 
 const DOCK_ITEMS: { id: AppTab; label: string; icon: React.ElementType }[] = [
   { id: "translate", label: "翻译器", icon: Languages },
+  { id: "search", label: "查词", icon: Search },
   { id: "ai", label: "AI 对话", icon: Bot },
   { id: "vocabulary", label: "生词本", icon: BookMarked },
   { id: "settings", label: "系统设置", icon: Settings },
@@ -67,8 +68,7 @@ export const Dock: React.FC<DockProps> = ({
 
   const hotkeyTip = (id: AppTab): string => {
     if (id === "translate") return settings.toggleWindowHotkey || "Alt+Q";
-    if (id === "search") return settings.clipboardHotkey || "Ctrl+Shift+C";
-    if (id === "ai") return settings.spotlightHotkey || "Alt+Space";
+    if (id === "search") return settings.spotlightHotkey || "Alt+Space";
     if (id === "vocabulary") return "Ctrl+D 收藏";
     return "";
   };

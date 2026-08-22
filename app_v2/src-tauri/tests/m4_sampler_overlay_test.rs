@@ -1,15 +1,17 @@
 use app_v2_lib::models::{BoundingBox, ColorSample};
 use app_v2_lib::sampler::ColorSampler;
 
+/// 构造 32bpp BGRA 像素缓冲（与采样器输入契约一致：裁剪自 BMP 的数据是 BGRA 字节序）。
+/// 参数 fill 为语义 RGB，写入时按 B、G、R 排列。
 fn rgb(width: u32, height: u32, fill: (u8, u8, u8)) -> Vec<u8> {
     let mut data = vec![0u8; width as usize * height as usize * 4];
     let (r, g, b) = fill;
     for y in 0..height {
         for x in 0..width {
             let base = ((y * width) + x) as usize * 4;
-            data[base] = r;
+            data[base] = b;
             data[base + 1] = g;
-            data[base + 2] = b;
+            data[base + 2] = r;
             data[base + 3] = 255;
         }
     }
@@ -27,9 +29,9 @@ fn make_ring(width: u32, height: u32, ring_rgb: (u8, u8, u8), center_rgb: (u8, u
             }
             let base = ((y * width) + x) as usize * 4;
             let (r, g, b) = ring_rgb;
-            data[base] = r;
+            data[base] = b;
             data[base + 1] = g;
-            data[base + 2] = b;
+            data[base + 2] = r;
             data[base + 3] = 255;
         }
     }

@@ -23,7 +23,8 @@ import {
 } from "lucide-react";
 import { useAppTheme } from "../../hooks/useAppTheme";
 import { cmdCheckAppUpdate, cmdGetAppInfo, type AppInfo, type UpdateCheckResult } from "../../services/tauri";
-import appIcon from "../../assets/app_icon.png";
+import appIcon from "../../assets/app_icon_v2.png";
+import { APP_VERSION } from "../../version";
 import contactQr from "../../assets/contact_qr.webp";
 import sponsorQr from "../../assets/sponsor_qr.webp";
 
@@ -134,7 +135,7 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
       setUpdateResult({
         latest: null,
         has_update: false,
-        current_version: appInfo?.version || "0.1.3",
+        current_version: appInfo?.version || APP_VERSION,
         error: String(err),
       });
     } finally {
@@ -164,7 +165,7 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
     }
   };
 
-  const currentVer = appInfo?.version || "0.1.3";
+  const currentVer = appInfo?.version || APP_VERSION;
 
   return (
     <div className="flex flex-col h-full min-h-0 space-y-4 select-text pb-6">
@@ -223,9 +224,7 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
         {/* 顶部 Header：Logo、名称、版本、作者与操作按钮 */}
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[var(--g-hairline)]">
           <div className="flex items-center space-x-3.5">
-            <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl overflow-hidden shadow-lg border border-[var(--g-hairline)] bg-white/10 dark:bg-zinc-800/40">
-              <img src={appIcon} alt="猫步翻译 Logo" className="h-12 w-12 object-contain" />
-            </div>
+            <img src={appIcon} alt="猫步翻译 Logo" className="h-14 w-14 object-contain select-none shrink-0" />
             <div>
               <div className="flex items-center space-x-2">
                 <h1 className="text-base font-bold tracking-tight">猫步翻译 (Maobu Translator)</h1>

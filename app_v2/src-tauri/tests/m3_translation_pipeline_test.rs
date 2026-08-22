@@ -1,7 +1,6 @@
 //! Comprehensive Unit & Integration Tests for M3 Multi-Tier Translation Pipeline & CG Dictionaries
 
 use app_v2_lib::{
-    commands::cmd_translate_phrases,
     models::{LlmConfig, TranslationResult},
     translator::{CgDictionaryEngine, MultiTierPipeline, TranslationCache},
 };
@@ -78,7 +77,7 @@ fn test_m3_dict_exact_match_all_presets() {
 fn test_m3_query_text_detail_word_card() {
     tauri::async_runtime::block_on(async {
         let pipeline = MultiTierPipeline::new();
-        let res = pipeline.query_text_detail("Nanite", "unreal", None).await;
+        let res = pipeline.query_text_detail("Nanite", "unreal", None, &[]).await;
         assert_eq!(res.original, "Nanite");
         assert!(res.word_detail.is_some());
         let detail = res.word_detail.unwrap();
@@ -214,7 +213,7 @@ fn test_m3_mock_llm_api_tier3_successful_batch_translation() {
 
         let phrases = vec!["Custom Term XYZ".to_string()];
         let results = pipeline
-            .translate_phrases(&phrases, "blender", Some(&config))
+            .translate_phrases(&phrases, "blender", Some(&config), &[])
             .await;
 
         assert_eq!(results.len(), 1);
@@ -250,7 +249,7 @@ fn test_m3_mock_llm_timeout_fallback_transition() {
 
         let phrases = vec!["Unmatched Timeout Phrase".to_string()];
         let results = pipeline
-            .translate_phrases(&phrases, "blender", Some(&config))
+            .translate_phrases(&phrases, "blender", Some(&config), &[])
             .await;
 
         assert_eq!(results.len(), 1);
@@ -267,13 +266,13 @@ fn test_m3_mock_llm_timeout_fallback_transition() {
 fn test_m3_ipc_cmd_translate_phrases_empty_and_whitespace_input() {
     tauri::async_runtime::block_on(async {
         // Empty vector
-        let res_empty = cmd_translate_phrases(vec![], "blender".to_string(), None).await;
+        let res_empty = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&[], "blender", None, &[]).await);
         assert!(res_empty.is_ok());
         assert!(res_empty.unwrap().is_empty());
 
         // Whitespace vector
         let res_space =
-            cmd_translate_phrases(vec!["   ".to_string()], "blender".to_string(), None).await;
+            Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&vec!["   ".to_string()], "blender", None, &[]).await);
         assert!(res_space.is_ok());
         let list = res_space.unwrap();
         assert_eq!(list.len(), 1);
@@ -286,7 +285,7 @@ fn test_m3_ipc_cmd_translate_phrases_invalid_preset_resilience() {
     tauri::async_runtime::block_on(async {
         let phrases = vec!["Principled BSDF".to_string()];
         // Invalid preset name "nonexistent_engine" -> should fallback to searching remaining dicts (find in blender.json)
-        let res = cmd_translate_phrases(phrases, "nonexistent_engine".to_string(), None).await;
+        let res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, "nonexistent_engine", None, &[]).await);
         assert!(res.is_ok());
         let list = res.unwrap();
         assert_eq!(list.len(), 1);
@@ -330,7 +329,7 @@ fn test_m3_universal_translate_forced_engine_dict_routing() {
             deepl_custom_url: None,
         };
 
-        let res = app_v2_lib::translator::execute_universal_translate(req).await;
+        let res = app_v2_lib::translator::execute_universal_translate(req, &[]).await;
         assert!(res.is_ok());
         let resp = res.unwrap();
         assert_eq!(resp.main_translation, "原理化 BSDF");
@@ -374,7 +373,7 @@ fn test_m3_universal_translate_forced_engine_substance_routing() {
             deepl_custom_url: None,
         };
 
-        let res = app_v2_lib::translator::execute_universal_translate(req).await;
+        let res = app_v2_lib::translator::execute_universal_translate(req, &[]).await;
         assert!(res.is_ok());
         let resp = res.unwrap();
         assert_eq!(resp.main_translation, "AO混合模式");
@@ -473,7 +472,7 @@ fn test_m3_universal_translate_100_percent_cards_retained() {
             deepl_custom_url: None,
         };
 
-        let res = app_v2_lib::translator::execute_universal_translate(req).await;
+        let res = app_v2_lib::translator::execute_universal_translate(req, &[]).await;
         assert!(res.is_ok());
         let resp = res.unwrap();
         // 字典命中有效词条，主译文自动优先挑选非重试态结果

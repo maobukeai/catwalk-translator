@@ -24,10 +24,12 @@ import {
   cmdUniversalTranslate,
   cmdSnapRegion,
   cmdSaveCaptureSession,
+  cmdOpenPin,
   saveTranslationHistory,
   isTauri,
 } from '../../services/tauri';
 import { matchesHotkey } from '../../services/hotkeys';
+import { speakText } from "../../services/tts";
 import { resolveAABBCollisions } from '../../services/overlayLayout';
 import { detectSpeechLang } from '../../services/langDetect';
 import type { OverlayBlock, OverlayResult, LanguageCode, TranslationResult } from '../../services/types';
@@ -35,6 +37,8 @@ import { useSettingsStore } from '../../stores/useSettingsStore';
 import { CheatSheetModal } from './CheatSheetModal';
 import { OverlayBlockCard } from './OverlayBlockCard';
 import { SnippingToolbar, type AnnotationTool } from './SnippingToolbar';
+import { memoKey, memoGet, memoPut } from './translationMemo';
+import { YoudaoResultPanel } from './YoudaoResultPanel';
 
 export interface AnnotationItem {
   id: string;
@@ -134,28 +138,7 @@ function rememberLastSelection(rect: SelRect) {
   } catch { /* storage unavailable — in-memory only */ }
 }
 
-/** Translation memo: identical (text, targetLang, preset, style) hits skip the
- *  network entirely — region-watch re-translations of unchanged text are
- *  instant and the cards never flash. Bounded FIFO eviction at 500 entries. */
-const TRANSLATION_MEMO = new Map<string, TranslationResult>();
-const TRANSLATION_MEMO_MAX = 500;
-
-function memoKey(text: string, lang: string, preset: string, style?: string) {
-  return `${text}||${lang}||${preset}||${style || ''}`;
-}
-
-function memoPut(key: string, tr: TranslationResult) {
-  if (TRANSLATION_MEMO.size >= TRANSLATION_MEMO_MAX) {
-    const oldest = TRANSLATION_MEMO.keys().next().value;
-    if (oldest !== undefined) TRANSLATION_MEMO.delete(oldest);
-  }
-  TRANSLATION_MEMO.set(key, tr);
-}
-
-/** Test hook: the module-level memo leaks across test cases otherwise. */
-export function __clearTranslationMemoForTests() {
-  TRANSLATION_MEMO.clear();
-}
+export { memoKey, memoGet, memoPut, __clearTranslationMemoForTests } from './translationMemo';
 
 /** Region-watch refresh interval default (ms); user-configurable 1000–10000. */
 const WATCH_INTERVAL_MS = 3000;
@@ -167,6 +150,19 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   openInHoverMode = false,
 }) => {
   const { settings, setCaptureEngine, setOverlayViewMode } = useSettingsStore();
+
+  // 自定义词库指纹(djb2):词库增删改后翻译 memo 缓存整体失效,
+  // 与 Rust 侧翻译记忆的 ensure_glossary 守卫语义一致
+  const glossaryFp = React.useMemo(() => {
+    const items = settings.customDictItems;
+    if (!items || items.length === 0) return '';
+    let h = 5381;
+    for (const it of items) {
+      const s = `${it.original}|${it.translated}|`;
+      for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    }
+    return `g${h}`;
+  }, [settings.customDictItems]);
   const enableAabb = settings.enableAabbAvoidance ?? true;
   // Region-watch refresh interval (user-configurable, clamped 1000–10000ms)
   const watchIntervalMs = Math.min(10000, Math.max(1000, settings.watchIntervalMs ?? WATCH_INTERVAL_MS));
@@ -226,6 +222,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   const [actionToast, setActionToast] = useState<{ message: string; actionLabel: string; onAction: () => void } | null>(null);
   const actionToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const processEpochRef = useRef(0);
+  // 前台 3D/CG 软件自动识别（每次截图开始时由 Rust 下发，划词期间生效）
+  const detectedPresetRef = useRef<{ preset: string; appName: string } | null>(null);
   const lastEscTsRef = useRef(0);
   const [cardMenu, setCardMenu] = useState<{ blockIndex: number; x: number; y: number } | null>(null);
   const [dismissedBlockIndexes, setDismissedBlockIndexes] = useState<number[]>([]);
@@ -297,12 +295,24 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     return resolveAABBCollisions(kept, w, h);
   }, [overlayResult, enableAabb, dismissedBlockIndexes, renderedHeights]);
 
+  // 定时器持有引用：连续 showFeedback 时先清旧 timer，
+  // 防止新 toast 被上一个 toast 的定时器提前清除
+  const feedbackToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const emptyNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const showFeedback = (msg: string) => {
     setFeedbackToast(msg);
-    setTimeout(() => {
+    if (feedbackToastTimerRef.current) clearTimeout(feedbackToastTimerRef.current);
+    feedbackToastTimerRef.current = setTimeout(() => {
       if (mountedRef.current) setFeedbackToast(null);
     }, 2200);
   };
+
+  /** 生效词库：自动识别开启且检测到前台 CG 软件时优先其专业词库，否则用默认词库 */
+  const effectivePreset = () =>
+    (useSettingsStore.getState().settings.autoDetectPreset !== false && detectedPresetRef.current?.preset) ||
+    settings.defaultPreset ||
+    'blender';
 
   /** Clipboard write that awaits and reports failures instead of fire-and-forget. */
   const copyTextSafely = useCallback(async (text: string, okMsg?: string) => {
@@ -353,7 +363,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           text: line.text,
           sourceLang: 'auto',
           targetLang,
-          preset: selectedEngine !== 'auto' ? selectedEngine : (settings.defaultPreset || 'blender'),
+          preset: selectedEngine !== 'auto' ? selectedEngine : effectivePreset(),
           llmConfig: ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k))
             ? settings.llmConfig
             : null,
@@ -386,9 +396,19 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     }
   }, [settings.captureEngine]);
 
+  // 组件实例常驻 App（从不卸载），mountedRef 必须跟随 isOpen 才有意义；
+  // 否则所有 await 之后的 mountedRef 守卫恒为 true，overlay 关闭后仍会继续写状态。
   useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
+    mountedRef.current = isOpen;
+  }, [isOpen]);
+
+  // 卸载兜底清理（生产常驻不触发，测试环境/热重载会卸载）：
+  // 防止 toast 定时器在环境销毁后仍 setState
+  useEffect(() => {
+    return () => {
+      if (feedbackToastTimerRef.current) clearTimeout(feedbackToastTimerRef.current);
+      if (emptyNoticeTimerRef.current) clearTimeout(emptyNoticeTimerRef.current);
+    };
   }, []);
 
   // ── Open / close lifecycle ───────────────────────────────────────────────────
@@ -402,6 +422,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       setIsPinned(false);
       setBannerDismissed(false);
       setFeedbackToast(null);
+      setEmptyNotice(null);
+      if (feedbackToastTimerRef.current) clearTimeout(feedbackToastTimerRef.current);
+      if (emptyNoticeTimerRef.current) clearTimeout(emptyNoticeTimerRef.current);
+      if (actionToastTimerRef.current) clearTimeout(actionToastTimerRef.current);
       setTranslatingProgress(null);
       setAdjustRect(null);
       setAdjustHandle(null);
@@ -428,6 +452,13 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           const payload = await cmdBeginCapture();   // hides main window (0ms image transfer!)
           if (!mountedRef.current) return;
           setScaleFactor(payload.scaleFactor || window.devicePixelRatio || 1.0);
+          const detected = payload.detectedApp ?? null;
+          if (detected && useSettingsStore.getState().settings.autoDetectPreset !== false) {
+            detectedPresetRef.current = detected;
+            showFeedback(`🎯 检测到 ${detected.appName} · 已自动启用其专业词库`);
+          } else {
+            detectedPresetRef.current = null;
+          }
           await cmdShowOverlay();                    // expand translucent window to full screen
         } else {
           setScaleFactor(window.devicePixelRatio || 1.0);
@@ -475,7 +506,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               text: block.original,
               sourceLang: 'auto',
               targetLang: newTargetLang,
-              preset: engine !== 'auto' ? engine : (settings.defaultPreset || 'blender'),
+              preset: engine !== 'auto' ? engine : effectivePreset(),
               llmConfig: settings.llmConfig,
               presetDicts: settings.presetDicts,
               onlineEngines: settings.onlineEngines,
@@ -741,13 +772,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         // Space: TTS Speech (language auto-detected from the source characters)
         if (e.code === 'Space' && (e.target as HTMLElement).tagName !== 'INPUT') {
           e.preventDefault();
-          if ('speechSynthesis' in window) {
-            window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(targetBlock.original);
-            u.lang = detectSpeechLang(targetBlock.original);
-            window.speechSynthesis.speak(u);
-            showFeedback(`🔊 正在朗读第 ${activeIdx + 1} 段原文...`);
-          }
+          speakText(targetBlock.original, { lang: detectSpeechLang(targetBlock.original) });
+          showFeedback(`🔊 正在朗读第 ${activeIdx + 1} 段原文...`);
           return;
         }
 
@@ -782,7 +808,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     };
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [isOpen, phase, overlayResult, selectedEngine, isPinned, targetLang, settings.hotkey, adjustRect, pendingRects, activeBlockIdx]);
+  // settings 整体入依赖：handler 内的引擎/词典/在线开关都来自 settings，
+  // 之前只登记 settings.hotkey 会导致按 1-7 切语种时用旧配置重译
+  }, [isOpen, phase, overlayResult, selectedEngine, isPinned, targetLang, settings, adjustRect, pendingRects, activeBlockIdx]);
 
   // ── Mouse handlers for selection phase ───────────────────────────────────────
   const onMouseDown = useCallback((e: React.MouseEvent) => {
@@ -995,10 +1023,17 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     layout: import('../../services/types').OverlayResult,
     isWatch: boolean = false
   ) => {
+    // 与 processSelection / processPendingRects / runWatchTick 共用 epoch：
+    // 新选区开始、取消或 overlay 关闭都会 bump epoch，使旧 stage-2 的所有
+    // 后续写入作废，防止旧译文按 index 错位覆盖新选区的卡片。
+    const epoch = processEpochRef.current;
+    const stale = () => !mountedRef.current || epoch !== processEpochRef.current;
+
     if (layout.blocks.length === 0) {
       if (!isWatch) {
         setEmptyNotice('未在选区内识别到清晰文本，请重新划框框选');
-        setTimeout(() => {
+        if (emptyNoticeTimerRef.current) clearTimeout(emptyNoticeTimerRef.current);
+        emptyNoticeTimerRef.current = setTimeout(() => {
           if (mountedRef.current) setEmptyNotice(null);
         }, 2500);
         setPhase('selecting');
@@ -1031,7 +1066,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     // (dict cache → batched LLM → parallel online fallback), then swap each
     // card's text in place as soon as results arrive.
     const phrases = layout.blocks.map((b) => b.original);
-    const preset = selectedEngine !== 'auto' ? selectedEngine : (settings.defaultPreset || 'blender');
+    const preset = selectedEngine !== 'auto' ? selectedEngine : effectivePreset();
     const isExplicitLlm = ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k));
     const llmConfig = isExplicitLlm ? (settings.llmConfig ?? null) : null;
     const style = settings.translationStyle;
@@ -1042,7 +1077,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       const memoHits = new Map<number, TranslationResult>();
       const misses: number[] = [];
       phrases.forEach((p, i) => {
-        const hit = TRANSLATION_MEMO.get(memoKey(p, targetLang, preset, style));
+        const hit = memoGet(memoKey(p, targetLang, preset, style, glossaryFp));
         if (hit) memoHits.set(i, hit);
         else misses.push(i);
       });
@@ -1057,14 +1092,14 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           llmConfig,
           style,
         );
-        if (!mountedRef.current) return;
+        if (stale()) return;
         const byIdx = new Map<number, TranslationResult>();
         misses.forEach((pi, k) => {
           const tr = fetched[k];
           if (tr) {
             byIdx.set(pi, tr);
             if (tr.translated && tr.translated.trim()) {
-              memoPut(memoKey(phrases[pi], targetLang, preset, style), tr);
+              memoPut(memoKey(phrases[pi], targetLang, preset, style, glossaryFp), tr);
             }
           }
         });
@@ -1082,6 +1117,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         }
         return { ...block, translated: block.original, sourceTier: tr?.sourceTier || block.sourceTier, translationFailed: true };
       });
+      if (stale()) return;
       setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : prev));
       setTranslatingProgress({ done: translatedCount, total: layout.blocks.length });
 
@@ -1114,7 +1150,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                   translated: res.mainTranslation,
                   sourceTier: res.engines[0]?.sourceTier || block.sourceTier,
                 };
-                if (mountedRef.current) {
+                if (!stale()) {
                   setOverlayResult((prev) =>
                     prev
                       ? { ...prev, blocks: prev.blocks.map((b, j) => (j === i ? newBlock : b)) }
@@ -1150,7 +1186,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       }
     } catch (err) {
       console.warn('[CaptureOverlay] Stage-2 translation failed, keeping OCR text:', err);
-      if (mountedRef.current && !isWatch) {
+      if (!stale() && !isWatch) {
         // Mark every card as failed so each shows its own inline retry button
         setOverlayResult((prev) => prev
           ? { ...prev, blocks: prev.blocks.map((b) => ({ ...b, translated: b.original, translationFailed: true })) }
@@ -1158,7 +1194,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         showFeedback('⚠️ 翻译通道暂不可用，卡片上可单块重试');
       }
     } finally {
-      if (mountedRef.current) setTranslatingProgress(null);
+      if (!stale()) setTranslatingProgress(null);
     }
   }, [selectedEngine, settings, targetLang, onSendToMainWindow]);
 
@@ -1167,7 +1203,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     if (!overlayResult) return;
     const block = overlayResult.blocks[blockIndex];
     if (!block) return;
-    const preset = selectedEngine !== 'auto' ? selectedEngine : (settings.defaultPreset || 'blender');
+    const preset = selectedEngine !== 'auto' ? selectedEngine : effectivePreset();
     const isExplicitLlm = ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k));
     const llmConfig = isExplicitLlm ? (settings.llmConfig ?? null) : null;
     try {
@@ -1188,6 +1224,48 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       if (mountedRef.current) showFeedback('⚠️ 重试失败：翻译通道不可用');
     }
   }, [overlayResult, selectedEngine, settings]);
+
+  /** 把整场译文渲染为分享卡片 PNG 保存到图片库 */
+  const exportOverlayImage = async () => {
+    if (!overlayResult || overlayResult.blocks.length === 0) return;
+    showFeedback('🖼 正在生成分享图片…');
+    try {
+      const { exportTranslationImage } = await import('../../services/exportImage');
+      const path = await exportTranslationImage({
+        title: '划词译文',
+        lines: overlayResult.blocks.slice(0, 12).map((b) => ({
+          original: b.original.slice(0, 200),
+          translated: (b.translated || b.original).slice(0, 200),
+        })),
+      });
+      showFeedback(`✅ 已导出到 ${path.slice(-40)}`);
+    } catch (e) {
+      showFeedback(`⚠️ 导出失败：${String(e).slice(0, 40)}`);
+    }
+  };
+
+  /** 把译文块钉成桌面贴图（独立置顶小窗，overlay 关闭后仍常驻） */
+  const pinOverlayBlocks = (
+    pinBlocks: { original: string; translated: string; sourceTier: string }[],
+    title: string,
+    originX: number,
+    originY: number,
+  ) => {
+    if (pinBlocks.length === 0) return;
+    const id = `pin_${Date.now()}`;
+    const height = Math.min(680, 104 + pinBlocks.length * 74);
+    cmdOpenPin({
+      id,
+      title,
+      blocks: pinBlocks,
+      x: Math.max(8, (typeof window !== 'undefined' ? window.screenX : 0) + originX),
+      y: Math.max(8, (typeof window !== 'undefined' ? window.screenY : 0) + originY),
+      width: 380,
+      height,
+    })
+      .then(() => showFeedback('📌 已贴图到桌面（可拖拽 / 滚轮缩放）'))
+      .catch((e) => showFeedback(`⚠️ 贴图失败：${String(e).slice(0, 40)}`));
+  };
 
   /** Copy the whole selection region image (clean desktop BMP) to the clipboard. */
   const copyRegionImage = useCallback(async (rect: SelRect) => {
@@ -1239,13 +1317,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     const activeIdx = activeBlockIdx !== null && activeBlockIdx < overlayResult.blocks.length ? activeBlockIdx : 0;
     const targetBlock = overlayResult.blocks[activeIdx];
     if (!targetBlock) return;
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(targetBlock.original);
-      u.lang = detectSpeechLang(targetBlock.original);
-      window.speechSynthesis.speak(u);
-      showFeedback(`🔊 正在朗读第 ${activeIdx + 1} 段原文...`);
-    }
+    speakText(targetBlock.original, { lang: detectSpeechLang(targetBlock.original) });
+    showFeedback(`🔊 正在朗读第 ${activeIdx + 1} 段原文...`);
   }, [overlayResult, activeBlockIdx]);
 
   const processSelection = useCallback(async (selection: { x: number; y: number; width: number; height: number }) => {
@@ -1277,7 +1350,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
       await applyLayoutAndTranslate(layout);
     } catch (err) {
-      if (!mountedRef.current || epoch !== processEpochRef.current) return;
+      if (typeof window === 'undefined' || !mountedRef.current || epoch !== processEpochRef.current) return;
       console.error('[CaptureOverlay] Region OCR failed:', err);
       setPhase((settings.captureReleaseAction ?? 'auto') === 'adjust' && adjustRect ? 'adjusting' : 'selecting');
       setStartPos(null);
@@ -1326,7 +1399,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
       if (blocks.length === 0) {
         setEmptyNotice('多个选区内均未识别到清晰文本，请重新划框');
-        setTimeout(() => {
+        if (emptyNoticeTimerRef.current) clearTimeout(emptyNoticeTimerRef.current);
+        emptyNoticeTimerRef.current = setTimeout(() => {
           if (mountedRef.current) setEmptyNotice(null);
         }, 2500);
         setPhase('selecting');
@@ -1375,6 +1449,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     if (!watchModeRef.current || watchTickBusyRef.current) return;
     if (!LAST_SELECTION) return;
     watchTickBusyRef.current = true;
+    // 与手动划词共用 epoch：新的一次 tick 使上一次在途结果作废，
+    // 反之用户手动划新区域时，本次 tick 的结果也不再写入。
+    const epoch = ++processEpochRef.current;
     try {
       const vw = typeof window !== 'undefined' ? window.innerWidth : undefined;
       const vh = typeof window !== 'undefined' ? window.innerHeight : undefined;
@@ -1402,7 +1479,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       } else {
         layout = await cmdRegionOcrLayout(LAST_SELECTION, scaleFactor, vw, vh);
       }
-      if (!watchModeRef.current || !mountedRef.current) return;
+      if (!watchModeRef.current || !mountedRef.current || epoch !== processEpochRef.current) return;
 
       // Skip re-translation when the recognized text has not changed
       const text = layout.blocks.map((b) => b.original).join('\n');
@@ -1433,19 +1510,21 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       : null;
     showFeedback(`🔄 区域监控已开启 · 每 ${watchIntervalSec}s 自动重译 (W 停止)`);
     runWatchTick();
+    // 定时器由下方 useEffect 统一创建，watchIntervalMs 变化时自动按新间隔重建
+  }, [phase, overlayResult, runWatchTick, stopWatch, watchIntervalSec]);
+
+  // 监控定时器统一在此管理：开启监控时启动，关闭时清理；
+  // 设置页修改刷新间隔后运行中的定时器立即热更新，无需关掉重开。
+  useEffect(() => {
+    if (!watchMode) return;
     watchTimerRef.current = setInterval(() => {
       runWatchTick();
     }, watchIntervalMs);
-  }, [phase, overlayResult, runWatchTick, stopWatch, watchIntervalMs, watchIntervalSec]);
-
-  // Stop the watch timer when the overlay unmounts
-  useEffect(() => {
     return () => {
       if (watchTimerRef.current) clearInterval(watchTimerRef.current);
-      watchModeRef.current = false;
-      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+      watchTimerRef.current = null;
     };
-  }, []);
+  }, [watchMode, watchIntervalMs, runWatchTick]);
 
   // Youdao-style display mode toggle (persisted; M key shortcut)
   const toggleDisplayMode = useCallback(() => {
@@ -2243,12 +2322,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                 title="朗读原文"
                 className="p-1 rounded-md text-zinc-300 hover:text-sky-300 hover:bg-white/10 transition cursor-pointer"
                 onClick={() => {
-                  if ('speechSynthesis' in window) {
-                    window.speechSynthesis.cancel();
-                    const u = new SpeechSynthesisUtterance(hoverBubble.text);
-                    u.lang = detectSpeechLang(hoverBubble.text);
-                    window.speechSynthesis.speak(u);
-                  }
+                  speakText(hoverBubble.text, { lang: detectSpeechLang(hoverBubble.text) });
                 }}
               >
                 🔊
@@ -2422,13 +2496,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               {
                 label: '🔊 朗读原文',
                 run: () => {
-                  if ('speechSynthesis' in window) {
-                    window.speechSynthesis.cancel();
-                    const u = new SpeechSynthesisUtterance(mb.original);
-                    u.lang = 'en-US';
-                    window.speechSynthesis.speak(u);
-                    showFeedback('🔊 正在朗读原文...');
-                  }
+                  speakText(mb.original, { lang: 'en-US' });
+                  showFeedback('🔊 正在朗读原文...');
                 },
               },
               {
@@ -2452,6 +2521,24 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               width: overlayResult.selectionW,
               height: overlayResult.selectionH,
             };
+            items.push({
+              label: '📌 贴图此卡片',
+              run: () => pinOverlayBlocks(
+                [{ original: mb.original, translated: mb.translated, sourceTier: mb.sourceTier }],
+                '划词 · 单卡片',
+                mb.logicalX,
+                mb.logicalY + 24,
+              ),
+            });
+            items.push({
+              label: '📌 贴图全部译文',
+              run: () => pinOverlayBlocks(
+                overlayResult.blocks.map((b) => ({ original: b.original, translated: b.translated, sourceTier: b.sourceTier })),
+                '划词译文',
+                overlayResult.selectionX + 24,
+                overlayResult.selectionY,
+              ),
+            });
             items.push({ label: '📷 复制选区图片', run: () => void copyRegionImage(selRect) });
             items.push({ label: '💾 保存选区图片 (PNG)', run: () => void saveRegionImage(selRect) });
             return items.map((item) => (
@@ -2546,16 +2633,18 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               void copyTextSafely(text, '📋 已复制到剪贴板');
             }}
             onSpeech={(text) => {
-              if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel();
-                const u = new SpeechSynthesisUtterance(text);
-                u.lang = targetLang === 'zh-CN' ? 'zh-CN' : 'en-US';
-                window.speechSynthesis.speak(u);
-                showFeedback('🔊 正在朗读...');
-              }
+              speakText(text, { lang: targetLang === 'zh-CN' ? 'zh-CN' : 'en-US' });
+              showFeedback('🔊 正在朗读...');
             }}
             onRetranslate={() => retranslateBlocks(targetLang, selectedEngine)}
             onSwitchMode={() => toggleDisplayModeRef.current()}
+            onExportImage={() => void exportOverlayImage()}
+            onPin={() => pinOverlayBlocks(
+              displayBlocks.map((b) => ({ original: b.original, translated: b.translated, sourceTier: b.sourceTier })),
+              '划词译文',
+              overlayResult.selectionX + 24,
+              overlayResult.selectionY,
+            )}
             onClose={() => handleCloseRef.current()}
           />
         </>
@@ -2573,234 +2662,4 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   );
 };
 
-// ── YoudaoResultPanel: docked source/translation result panel (Youdao style) ───
-interface YoudaoResultPanelProps {
-  blocks: import('../../services/types').OverlayBlock[];
-  selectionX: number;
-  selectionY: number;
-  selectionW: number;
-  selectionH: number;
-  isLight: boolean;
-  translating: boolean;
-  hoverIndex: number | null;
-  targetLang: string;
-  onHover: (idx: number | null) => void;
-  onCopyText: (text: string) => void;
-  onSpeech: (text: string) => void;
-  onRetranslate: () => void;
-  onSwitchMode: () => void;
-  onClose: () => void;
-}
-
-const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
-  blocks,
-  selectionX,
-  selectionY,
-  selectionW,
-  selectionH,
-  isLight,
-  translating,
-  hoverIndex,
-  targetLang,
-  onHover,
-  onCopyText,
-  onSpeech,
-  onRetranslate,
-  onSwitchMode,
-  onClose,
-}) => {
-  const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
-  const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
-
-  // Web-Youdao-style dual-column panel needs room; fall back to stacked
-  // (source above, translation below) when the viewport is narrow.
-  const maxAvailW = vw - 16;
-  const dualColumn = maxAvailW >= 560;
-  const panelW = Math.max(
-    dualColumn ? 520 : 320,
-    Math.min(dualColumn ? 720 : 480, Math.max(selectionW, dualColumn ? 520 : 320), maxAvailW)
-  );
-  const estH = Math.min(Math.max(180 + blocks.length * 46, 240), Math.floor(vh * 0.7));
-  let top = selectionY + selectionH + 12;
-  if (top + estH > vh - 8) {
-    const flipped = selectionY - estH - 12;
-    top = flipped >= 8 ? flipped : Math.max(8, vh - estH - 8);
-  }
-  const left = Math.max(8, Math.min(selectionX, vw - panelW - 8));
-
-  const sourceText = blocks.map((b) => b.original).join('\n');
-  const translatedText = blocks.map((b) => b.translated || b.original).join('\n');
-  const allTranslated = blocks.length > 0 && blocks.every((b) => b.translated);
-  // Auto source-language label for the header pill (Youdao shows the pair)
-  const srcHasCJK = blocks.some((b) => /[\u4e00-\u9fff]/.test(b.original));
-  const srcLabel = srcHasCJK ? '中文' : 'English';
-
-  return (
-    <div
-      className={`overlay-panel absolute flex flex-col overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-2xl ${
-        isLight
-          ? 'bg-white/95 border-slate-300 text-slate-800'
-          : 'bg-slate-900/92 border-white/15 text-zinc-100'
-      }`}
-      style={{ left, top, width: panelW, maxHeight: estH, zIndex: 230 }}
-      onMouseDown={(e) => e.stopPropagation()}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {/* Panel header */}
-      <div className={`flex items-center justify-between gap-2 px-4 py-2.5 border-b shrink-0 ${
-        isLight ? 'border-slate-200 bg-slate-100/70' : 'border-white/10 bg-white/[0.04]'
-      }`}>
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm">🖼️</span>
-          <span className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>截图翻译</span>
-          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${
-            isLight ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-blue-500/15 border-blue-400/30 text-sky-300'
-          }`}>
-            {srcLabel} ⇄ {targetLang}
-          </span>
-          {translating && (
-            <span className="text-[10px] font-mono text-sky-400 animate-pulse">翻译中…</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onSwitchMode}
-            className={`px-2 py-1 rounded-lg text-[10px] font-semibold border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
-            title="切换为原位覆盖模式 (M)"
-          >
-            🃏 原位模式
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className={`p-1 rounded-lg transition cursor-pointer ${isLight ? 'text-slate-400 hover:text-rose-600' : 'text-zinc-400 hover:text-rose-400'}`}
-            title="关闭划词 (Esc)"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      {/* Body — web-Youdao style: source column | translation column with
-          per-sentence hover linkage (panel rows ↔ screen dashed outlines) */}
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
-        <div className={dualColumn ? 'grid grid-cols-[2fr_3fr]' : 'flex flex-col'}>
-          {/* Source column (or top section when narrow) */}
-          <div
-            className={`px-4 py-3 space-y-1 ${dualColumn ? 'border-r' : 'border-b'} ${
-              isLight ? 'border-slate-200 bg-slate-50/70' : 'border-white/[0.07] bg-black/25'
-            }`}
-          >
-            <div className={`flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider pb-1 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-400" />
-              原文
-            </div>
-            {blocks.map((b, i) => {
-              const hovered = hoverIndex === i;
-              return (
-                <div
-                  key={i}
-                  data-row-index={i}
-                  data-row-side="src"
-                  className={`rounded-md px-2 py-1.5 transition-colors cursor-default ${hovered ? (isLight ? 'bg-sky-100/90' : 'bg-sky-500/15') : ''}`}
-                  onMouseEnter={() => onHover(i)}
-                  onMouseLeave={() => onHover(null)}
-                >
-                  <p className={`text-[11.5px] font-mono leading-relaxed break-all ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
-                    {b.original}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Translation column (or bottom section when narrow) */}
-          <div className="px-4 py-3 space-y-1">
-            <div className={`flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider pb-1 ${isLight ? 'text-blue-500' : 'text-sky-400'}`}>
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
-              译文
-            </div>
-            {blocks.map((b, i) => {
-              const hovered = hoverIndex === i;
-              return (
-                <div
-                  key={i}
-                  data-row-index={i}
-                  data-row-side="dst"
-                  className={`rounded-md px-2 py-1.5 transition-colors cursor-default ${hovered ? (isLight ? 'bg-sky-100/90' : 'bg-sky-500/15') : ''}`}
-                  onMouseEnter={() => onHover(i)}
-                  onMouseLeave={() => onHover(null)}
-                >
-                  <p className={`text-[15px] font-semibold leading-relaxed break-words ${
-                    b.translated
-                      ? (isLight ? 'text-slate-900' : 'text-white')
-                      : (isLight ? 'text-slate-400 italic' : 'text-zinc-500 italic')
-                  }`}>
-                    {b.translated || '识别完成，翻译接管中…'}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Toolbar */}
-      <div className={`flex items-center justify-between gap-2 px-4 py-2.5 border-t shrink-0 ${
-        isLight ? 'border-slate-200 bg-slate-100/70' : 'border-white/10 bg-white/[0.04]'
-      }`}>
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => onCopyText(translatedText)}
-            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
-              isLight ? 'bg-blue-600 hover:bg-blue-500 text-white border-blue-500' : 'bg-blue-600 hover:bg-blue-500 text-white border-blue-400'
-            }`}
-            title="复制全部译文"
-          >
-            📋 复制译文
-          </button>
-          <button
-            type="button"
-            onClick={() => onCopyText(sourceText)}
-            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
-            title="复制全部原文"
-          >
-            📄 原文
-          </button>
-          <button
-            type="button"
-            onClick={() => onSpeech(allTranslated ? translatedText : sourceText)}
-            className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
-            title="朗读"
-          >
-            🔊
-          </button>
-          <button
-            type="button"
-            onClick={onRetranslate}
-            className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
-            title="重新翻译"
-          >
-            🔄
-          </button>
-        </div>
-        <span className={`text-[10px] font-mono ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
-          {blocks.length} 段 · 悬停联动原文位置
-        </span>
-      </div>
-    </div>
-  );
-};
 

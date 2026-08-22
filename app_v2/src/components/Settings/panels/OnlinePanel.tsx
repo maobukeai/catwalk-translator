@@ -1,0 +1,619 @@
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  AlertCircle, ArrowDown, ArrowUp, Eye, EyeOff, RotateCcw, Save, CheckCircle2,
+  Camera, Zap, Bot, BookOpen, Sliders, Sparkles, ShieldCheck, Globe, Palette,
+  Sun, Moon, Monitor, Plus, Trash2, Edit3, Search, Download, Upload, X,
+  FileSpreadsheet, Copy, Check, Type, Languages, Tag, FileText, WifiOff,
+  HardDriveDownload, CloudUpload,
+} from 'lucide-react';
+import { useSettingsStore } from '../../../stores/useSettingsStore';
+import { useAppTheme } from '../../../hooks/useAppTheme';
+import { NetworkDiagCard } from './NetworkDiagCard';
+import {
+  cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall,
+  cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart,
+} from '../../../services/tauri';
+import { normalizeHotkeyForCompare } from '../../../services/hotkeys';
+import type { OfflineEngineStatus } from '../../../services/tauri';
+import { useLlmPanelState, PROVIDER_DEFAULT_ENDPOINTS } from './useLlmPanelState';
+import type {
+  LlmConfig, OcrEngineStatus, ThemeMode, FontFamilyOption, FontSizeOption, CustomDictItem,
+} from '../../../services/types';
+
+const isTestEnv = typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
+export const ONLINE_ENGINE_DEFS = [
+  {
+    id: 'google',
+    name: 'Google 翻译 (官方通道)',
+    tag: '快速稳定',
+    tagColor: 'text-blue-300 bg-blue-500/15 border-blue-400/30',
+    desc: '谷歌高质量公共多语言通道，响应迅速，支持全语种',
+    icon: '🌐',
+  },
+  {
+    id: 'bing',
+    name: '微软 Bing 必应翻译',
+    tag: '神经翻译',
+    tagColor: 'text-sky-300 bg-sky-500/15 border-sky-400/30',
+    desc: '微软神经网络智能翻译引擎，长短句自然流畅',
+    icon: '🔷',
+  },
+  {
+    id: 'youdao',
+    name: '网易有道翻译',
+    tag: '地道中英',
+    tagColor: 'text-rose-300 bg-rose-500/15 border-rose-400/30',
+    desc: '网易专业词典与智能翻译通道，中文与中英互译极度地道',
+    icon: '🔴',
+  },
+  {
+    id: 'deepl',
+    name: 'DeepL 极速翻译通道',
+    tag: '德系精准',
+    tagColor: 'text-teal-300 bg-teal-500/15 border-teal-400/30',
+    desc: '欧洲顶级高语境翻译引擎，长难句与学术语境翻译首选',
+    icon: '⚡',
+  },
+  {
+    id: 'myMemory',
+    name: 'MyMemory 翻译记忆库',
+    tag: '语料记忆库',
+    tagColor: 'text-indigo-300 bg-indigo-500/15 border-indigo-400/30',
+    desc: '全球大型翻译记忆库，汇聚数亿条人工翻译真实语料',
+    icon: '🧠',
+  },
+  {
+    id: 'baidu',
+    name: '百度通用翻译',
+    tag: '中文优化',
+    tagColor: 'text-blue-300 bg-blue-500/15 border-blue-400/30',
+    desc: '百度中文语义增强翻译引擎，多语种覆盖全面',
+    icon: '🐾',
+  },
+  {
+    id: 'tencent',
+    name: '腾讯交互翻译',
+    tag: 'AI实验室',
+    tagColor: 'text-cyan-300 bg-cyan-500/15 border-cyan-400/30',
+    desc: '腾讯 AI 翻译实验室神经机器翻译，专业流畅',
+    icon: '🐧',
+  },
+] as const;
+
+/** 在线翻译引擎开关与各家 API 配置 */
+export const OnlinePanel: React.FC = () => {
+  const { isLight } = useAppTheme();
+  const {
+    settings,
+    setOnlineEngineToggle,
+    setAllOnlineEngines,
+    setBaiduConfig,
+    setDeeplConfig,
+  } = useSettingsStore();
+
+  // LLM 模型池 UI 同时出现在本区与「快捷键与 AI 模型」区,共用一份状态逻辑
+  const {
+    llm,
+    llmPool,
+    showApiKey,
+    setShowApiKey,
+    testLatency,
+    testStatus,
+    testSuccess,
+    isTestingLlm,
+    showModelPicker,
+    setShowModelPicker,
+    isFetchingModels,
+    fetchedModels,
+    fetchModelNotice,
+    handleProviderChange,
+    handleAddModel,
+    handleTestLlmConnection,
+    handleFetchModels,
+    setLlmConfig,
+    addLlmConfig,
+    updateLlmConfig,
+    deleteLlmConfig,
+    setActiveLlmConfig,
+  } = useLlmPanelState();
+
+  const online = settings.onlineEngines || {
+    google: true,
+    bing: true,
+    youdao: true,
+    deepl: false,
+    myMemory: false,
+    baidu: false,
+    tencent: false,
+  };
+
+  return (
+    <>
+        <div className="space-y-5 animate-in fade-in duration-150">
+          {/* 在线公共翻译服务通道网格矩阵 */}
+          <div className={`p-5 space-y-4 rounded-2xl border transition-colors ${
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+          }`}>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
+                  <Globe className="h-4 w-4 text-blue-500" />
+                  <span>在线公共翻译服务通道 (7 大主流引擎)</span>
+                </div>
+                <p className={`mt-1 text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                  支持多引擎免 Key 并发极速查询，开启的引擎将在双栏翻译与多源对照面板中实时呈现
+                </p>
+              </div>
+
+              {/* 快捷批量操作按钮组 */}
+              <div className={`flex items-center space-x-1.5 self-start sm:self-auto p-1 rounded-xl border text-xs ${
+                isLight ? 'bg-slate-100 border-slate-200' : 'bg-zinc-950/80 border-white/[0.06]'
+              }`}>
+                <button
+                  type="button"
+                  onClick={() => setAllOnlineEngines('recommended')}
+                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                    isLight ? 'text-slate-700 hover:text-slate-900 hover:bg-slate-200' : 'text-zinc-300 hover:text-white hover:bg-white/[0.06]'
+                  }`}
+                  title="仅启用 Google + Bing + 有道"
+                >
+                  推荐配置
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAllOnlineEngines('all')}
+                  className="px-2.5 py-1 rounded-lg text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition cursor-pointer font-semibold"
+                  title="启用全部 7 大在线引擎"
+                >
+                  开启全部
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAllOnlineEngines('none')}
+                  className="px-2.5 py-1 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                  title="关闭所有在线公共引擎"
+                >
+                  全部关闭
+                </button>
+              </div>
+            </div>
+
+            {/* 7 大在线引擎精简卡片网格 (高密度 Apple/Fluent 精致胶囊矩阵) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {ONLINE_ENGINE_DEFS.map((eng) => {
+                const isEnabled = (online as Record<string, boolean | undefined>)[eng.id] ?? false;
+                return (
+                  <div
+                    key={eng.id}
+                    title={eng.desc}
+                    className={`flex items-center justify-between rounded-xl px-3 py-2 border transition-all duration-200 cursor-pointer select-none ${
+                      isEnabled
+                        ? (isLight ? 'bg-blue-50/80 border-blue-300 shadow-2xs ring-1 ring-blue-400/20' : 'bg-blue-950/30 border-blue-500/40 shadow-xs ring-1 ring-blue-500/20')
+                        : (isLight ? 'bg-slate-50/80 border-slate-200 opacity-70 hover:opacity-100 hover:bg-slate-100' : 'bg-zinc-950/40 border-white/[0.06] opacity-60 hover:opacity-100 hover:bg-zinc-900/60')
+                    }`}
+                    onClick={() => setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled)}
+                  >
+                    <div className="flex items-center space-x-2 min-w-0 pr-2">
+                      <span className="text-sm shrink-0">{eng.icon}</span>
+                      <span className={`text-xs font-bold truncate ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
+                        {eng.name.replace(/（.*?）|\(.*?\)/g, '')}
+                      </span>
+                      <span className={`text-[9px] font-mono font-medium px-1.5 py-0.2 rounded border shrink-0 ${eng.tagColor}`}>
+                        {eng.tag}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled);
+                      }}
+                      className={`relative inline-flex h-4.5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
+                        isEnabled ? 'bg-blue-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                          isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 百度翻译 API 凭据配置（仅当百度引擎开启时显示）*/}
+          {online.baidu && (
+            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
+              isLight ? 'bg-blue-50/60 border-blue-200/80' : 'bg-blue-950/20 border-blue-500/25'
+            }`}>
+              <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-blue-900' : 'text-blue-300'}`}>
+                <span>🐾</span>
+                <span>百度翻译 API 配置</span>
+                <span className={`text-[9px] font-normal px-1.5 py-0.5 rounded border ml-1 ${isLight ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>
+                  免费 · 每月 100 万字符
+                </span>
+                <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer"
+                  className={`ml-auto text-[10px] underline underline-offset-2 ${isLight ? 'text-blue-600' : 'text-blue-400'}`}>
+                  注册免费账号 →
+                </a>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>AppID（应用 ID）</label>
+                  <input
+                    type="text"
+                    value={settings.baiduAppId || ''}
+                    onChange={(e) => setBaiduConfig(e.target.value, settings.baiduSecret || '')}
+                    placeholder="例如：20240001234567"
+                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>密钥（Secret Key）</label>
+                  <input
+                    type="password"
+                    value={settings.baiduSecret || ''}
+                    onChange={(e) => setBaiduConfig(settings.baiduAppId || '', e.target.value)}
+                    placeholder="32 位密钥字符串"
+                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                    }`}
+                  />
+                </div>
+              </div>
+              <p className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                前往 <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer" className="underline underline-offset-2">fanyi-api.baidu.com</a> 注册开发者账号，创建应用后获取 AppID 与密钥，个人免费套餐每月 100 万字符。
+              </p>
+            </div>
+          )}
+
+          {/* DeepL 官方 API / 自建 DeepLX 配置（仅当 DeepL 引擎开启时显示）*/}
+          {online.deepl && (
+            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
+              isLight ? 'bg-teal-50/60 border-teal-200/80' : 'bg-teal-950/20 border-teal-500/25'
+            }`}>
+              <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-teal-900' : 'text-teal-300'}`}>
+                <span>⚡</span>
+                <span>DeepL 翻译 API 配置</span>
+                <span className={`text-[9px] font-normal px-1.5 py-0.5 rounded border ml-1 ${isLight ? 'bg-teal-100 text-teal-700 border-teal-200' : 'bg-teal-500/20 text-teal-400 border-teal-500/30'}`}>
+                  免费 · 每月 50 万字符
+                </span>
+              </div>
+              <div>
+                <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                  官方免费 API Key
+                  <a href="https://www.deepl.com/pro-api" target="_blank" rel="noreferrer"
+                    className={`ml-2 underline underline-offset-2 ${isLight ? 'text-teal-600' : 'text-teal-400'}`}>
+                    注册 →
+                  </a>
+                </label>
+                <input
+                  type="password"
+                  value={settings.deeplApiKey || ''}
+                  onChange={(e) => setDeeplConfig(e.target.value, settings.deeplCustomUrl || '')}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+                  className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 ${
+                    isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                  }`}
+                />
+              </div>
+              <div>
+                <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                  自建 DeepLX 地址（可选，优先于官方 API）
+                </label>
+                <input
+                  type="text"
+                  value={settings.deeplCustomUrl || ''}
+                  onChange={(e) => setDeeplConfig(settings.deeplApiKey || '', e.target.value)}
+                  placeholder="http://localhost:1188/translate"
+                  className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 ${
+                    isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                  }`}
+                />
+              </div>
+              <p className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                填写官方 API Key 直连 DeepL 免费通道；或填写自建 DeepLX 地址（两者都填时优先使用自建地址）。
+              </p>
+            </div>
+          )}
+
+          {/* AI 大语言模型服务配置 (LLM) */}
+          <div className={`p-5 space-y-5 rounded-2xl border transition-colors ${
+            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+          }`}>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
+                  <Bot className="h-4 w-4 text-indigo-500" />
+                  <span>AI 大语言模型服务配置 (LLM)</span>
+                </div>
+                <p className={`mt-1 text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                  支持 DeepSeek / OpenAI / 本地私有化 Ollama / 智谱 GLM / 自定义兼容接口
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-nowrap shrink-0 whitespace-nowrap">
+                <button
+                  type="button"
+                  onClick={handleFetchModels}
+                  disabled={isFetchingModels || !llm.endpoint}
+                  className={`rounded-xl border px-3.5 py-1.5 text-xs font-medium disabled:opacity-40 transition flex items-center gap-1.5 cursor-pointer ${
+                    isLight
+                      ? 'bg-slate-100 border-slate-300 text-blue-700 hover:bg-slate-200'
+                      : 'bg-zinc-800/90 border-white/10 text-blue-300 hover:bg-zinc-700 hover:text-white'
+                  }`}
+                  title="自动向 endpoint/models 发起 GET 请求拉取所有可用模型"
+                >
+                  <RotateCcw className={`h-3.5 w-3.5 ${isFetchingModels ? 'animate-spin' : ''}`} />
+                  <span>{isFetchingModels ? '拉取模型中...' : '拉取所有可用模型'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTestLlmConnection}
+                  disabled={isTestingLlm}
+                  className={`rounded-xl border px-3.5 py-1.5 text-xs font-medium disabled:opacity-40 transition flex items-center gap-1.5 cursor-pointer ${
+                    isLight
+                      ? 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-slate-200'
+                      : 'bg-zinc-800/90 border-white/[0.08] text-zinc-200 hover:bg-zinc-700 hover:text-white'
+                  }`}
+                >
+                  <span>{isTestingLlm ? '测试中...' : '测试连通性'}</span>
+                  {testLatency !== null && testSuccess && (
+                    <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/20 border border-emerald-400/30 px-1.5 py-0.2 rounded-full">
+                      {testLatency}ms
+                    </span>
+                  )}
+                  {testSuccess === false && (
+                    <span className="text-[10px] font-mono font-bold text-rose-400 bg-rose-500/20 border border-rose-400/30 px-1.5 py-0.2 rounded-full">
+                      失败
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {(testStatus || fetchModelNotice) && (
+                <span className={`self-start sm:self-center max-w-[340px] truncate text-[10px] font-mono font-semibold ${
+                  testSuccess === false || (fetchModelNotice && fetchModelNotice.includes('失败'))
+                    ? 'text-rose-400'
+                    : 'text-emerald-400'
+                }`}>
+                  {fetchModelNotice || testStatus}
+                </span>
+              )}
+            </div>
+
+            {/* 多模型配置池 */}
+            <div className={`rounded-2xl border p-4 space-y-3 ${
+              isLight ? 'bg-slate-50/80 border-slate-200' : 'bg-zinc-950/60 border-white/[0.08]'
+            }`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center space-x-2">
+                  <span className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
+                    模型配置池
+                  </span>
+                  <span className={`text-[10px] font-mono font-semibold px-2 py-0.2 rounded-full border ${
+                    isLight ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-blue-500/15 border-blue-400/30 text-blue-300'
+                  }`}>
+                    {llmPool.length} 个已保存
+                  </span>
+                  {llm.id && (
+                    <span className={`text-[10px] font-mono px-2 py-0.2 rounded-full border ${
+                      isLight ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-emerald-500/15 border-emerald-400/30 text-emerald-300'
+                    }`}>
+                      ★ 当前激活
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center space-x-1.5">
+                  {showModelPicker && (
+                    <div className={`flex items-center space-x-1 p-1 rounded-xl border ${
+                      isLight ? 'bg-white border-slate-300 shadow-xs' : 'bg-zinc-900 border-white/15 shadow-xs'
+                    }`}>
+                      {Object.keys(PROVIDER_DEFAULT_ENDPOINTS).map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => handleAddModel(p)}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-semibold transition cursor-pointer whitespace-nowrap ${
+                            isLight
+                              ? 'text-slate-600 hover:bg-blue-50 hover:text-blue-700'
+                              : 'text-zinc-300 hover:bg-blue-500/20 hover:text-blue-300'
+                          }`}
+                        >
+                          + {p}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowModelPicker(!showModelPicker)}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-xl border text-xs font-medium transition cursor-pointer ${
+                      showModelPicker
+                        ? 'bg-blue-600 text-white border-blue-400 shadow-md'
+                        : (isLight
+                            ? 'bg-white border-slate-300 text-blue-700 hover:bg-blue-50'
+                            : 'bg-zinc-800 border-white/15 text-blue-300 hover:bg-zinc-700')
+                    }`}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    添加模型
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {llmPool.map((m) => {
+                  const isActive = llm.id ? m.id === llm.id : m.provider === llm.provider && m.model === llm.model;
+                  return (
+                    <div
+                      key={m.id || `${m.provider}-${m.model}-${m.endpoint}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => m.id && setActiveLlmConfig(m.id)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && m.id) setActiveLlmConfig(m.id); }}
+                      className={`group flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-xl border text-[11px] font-medium transition-all cursor-pointer select-none ${
+                        isActive
+                          ? (isLight
+                              ? 'bg-blue-600 text-white border-blue-400 shadow-md ring-2 ring-blue-500/25'
+                              : 'bg-blue-600 text-white border-blue-400/60 shadow-md ring-2 ring-blue-500/30')
+                          : (isLight
+                              ? 'bg-white text-slate-700 border-slate-200 hover:border-blue-300 hover:bg-blue-50/60'
+                              : 'bg-zinc-900/80 text-zinc-300 border-white/10 hover:border-blue-400/40 hover:bg-zinc-800')
+                      }`}
+                      title="点击切换为激活模型"
+                    >
+                      <span className={`font-bold ${isActive ? 'text-white' : (isLight ? 'text-slate-500' : 'text-zinc-400')}`}>{m.provider}</span>
+                      <span className={`font-mono max-w-[180px] truncate ${isActive ? 'text-white/95' : 'text-blue-600'}`}>{m.model || '(未指定模型)'}</span>
+                      {!!m.apiKey && (
+                        <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-emerald-300' : 'bg-emerald-500'}`} title="已配置 API Key" />
+                      )}
+                      {llmPool.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); if (m.id) deleteLlmConfig(m.id); }}
+                          className={`p-1 rounded-lg transition cursor-pointer opacity-60 hover:opacity-100 ${
+                            isActive ? 'hover:bg-white/20 text-white' : (isLight ? 'hover:bg-rose-50 text-rose-500' : 'hover:bg-rose-500/20 text-rose-400')
+                          }`}
+                          title={isActive ? '删除当前激活模型（自动切换）' : '删除该模型'}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+                {llmPool.length === 0 && (
+                  <span className={`text-[11px] py-2 ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                    暂无已保存模型，点击右上角「添加模型」创建第一个配置。
+                  </span>
+                )}
+              </div>
+
+              <p className={`text-[10px] leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                支持 DeepSeek / OpenAI / 本地私有化 Ollama / 智谱 GLM / 自定义兼容接口。多模型一键保存切换，下方表单实时编辑当前「激活模型」，测试与拉取模型操作均针对激活模型执行。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <label className={`mb-1.5 block text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>服务提供商</label>
+                <select
+                  value={llm.provider}
+                  onChange={handleProviderChange}
+                  className={`w-full rounded-xl border px-3.5 py-2 text-xs focus:border-blue-500 focus:outline-none cursor-pointer ${
+                    isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-950/80 border-white/[0.09] text-zinc-100'
+                  }`}
+                >
+                  <option value="DeepSeek">DeepSeek (推荐·高性价比)</option>
+                  <option value="OpenAI">OpenAI (GPT-4o / GPT-4o-mini)</option>
+                  <option value="Ollama">Ollama (本地私有化大模型)</option>
+                  <option value="智谱 GLM">智谱 GLM (GLM-4-Flash)</option>
+                  <option value="Custom">自定义兼容接口 (Custom Endpoint)</option>
+                </select>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className={`block text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>
+                    模型名称 (Model Identifier)
+                  </label>
+                  {fetchedModels.length > 0 && (
+                    <span className="text-[10px] text-emerald-600 font-mono font-semibold">
+                      ✓ 已拉取 {fetchedModels.length} 个模型
+                    </span>
+                  )}
+                </div>
+
+                {fetchedModels.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <select
+                      value={llm.model}
+                      onChange={(e) => setLlmConfig({ model: e.target.value })}
+                      className={`w-full rounded-xl border px-3.5 py-2 text-xs font-mono focus:border-blue-500 focus:outline-none cursor-pointer ${
+                        isLight ? 'bg-white border-blue-300 text-blue-800 font-bold' : 'bg-zinc-950/90 border-blue-500/40 text-blue-300'
+                      }`}
+                    >
+                      {fetchedModels.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={llm.model}
+                      onChange={(e) => setLlmConfig({ model: e.target.value })}
+                      placeholder="或手动输入 Model ID"
+                      className={`w-full rounded-lg border px-3 py-1 text-[11px] focus:border-blue-500 focus:outline-none font-mono ${
+                        isLight ? 'bg-slate-50 border-slate-300 text-slate-800' : 'bg-zinc-950/60 border-white/10 text-zinc-300'
+                      }`}
+                    />
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={llm.model}
+                    onChange={(e) => setLlmConfig({ model: e.target.value })}
+                    placeholder="如 deepseek-chat, gpt-4o-mini"
+                    className={`w-full rounded-xl border px-3.5 py-2 text-xs focus:border-blue-500 focus:outline-none font-mono ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-950/80 border-white/[0.09] text-zinc-100'
+                    }`}
+                  />
+                )}
+              </div>
+
+              <div className="md:col-span-2">
+                <label className={`mb-1.5 block text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>API 接口地址 (Base URL)</label>
+                <input
+                  type="text"
+                  value={llm.endpoint}
+                  onChange={(e) => setLlmConfig({ endpoint: e.target.value })}
+                  placeholder="https://api.deepseek.com/v1"
+                  className={`w-full rounded-xl border px-3.5 py-2 text-xs focus:border-blue-500 focus:outline-none font-mono ${
+                    isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-950/80 border-white/[0.09] text-zinc-100'
+                  }`}
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className={`mb-1.5 block text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>API 密钥 (API Key)</label>
+                <div className="relative">
+                  <input
+                    type={showApiKey ? 'text' : 'password'}
+                    value={llm.apiKey}
+                    onChange={(e) => setLlmConfig({ apiKey: e.target.value })}
+                    placeholder="sk-..."
+                    className={`w-full rounded-xl border px-3.5 py-2 pr-10 text-xs focus:border-blue-500 focus:outline-none font-mono ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-950/80 border-white/[0.09] text-zinc-100'
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className={`absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer ${
+                      isLight ? 'text-slate-400 hover:text-slate-700' : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 网络诊断：区分网络问题与配置问题 */}
+        <NetworkDiagCard />
+    </>
+  );
+};
