@@ -5,7 +5,7 @@ pub use crate::models::{
     UniversalTranslationRequest, UniversalTranslationResponse, WordDetail,
 };
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Manager, State};
 
 
 // 命令按领域拆分到子模块,统一从这里 re-export,lib.rs 注册表无需感知拆分
@@ -329,7 +329,6 @@ pub fn apply_settings_side_effects(
 #[tauri::command]
 pub async fn cmd_save_settings(
     app_handle: tauri::AppHandle,
-    window: Option<tauri::WebviewWindow>,
     state: State<'_, AppState>,
     settings: AppSettings,
 ) -> Result<(), String> {
@@ -343,7 +342,8 @@ pub async fn cmd_save_settings(
         .lock()
         .map_err(|e| format!("Failed to lock settings: {}", e))?;
 
-    apply_settings_side_effects(&app_handle, window.as_ref(), &settings);
+    let main_window = app_handle.get_webview_window("main");
+    apply_settings_side_effects(&app_handle, main_window.as_ref(), &settings);
 
     *lock = settings.clone();
     save_settings_file(&app_handle, &settings);
