@@ -387,6 +387,7 @@ export interface UniversalTranslationRequest {
   targetLang: LanguageCode;
   preset?: string;
   llmConfig?: LlmConfig | null;
+  llmConfigs?: LlmConfig[];
   presetDicts?: PresetDicts;
   onlineEngines?: OnlineEngines;
   translationTiers?: string[];

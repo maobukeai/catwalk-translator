@@ -491,6 +491,39 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     };
   }, [isOpen, openInHoverMode]);
 
+  // ── 智能解析当前选中的 LLM 实例配置 ──────────────────────────────────────────
+  const resolveLlmConfig = useCallback(
+    (engine: string) => {
+      const isLlm =
+        engine.startsWith('llm:') ||
+        engine === 'llm' ||
+        engine === 'ai' ||
+        ['deepseek', 'openai', 'ollama', 'glm', 'gemini', 'claude', 'qwen', 'moonshot', 'kimi', 'custom', 'siliconflow', 'groq'].some((k) =>
+          engine.toLowerCase().includes(k)
+        ) ||
+        !!settings.llmConfigs?.some(
+          (c) => c.id === engine || `llm:${c.id}` === engine || c.model?.toLowerCase() === engine.toLowerCase()
+        );
+
+      if (!isLlm && engine !== 'auto') {
+        return null;
+      }
+
+      const targetClean = engine.startsWith('llm:') ? engine.slice(4) : engine;
+      const matched = settings.llmConfigs?.find(
+        (c) =>
+          c.id === targetClean ||
+          `llm:${c.id}` === engine ||
+          c.model?.toLowerCase() === targetClean.toLowerCase() ||
+          c.provider?.toLowerCase() === targetClean.toLowerCase() ||
+          targetClean.toLowerCase().includes(c.provider?.toLowerCase() || '') ||
+          targetClean.toLowerCase().includes(c.model?.toLowerCase() || '')
+      );
+      return matched || settings.llmConfig || null;
+    },
+    [settings]
+  );
+
   // ── Re-translate existing blocks when targetLang / engine changes ────────────
   const retranslateBlocks = useCallback(
     async (newTargetLang: LanguageCode, engine: string) => {
@@ -500,6 +533,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       try {
         let done = 0;
         const forcedEngine = engine === 'auto' ? undefined : engine;
+        const activeLlm = resolveLlmConfig(engine);
         const updatedBlocks = await Promise.all(
           overlayResult.blocks.map(async (block) => {
             const res = await cmdUniversalTranslate({
@@ -507,7 +541,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               sourceLang: 'auto',
               targetLang: newTargetLang,
               preset: engine !== 'auto' ? engine : effectivePreset(),
-              llmConfig: settings.llmConfig,
+              llmConfig: activeLlm,
+              llmConfigs: settings.llmConfigs,
               presetDicts: settings.presetDicts,
               onlineEngines: settings.onlineEngines,
               translationTiers: settings.translationTiers,
@@ -1067,8 +1102,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     // card's text in place as soon as results arrive.
     const phrases = layout.blocks.map((b) => b.original);
     const preset = selectedEngine !== 'auto' ? selectedEngine : effectivePreset();
-    const isExplicitLlm = ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k));
-    const llmConfig = isExplicitLlm ? (settings.llmConfig ?? null) : null;
+    const llmConfig = resolveLlmConfig(selectedEngine);
     const style = settings.translationStyle;
 
     try {
@@ -1133,7 +1167,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                 sourceLang: 'auto',
                 targetLang: targetLang,
                 preset,
-                llmConfig: settings.llmConfig,
+                llmConfig,
+                llmConfigs: settings.llmConfigs,
                 presetDicts: settings.presetDicts,
                 onlineEngines: settings.onlineEngines,
                 translationTiers: settings.translationTiers,
@@ -1204,8 +1239,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     const block = overlayResult.blocks[blockIndex];
     if (!block) return;
     const preset = selectedEngine !== 'auto' ? selectedEngine : effectivePreset();
-    const isExplicitLlm = ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k));
-    const llmConfig = isExplicitLlm ? (settings.llmConfig ?? null) : null;
+    const llmConfig = resolveLlmConfig(selectedEngine);
     try {
       const [tr] = await cmdTranslatePhrasesStyled([block.original], preset, llmConfig, settings.translationStyle);
       if (!mountedRef.current) return;
@@ -1767,7 +1801,14 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         : null);
 
   // 降级感知检测（仅当用户在工具栏主动切换为 AI 大模型时，若大模型失败降级才提示）
-  const isLlmEngine = ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k));
+  const isLlmEngine =
+    selectedEngine.startsWith('llm:') ||
+    ['deepseek', 'openai', 'ollama', 'glm', 'gemini', 'claude', 'qwen', 'moonshot', 'kimi', 'custom', 'siliconflow', 'groq', 'ai', 'llm'].some((k) =>
+      selectedEngine.toLowerCase().includes(k)
+    ) ||
+    !!settings.llmConfigs?.some(
+      (c) => c.id === selectedEngine || `llm:${c.id}` === selectedEngine || c.model?.toLowerCase() === selectedEngine.toLowerCase()
+    );
 
   let isDowngraded = false;
   let effectiveEngineName = '公共备用通道';

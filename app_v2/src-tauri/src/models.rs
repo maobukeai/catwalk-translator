@@ -297,6 +297,8 @@ pub struct UniversalTranslationRequest {
     pub target_lang: String,
     pub preset: Option<String>,
     pub llm_config: Option<LlmConfig>,
+    #[serde(default)]
+    pub llm_configs: Option<Vec<LlmConfig>>,
     pub preset_dicts: Option<PresetDicts>,
     pub online_engines: Option<OnlineEngines>,
     pub translation_tiers: Option<Vec<String>>,

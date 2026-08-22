@@ -2407,18 +2407,58 @@ pub async fn execute_universal_translate(
         }));
     }
 
-    // ── 8. AI 深度翻译 (DeepSeek / LLM) ────────────────────────────────────────
-    let is_llm_configured = req.llm_config.as_ref().map_or(false, |cfg| {
+    // ── 8. AI 深度翻译 (DeepSeek / LLM / Gemini / Qwen / Claude / Ollama / etc.) ──
+    let target_clean_str = forced.as_ref().map(|f| f.strip_prefix("llm:").unwrap_or(f).to_string());
+    let matched_llm_config = if let Some(target) = &target_clean_str {
+        req.llm_configs.as_ref().and_then(|configs| {
+            configs.iter().find(|c| {
+                c.id.as_deref().map_or(false, |id| id.eq_ignore_ascii_case(target))
+                    || c.model.eq_ignore_ascii_case(target)
+                    || c.provider.eq_ignore_ascii_case(target)
+                    || target.contains(&c.provider.to_lowercase())
+                    || target.contains(&c.model.to_lowercase())
+            }).cloned()
+        })
+    } else {
+        None
+    };
+
+    let active_llm_config = matched_llm_config.or_else(|| req.llm_config.clone());
+    let is_llm_configured = active_llm_config.as_ref().map_or(false, |cfg| {
         let ep = cfg.endpoint.trim();
         let is_local = ep.contains("localhost") || ep.contains("127.0.0.1");
         !ep.is_empty() && (!cfg.api_key.trim().is_empty() || is_local)
     });
-    let run_llm = forced.as_ref().map_or(false, |f| {
-        f.contains("llm") || f.contains("ai") || f.contains("deepseek") || f.contains("openai") || f.contains("ollama") || f.contains("glm") || f.contains("custom")
-    }) || (!is_forced && is_llm_configured);
+
+    let is_known_online_forced = forced.as_ref().map_or(false, |f| {
+        ["google", "bing", "youdao", "deepl", "baidu", "tencent", "mymemory", "谷歌", "有道", "微软", "百度", "腾讯"].iter().any(|k| f.contains(k))
+    });
+    let is_dict_only_forced = forced.as_ref().map_or(false, |f| {
+        ["blender", "substance", "unity", "unreal", "maya", "houdini", "dict", "preset", "词库", "词典"].iter().any(|k| f.contains(k))
+    });
+    let is_offline_only_forced = forced.as_ref().map_or(false, |f| f.contains("offline") || f.contains("离线"));
+
+    let is_explicit_llm_forced = forced.as_ref().map_or(false, |f| {
+        f.starts_with("llm")
+            || f.starts_with("ai")
+            || f.contains("model")
+            || f.contains("deepseek")
+            || f.contains("openai")
+            || f.contains("ollama")
+            || f.contains("glm")
+            || f.contains("gemini")
+            || f.contains("claude")
+            || f.contains("qwen")
+            || f.contains("moonshot")
+            || f.contains("kimi")
+            || f.contains("custom")
+            || (!is_known_online_forced && !is_dict_only_forced && !is_offline_only_forced)
+    });
+
+    let run_llm = is_explicit_llm_forced || (!is_forced && is_llm_configured);
 
     if run_llm {
-        if let Some(config) = &req.llm_config {
+        if let Some(config) = &active_llm_config {
             let c = client.clone();
             let q = trimmed.to_string();
             let tgt = actual_target.to_string();
@@ -2459,18 +2499,15 @@ pub async fn execute_universal_translate(
     // 如果传入 forced_engine，精准查找匹配引擎作为 main_translation 产物
     if let Some(target) = forced.as_ref() {
         if !target.is_empty() && target != "auto" {
+            let target_clean = target.strip_prefix("llm:").unwrap_or(target);
             let matched_idx = engines.iter().position(|e| {
                 let name = e.engine_name.to_lowercase();
                 let tier = e.source_tier.to_lowercase();
-                name.contains(target)
-                    || tier.contains(target)
-                    || (target == "dict" && tier.contains("preset"))
-                    || (target == "llm" && (tier.contains("llm") || name.contains("ai")))
-                    || (target == "openai" && (name.contains("openai") || tier.contains("llm")))
-                    || (target == "deepseek" && (name.contains("deepseek") || tier.contains("llm")))
-                    || (target == "ollama" && (name.contains("ollama") || tier.contains("llm")))
-                    || (target == "glm" && (name.contains("glm") || tier.contains("llm")))
-                    || (target == "custom" && (name.contains("custom") || tier.contains("llm")))
+                name.contains(target_clean)
+                    || tier.contains(target_clean)
+                    || (target_clean == "dict" && (tier.contains("preset") || tier.contains("dict")))
+                    || (is_explicit_llm_forced && (tier.contains("llm") || name.contains("ai") || tier.contains("ai")))
+                    || (target_clean == "llm" && (tier.contains("llm") || name.contains("ai")))
             });
 
             if let Some(idx) = matched_idx {
@@ -2754,6 +2791,7 @@ mod tests {
                 model: "deepseek-chat".to_string(),
                 endpoint: "https://api.deepseek.com/v1".to_string(),
             }),
+            llm_configs: None,
             preset_dicts: Some(crate::models::PresetDicts {
                 blender: true,
                 substance: true,
@@ -2791,6 +2829,65 @@ mod tests {
             assert!(!eng.engine_name.contains("百度"));
             assert!(!eng.translated.contains("未配置"));
         }
+    }
+
+    #[tokio::test]
+    async fn test_forced_engine_custom_llm_model_routing() {
+        let req = crate::models::UniversalTranslationRequest {
+            text: "Roughness".to_string(),
+            source_lang: "auto".to_string(),
+            target_lang: "zh-CN".to_string(),
+            preset: Some("blender".to_string()),
+            llm_config: None,
+            llm_configs: Some(vec![
+                LlmConfig {
+                    id: Some("gemini-flash".to_string()),
+                    provider: "Google Gemini".to_string(),
+                    api_key: "".to_string(),
+                    model: "gemini-1.5-flash".to_string(),
+                    endpoint: "https://generativelanguage.googleapis.com/v1beta".to_string(),
+                },
+                LlmConfig {
+                    id: Some("qwen-local".to_string()),
+                    provider: "Ollama".to_string(),
+                    api_key: "".to_string(),
+                    model: "qwen2.5:7b".to_string(),
+                    endpoint: "http://localhost:11434/v1".to_string(),
+                },
+            ]),
+            preset_dicts: Some(crate::models::PresetDicts {
+                blender: false,
+                substance: false,
+                unity: false,
+                unreal: false,
+                maya: false,
+                houdini: false,
+            }),
+            online_engines: Some(crate::models::OnlineEngines {
+                google: Some(false),
+                bing: Some(false),
+                youdao: Some(false),
+                deepl: Some(false),
+                my_memory: Some(false),
+                baidu: Some(false),
+                tencent: Some(false),
+            }),
+            translation_tiers: None,
+            style: None,
+            forced_engine: Some("llm:gemini-flash".to_string()),
+            baidu_app_id: None,
+            baidu_secret: None,
+            deepl_api_key: None,
+            deepl_custom_url: None,
+        };
+
+        let res = execute_universal_translate(req, &[]).await;
+        assert!(res.is_ok());
+        let resp = res.unwrap();
+        // Since forced_engine is gemini-flash and apiKey is empty, it returns the LLM config required prompt instead of empty error!
+        assert_eq!(resp.engines.len(), 1);
+        assert!(resp.engines[0].source_tier.starts_with("LLM"));
+        assert!(resp.engines[0].engine_name.contains("Gemini"));
     }
 }
 

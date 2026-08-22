@@ -836,6 +836,7 @@ mod tests {
             target_lang: "zh-CN".to_string(),
             preset: Some("blender".to_string()),
             llm_config: None,
+            llm_configs: None,
             preset_dicts: Some(models::PresetDicts {
                 blender: true,
                 substance: true,

@@ -400,7 +400,7 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             {enabledLlmConfigs.length > 0 && (
               <optgroup label="🤖 AI 深度翻译">
                 {enabledLlmConfigs.map((cfg) => {
-                  const val = (cfg.model || cfg.provider || cfg.id || 'deepseek').toLowerCase();
+                  const val = `llm:${cfg.id || cfg.model || cfg.provider}`.toLowerCase();
                   return (
                     <option key={cfg.id || cfg.model} value={val}>
                       {cfg.provider} ({cfg.model || '默认'})

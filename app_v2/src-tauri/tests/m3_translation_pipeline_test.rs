@@ -303,6 +303,7 @@ fn test_m3_universal_translate_forced_engine_dict_routing() {
             target_lang: "zh-CN".to_string(),
             preset: Some("blender".to_string()),
             llm_config: None,
+            llm_configs: None,
             preset_dicts: Some(app_v2_lib::models::PresetDicts {
                 blender: true,
                 substance: true,
@@ -347,6 +348,7 @@ fn test_m3_universal_translate_forced_engine_substance_routing() {
             target_lang: "zh-CN".to_string(),
             preset: Some("substance".to_string()),
             llm_config: None,
+            llm_configs: None,
             preset_dicts: Some(app_v2_lib::models::PresetDicts {
                 blender: false,
                 substance: true,
@@ -446,6 +448,7 @@ fn test_m3_universal_translate_100_percent_cards_retained() {
             target_lang: "zh-CN".to_string(),
             preset: Some("blender".to_string()),
             llm_config: None,
+            llm_configs: None,
             preset_dicts: Some(app_v2_lib::models::PresetDicts {
                 blender: true,
                 substance: false,
