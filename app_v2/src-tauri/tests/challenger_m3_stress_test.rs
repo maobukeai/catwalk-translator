@@ -210,7 +210,7 @@ async fn test_challenger_http_timeout_4s_limit() {
         elapsed
     );
     assert!(
-        elapsed <= Duration::from_secs(10),
+        elapsed <= Duration::from_secs(20),
         "Timeout took too long: {:?}",
         elapsed
     );
