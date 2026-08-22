@@ -64,6 +64,13 @@ export const HistoryPanel: React.FC = () => {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [filterFavorite, setFilterFavorite] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [visibleCount, setVisibleCount] = useState(30);
+  const [visibleClipCount, setVisibleClipCount] = useState(20);
+  const [visibleSessionCount, setVisibleSessionCount] = useState(10);
+
+  useEffect(() => {
+    setVisibleCount(30);
+  }, [searchQuery, filterFavorite]);
 
   // ── 划词回放：整场截图翻译会话 ────────────────────────────────────────────
   const [sessions, setSessions] = useState<CaptureSession[]>([]);
@@ -515,67 +522,81 @@ export const HistoryPanel: React.FC = () => {
             </p>
           </div>
         ) : (
-          filteredItems.map((item) => {
-            const box = reviewProgress[item.id]?.box;
-            return (
-              <div key={item.id} className="lg-inset p-4 flex items-center justify-between transition hover:bg-[var(--g-surface-2)]">
-                <div className="space-y-1 flex-1 pr-4 min-w-0">
-                  <div className="flex items-center space-x-3 flex-wrap">
-                    <span className="font-semibold text-base truncate">{item.original}</span>
-                    <button
-                      onClick={() => handleSpeech(item.original)}
-                      className="transition hover:opacity-70"
-                      style={{ color: "var(--g-text-3)" }}
-                    >
-                      <Volume2 className="h-4 w-4" />
-                    </button>
-                    <span className="lg-pill font-mono">{item.sourceTier}</span>
-                    {(item.isFavorite || box !== undefined) && (
-                      <span
-                        className="lg-pill"
-                        data-testid={`due-badge-${item.id}`}
-                        title={`Leitner 盒 ${box ?? 0}/5 · 间隔 ${REVIEW_INTERVAL_DAYS[Math.min(box ?? 0, 5)]} 天 · 下次复习：${nextDueText(reviewProgress, item.id)}`}
-                        style={
-                          isReviewDue(reviewProgress, item.id)
-                            ? { color: "var(--danger)", borderColor: "color-mix(in srgb, var(--danger) 40%, transparent)" }
-                            : undefined
-                        }
+          <>
+            {filteredItems.slice(0, visibleCount).map((item) => {
+              const box = reviewProgress[item.id]?.box;
+              return (
+                <div key={item.id} className="lg-inset p-4 flex items-center justify-between transition hover:bg-[var(--g-surface-2)]">
+                  <div className="space-y-1 flex-1 pr-4 min-w-0">
+                    <div className="flex items-center space-x-3 flex-wrap">
+                      <span className="font-semibold text-base truncate">{item.original}</span>
+                      <button
+                        onClick={() => handleSpeech(item.original)}
+                        className="transition hover:opacity-70"
+                        style={{ color: "var(--g-text-3)" }}
                       >
-                        <GraduationCap className="h-3 w-3" />
-                        {nextDueText(reviewProgress, item.id)}
-                        {box !== undefined ? ` · 盒 ${box}` : ""}
-                      </span>
-                    )}
+                        <Volume2 className="h-4 w-4" />
+                      </button>
+                      <span className="lg-pill font-mono">{item.sourceTier}</span>
+                      {(item.isFavorite || box !== undefined) && (
+                        <span
+                          className="lg-pill"
+                          data-testid={`due-badge-${item.id}`}
+                          title={`Leitner 盒 ${box ?? 0}/5 · 间隔 ${REVIEW_INTERVAL_DAYS[Math.min(box ?? 0, 5)]} 天 · 下次复习：${nextDueText(reviewProgress, item.id)}`}
+                          style={
+                            isReviewDue(reviewProgress, item.id)
+                              ? { color: "var(--danger)", borderColor: "color-mix(in srgb, var(--danger) 40%, transparent)" }
+                              : undefined
+                          }
+                        >
+                          <GraduationCap className="h-3 w-3" />
+                          {nextDueText(reviewProgress, item.id)}
+                          {box !== undefined ? ` · 盒 ${box}` : ""}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm font-bold" style={{ color: isLight ? "#059669" : "#34d399" }}>{item.translated}</p>
+                    <div className="flex items-center space-x-2 text-[11px]" style={{ color: "var(--g-text-3)" }}>
+                      <Clock className="h-3 w-3" />
+                      <span>{item.timestamp}</span>
+                    </div>
                   </div>
-                  <p className="text-sm font-bold" style={{ color: isLight ? "#059669" : "#34d399" }}>{item.translated}</p>
-                  <div className="flex items-center space-x-2 text-[11px]" style={{ color: "var(--g-text-3)" }}>
-                    <Clock className="h-3 w-3" />
-                    <span>{item.timestamp}</span>
+
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <button
+                      onClick={() => handleToggleFav(item.id)}
+                      className="lg-btn lg-btn-ghost !p-2"
+                      style={item.isFavorite ? { color: "var(--warn)", background: "color-mix(in srgb, var(--warn) 14%, transparent)" } : undefined}
+                      title={item.isFavorite ? "从生词本移除" : "加入生词本"}
+                    >
+                      <Star className={`h-4 w-4 ${item.isFavorite ? "fill-current" : ""}`} />
+                    </button>
+
+                    <button
+                      onClick={() => handleDelete(item.id)}
+                      className="lg-btn lg-btn-ghost !p-2"
+                      style={{ color: "var(--danger)" }}
+                      title="删除该条记录"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
                 </div>
+              );
+            })}
 
-                <div className="flex items-center space-x-2 shrink-0">
-                  <button
-                    onClick={() => handleToggleFav(item.id)}
-                    className="lg-btn lg-btn-ghost !p-2"
-                    style={item.isFavorite ? { color: "var(--warn)", background: "color-mix(in srgb, var(--warn) 14%, transparent)" } : undefined}
-                    title={item.isFavorite ? "从生词本移除" : "加入生词本"}
-                  >
-                    <Star className={`h-4 w-4 ${item.isFavorite ? "fill-current" : ""}`} />
-                  </button>
-
-                  <button
-                    onClick={() => handleDelete(item.id)}
-                    className="lg-btn lg-btn-ghost !p-2"
-                    style={{ color: "var(--danger)" }}
-                    title="删除该条记录"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
+            {filteredItems.length > visibleCount && (
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((prev) => prev + 30)}
+                  className="lg-btn lg-btn-ghost text-xs px-5 py-2 hover:bg-[var(--g-surface-2)] transition cursor-pointer"
+                >
+                  加载更多记录 (还有 {filteredItems.length - visibleCount} 条)
+                </button>
               </div>
-            );
-          })
+            )}
+          </>
         )}
       </div>
 
@@ -613,7 +634,7 @@ export const HistoryPanel: React.FC = () => {
           </p>
         ) : (
           <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1 scrollbar-thin">
-            {clipHistory.map((entry, idx) => (
+            {clipHistory.slice(0, visibleClipCount).map((entry, idx) => (
               <div
                 key={`${entry.atMs}_${idx}`}
                 className="rounded-lg border px-3 py-2 text-xs"
@@ -640,6 +661,18 @@ export const HistoryPanel: React.FC = () => {
                 <div className="mt-0.5 font-bold truncate">{entry.translated}</div>
               </div>
             ))}
+            {clipHistory.length > visibleClipCount && (
+              <div className="text-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => setVisibleClipCount((prev) => prev + 20)}
+                  className="text-[11px] font-medium px-3 py-1 rounded hover:bg-[var(--g-surface-2)] transition cursor-pointer"
+                  style={{ color: "var(--g-text-3)" }}
+                >
+                  查看更多剪贴板记录 (还有 {clipHistory.length - visibleClipCount} 条)
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -669,7 +702,7 @@ export const HistoryPanel: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-2 pt-3">
-            {sessions.map((session) => (
+            {sessions.slice(0, visibleSessionCount).map((session) => (
               <div
                 key={session.id}
                 className="lg-inset flex items-center justify-between gap-3 p-3 cursor-pointer transition group hover:border-[var(--g-border-strong)]"
@@ -699,6 +732,18 @@ export const HistoryPanel: React.FC = () => {
                 </span>
               </div>
             ))}
+            {sessions.length > visibleSessionCount && (
+              <div className="text-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => setVisibleSessionCount((prev) => prev + 10)}
+                  className="text-[11px] font-medium px-3 py-1 rounded hover:bg-[var(--g-surface-2)] transition cursor-pointer"
+                  style={{ color: "var(--g-text-3)" }}
+                >
+                  查看更多回放记录 (还有 {sessions.length - visibleSessionCount} 场)
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -272,3 +272,65 @@ pub async fn cmd_get_app_info() -> Result<AppInfo, String> {
         repo_url: format!("https://github.com/{}/{}", GITHUB_OWNER, GITHUB_REPO),
     })
 }
+
+#[tauri::command]
+pub fn cmd_open_external_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("open").arg(&url).spawn();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cmd_download_and_install_update(
+    app: tauri::AppHandle,
+    url: String,
+) -> Result<String, String> {
+    if url.trim().is_empty() {
+        return Err("下载地址为空".to_string());
+    }
+
+    let client = build_update_client().map_err(|e| format!("创建下载客户端失败: {e}"))?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("请求安装包失败: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "下载服务器返回 HTTP {}",
+            response.status().as_u16()
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("读取安装包数据失败: {e}"))?;
+    let temp_installer = std::env::temp_dir().join("MaobuTranslator_Setup_Update.exe");
+    std::fs::write(&temp_installer, bytes).map_err(|e| format!("保存安装包到临时目录失败: {e}"))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new(&temp_installer)
+            .spawn()
+            .map_err(|e| format!("启动安装程序失败: {e}"))?;
+    }
+
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(800));
+        crate::translator::shared_pipeline().cache.save_to_disk();
+        app_clone.exit(0);
+    });
+
+    Ok(temp_installer.to_string_lossy().to_string())
+}

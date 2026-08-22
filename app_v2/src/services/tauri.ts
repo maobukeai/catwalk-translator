@@ -1674,6 +1674,36 @@ export async function cmdGetAppInfo(): Promise<AppInfo> {
   };
 }
 
+export async function cmdOpenExternalUrl(url: string): Promise<void> {
+  if (isTauri()) {
+    try {
+      await invoke('cmd_open_external_url', { url });
+      return;
+    } catch {
+      try {
+        const { openUrl } = await import('@tauri-apps/plugin-opener');
+        await openUrl(url);
+        return;
+      } catch (err) {
+        console.warn('Failed to open external url with opener:', err);
+      }
+    }
+  }
+  try {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch (err) {
+    console.warn('Fallback window.open failed:', err);
+  }
+}
+
+export async function cmdDownloadAndInstallUpdate(url: string): Promise<string> {
+  if (isTauri()) {
+    return await invoke<string>('cmd_download_and_install_update', { url });
+  }
+  console.log('[Browser Mode] cmdDownloadAndInstallUpdate:', url);
+  return 'mock_installer.exe';
+}
+
 
 // ── 备份与同步（backup.rs / webdav.rs）──
 

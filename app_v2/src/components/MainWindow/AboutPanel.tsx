@@ -22,7 +22,14 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { useAppTheme } from "../../hooks/useAppTheme";
-import { cmdCheckAppUpdate, cmdGetAppInfo, type AppInfo, type UpdateCheckResult } from "../../services/tauri";
+import {
+  cmdCheckAppUpdate,
+  cmdGetAppInfo,
+  cmdOpenExternalUrl,
+  cmdDownloadAndInstallUpdate,
+  type AppInfo,
+  type UpdateCheckResult,
+} from "../../services/tauri";
 import appIcon from "../../assets/app_icon_v2.png";
 import { APP_VERSION } from "../../version";
 import contactQr from "../../assets/contact_qr.webp";
@@ -105,6 +112,8 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
+  const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,10 +128,34 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
   }, []);
 
   const openLink = (url: string) => {
+    void cmdOpenExternalUrl(url);
+  };
+
+  const handleInAppUpdate = async () => {
+    if (!updateResult?.latest) return;
+    const assets = updateResult.latest.assets || [];
+    // 优先选择 Windows 安装包 (.exe)
+    const setupAsset =
+      assets.find((a) => a.name.toLowerCase().endsWith("-setup.exe") || a.name.toLowerCase().endsWith(".exe")) ||
+      assets[0];
+
+    const targetUrl = setupAsset?.url || updateResult.latest.download_url;
+    if (!targetUrl || !targetUrl.startsWith("http")) {
+      openLink(updateResult.latest.download_url);
+      return;
+    }
+
+    setIsDownloadingUpdate(true);
+    setDownloadStatus("正在下载新版本安装包并准备覆盖升级...");
     try {
-      window.open(url, "_blank");
-    } catch {
-      // fallback
+      await cmdDownloadAndInstallUpdate(targetUrl);
+      setDownloadStatus("安装程序已启动，正在关闭当前应用进行升级...");
+    } catch (err) {
+      setDownloadStatus(null);
+      alert(`软件内自动下载失败: ${err}\n已为您打开浏览器下载页面。`);
+      openLink(updateResult.latest.download_url);
+    } finally {
+      setIsDownloadingUpdate(false);
     }
   };
 
@@ -384,14 +417,35 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
                         </p>
                       )}
 
-                      <button
-                        type="button"
-                        onClick={() => openLink(updateResult.latest?.download_url || "https://github.com/maobukeai/catwalk-translator/releases")}
-                        className="w-full py-1 text-center font-semibold rounded bg-blue-600 hover:bg-blue-500 text-white shadow-sm transition flex items-center justify-center space-x-1 cursor-pointer"
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                        <span>前往 GitHub 下载更新</span>
-                      </button>
+                      <div className="space-y-1.5 pt-1">
+                        <button
+                          type="button"
+                          disabled={isDownloadingUpdate}
+                          onClick={handleInAppUpdate}
+                          className="w-full py-1.5 text-center font-bold text-xs rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-md hover:shadow transition flex items-center justify-center space-x-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {isDownloadingUpdate ? (
+                            <>
+                              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                              <span>{downloadStatus || "正在下载更新包..."}</span>
+                            </>
+                          ) : (
+                            <>
+                              <Download className="h-3.5 w-3.5" />
+                              <span>⚡ 软件内一键下载并升级</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => openLink(updateResult.latest?.download_url || "https://github.com/maobukeai/catwalk-translator/releases")}
+                          className="w-full py-1 text-center font-medium text-[10.5px] rounded bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30 transition flex items-center justify-center space-x-1 cursor-pointer"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          <span>在浏览器中打开 GitHub Release</span>
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <div className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">

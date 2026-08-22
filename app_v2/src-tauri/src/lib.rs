@@ -700,6 +700,8 @@ pub fn run() {
             webdav::cmd_webdav_delete,
             updater::cmd_check_app_update,
             updater::cmd_get_app_info,
+            updater::cmd_open_external_url,
+            updater::cmd_download_and_install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
