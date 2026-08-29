@@ -32,6 +32,7 @@ import { matchesHotkey } from '../../services/hotkeys';
 import { speakText } from "../../services/tts";
 import { resolveAABBCollisions } from '../../services/overlayLayout';
 import { detectSpeechLang } from '../../services/langDetect';
+import { buildCaptureEngineChoices, flattenCaptureEngineChoices } from '../../services/engineOptions';
 import type { OverlayBlock, OverlayResult, LanguageCode, TranslationResult } from '../../services/types';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { CheatSheetModal } from './CheatSheetModal';
@@ -212,6 +213,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
   // ── Double-click snap busy indicator.
   const [snapping, setSnapping] = useState(false);
+  // mousemove 高频路径读取 snapping 用 ref，避免把它加进 onMouseMove 依赖
+  const snappingRef = useRef(false);
 
   // ── Cheat sheet modal (?/F1).
   const [cheatOpen, setCheatOpen] = useState(false);
@@ -432,6 +435,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       adjustStartRef.current = null;
       setPendingRects([]);
       setSnapping(false);
+      snappingRef.current = false;
       setCheatOpen(false);
       cheatOpenRef.current = false;
       setActionToast(null);
@@ -813,12 +817,14 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         }
 
         // Tab / Shift+Tab: cycle AI model / translation engine both ways
+        // 轮播列表与设置页下拉、工具栏下拉同源（services/engineOptions），按当前配置动态生成
         if (e.key === 'Tab') {
           e.preventDefault();
-          const engines = ['auto', 'deepseek', 'openai', 'ollama', 'custom', 'google', 'bing', 'blender'];
-          const currIdx = engines.indexOf(selectedEngine);
+          const engines = flattenCaptureEngineChoices(buildCaptureEngineChoices(settings));
+          const found = engines.findIndex((o) => o.value === selectedEngine);
+          const currIdx = found === -1 ? 0 : found;
           const dir = e.shiftKey ? -1 : 1;
-          const nextEngine = engines[(currIdx + dir + engines.length) % engines.length];
+          const nextEngine = engines[(currIdx + dir + engines.length) % engines.length].value;
           handleEngineChange(nextEngine);
           return;
         }
@@ -972,7 +978,11 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     const x = Math.max(0, Math.min(e.clientX - r.left, r.width));
     const y = Math.max(0, Math.min(e.clientY - r.top, r.height));
 
-    setCursorPos({ x, y });
+    // cursorPos 只有吸附放大镜在消费：仅在 snapping 时 setState，
+    // 避免普通移动时每次 mousemove 都重渲整棵 overlay（含全部译文卡片）。
+    if (snappingRef.current) {
+      setCursorPos({ x, y });
+    }
 
     // 绘制标注中
     if (drawingAnnotationRef.current) {
@@ -1698,6 +1708,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     }
 
     setSnapping(true);
+    snappingRef.current = true;
     try {
       const snapped = await cmdSnapRegion(
         lx,
@@ -1723,6 +1734,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     } catch (err) {
       console.warn('[CaptureOverlay] Snap failed:', err);
     } finally {
+      snappingRef.current = false;
       if (mountedRef.current) setSnapping(false);
     }
   }, [phase, isDragging, scaleFactor, processSelection, adjustRect]);
@@ -1759,6 +1771,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     setActiveTool(null);
     setOcrModalText(null);
     setSnapping(false);
+    snappingRef.current = false;
     setCheatOpen(false);
     cheatOpenRef.current = false;
     setActionToast(null);
@@ -2409,22 +2422,22 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           }
         >
           <div
-            className={`flex items-center gap-3 border rounded-2xl px-5 py-2.5 shadow-2xl backdrop-blur-xl transition-all duration-200 ${
+            className={`flex items-center gap-2.5 border rounded-2xl px-4 py-2 shadow-xl backdrop-blur-xl transition-all duration-200 ${
               isLight
-                ? 'bg-white/95 border-sky-400/60 text-slate-800 shadow-sky-500/15'
-                : 'bg-slate-950/90 border-sky-400/50 text-white shadow-sky-500/25 ring-1 ring-white/10'
+                ? 'bg-white/45 border-white/60 text-slate-800 shadow-sky-500/10 ring-1 ring-black/5'
+                : 'bg-slate-950/45 border-white/15 text-white shadow-black/40 ring-1 ring-white/10'
             }`}
           >
             {/* 脉冲星芒 AI 图标 */}
-            <div className="relative flex items-center justify-center w-5 h-5 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-70" />
-              <svg className="relative w-4 h-4 text-sky-400 animate-spin" viewBox="0 0 24 24" fill="none">
+            <div className="relative flex items-center justify-center w-4 h-4 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-60" />
+              <svg className="relative w-3.5 h-3.5 text-sky-500 animate-spin" viewBox="0 0 24 24" fill="none">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                <path className="opacity-85" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
             </div>
 
-            <span className="font-semibold text-xs tracking-wide bg-gradient-to-r from-sky-400 via-blue-400 to-indigo-400 bg-clip-text text-transparent" data-testid="processing-label">
+            <span className="font-bold text-xs tracking-wide bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 dark:from-sky-300 dark:via-blue-300 dark:to-indigo-300 bg-clip-text text-transparent" data-testid="processing-label">
               ✨ 正在极速识别并翻译…
             </span>
 
@@ -2432,10 +2445,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               type="button"
               data-testid="cancel-processing-btn"
               onClick={() => cancelProcessing()}
-              className={`ml-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition cursor-pointer flex items-center gap-1 ${
+              className={`ml-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border transition cursor-pointer flex items-center gap-1 backdrop-blur-sm ${
                 isLight
-                  ? 'border-slate-300 text-slate-600 hover:bg-red-50 hover:text-red-600 hover:border-red-300'
-                  : 'border-white/15 text-zinc-300 hover:bg-rose-950/50 hover:text-rose-300 hover:border-rose-500/40'
+                  ? 'bg-white/50 border-black/10 text-slate-700 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-300'
+                  : 'bg-white/10 border-white/15 text-zinc-200 hover:bg-rose-950/60 hover:text-rose-300 hover:border-rose-500/40'
               }`}
               title="取消本次识别（回到选区）"
             >
@@ -2459,12 +2472,16 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       {/* ── Region-watch live indicator ─────────────────────────────────────── */}
       {phase === 'overlay' && watchMode && !translatingProgress && (
         <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[240] pointer-events-none animate-fade-in">
-          <div className="flex items-center gap-2.5 rounded-full border border-emerald-400/40 bg-slate-900/85 backdrop-blur-md px-4 py-1.5 shadow-2xl">
+          <div className={`flex items-center gap-2.5 rounded-full border px-4 py-1.5 shadow-xl backdrop-blur-xl ${
+            isLight
+              ? 'border-emerald-400/40 bg-white/55 text-emerald-700 shadow-emerald-500/10 ring-1 ring-black/5'
+              : 'border-emerald-400/30 bg-slate-900/60 text-emerald-300 shadow-black/40 ring-1 ring-white/10'
+          }`}>
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
             </span>
-            <span className="text-xs font-semibold text-emerald-300 font-mono">
+            <span className="text-xs font-bold font-mono">
               🔄 区域监控中 · 每 {watchIntervalSec}s 自动重译
             </span>
           </div>
@@ -2474,12 +2491,16 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       {/* ── Stage-2 non-blocking progress chip (translations streaming in) ────── */}
       {phase === 'overlay' && translatingProgress && (
         <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[240] pointer-events-none animate-fade-in">
-          <div className="flex items-center gap-2.5 rounded-full border border-sky-400/40 bg-slate-900/85 backdrop-blur-md px-4 py-1.5 shadow-2xl">
+          <div className={`flex items-center gap-2.5 rounded-full border px-4 py-1.5 shadow-xl backdrop-blur-xl ${
+            isLight
+              ? 'border-sky-400/40 bg-white/55 text-sky-700 shadow-sky-500/10 ring-1 ring-black/5'
+              : 'border-sky-400/30 bg-slate-900/60 text-sky-200 shadow-black/40 ring-1 ring-white/10'
+          }`}>
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-400" />
             </span>
-            <span className="text-xs font-semibold text-sky-200 font-mono">
+            <span className="text-xs font-bold font-mono">
               译文接管中 {translatingProgress.done}/{translatingProgress.total}
             </span>
           </div>
@@ -2489,7 +2510,11 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       {/* ── Feedback Toast (Copy / Pin / Voice actions) ────────────────────────── */}
       {feedbackToast && (
         <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[250] pointer-events-none animate-fade-in">
-          <div className="flex items-center gap-2 bg-slate-900/95 border border-sky-400/50 rounded-full px-4 py-1.5 shadow-2xl text-xs font-semibold text-sky-200 backdrop-blur-md">
+          <div className={`flex items-center gap-2 border rounded-full px-4 py-1.5 shadow-xl text-xs font-bold backdrop-blur-xl ${
+            isLight
+              ? 'bg-white/60 border-sky-400/40 text-slate-800 shadow-sky-500/10 ring-1 ring-black/5'
+              : 'bg-slate-900/60 border-sky-400/30 text-sky-200 shadow-black/40 ring-1 ring-white/10'
+          }`}>
             <span>{feedbackToast}</span>
           </div>
         </div>

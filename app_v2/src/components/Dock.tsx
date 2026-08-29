@@ -87,6 +87,59 @@ export const Dock: React.FC<DockProps> = ({
     else if (id === "cheatsheet") onOpenCheatSheet();
   };
 
+  const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [indicatorStyle, setIndicatorStyle] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    visible: boolean;
+  }>(() => {
+    const activeIndex = DOCK_ITEMS.findIndex((item) => item.id === activeTab);
+    return {
+      left: activeIndex >= 0 ? 14 + activeIndex * (42 + 7) : 14,
+      top: 8,
+      width: 42,
+      height: 42,
+      visible: activeIndex >= 0,
+    };
+  });
+
+  const updateIndicator = () => {
+    const activeEl = itemRefs.current[activeTab];
+    if (activeEl) {
+      setIndicatorStyle({
+        left: activeEl.offsetLeft,
+        top: activeEl.offsetTop,
+        width: activeEl.offsetWidth || 42,
+        height: activeEl.offsetHeight || 42,
+        visible: true,
+      });
+    } else {
+      const activeIndex = DOCK_ITEMS.findIndex((item) => item.id === activeTab);
+      if (activeIndex >= 0) {
+        setIndicatorStyle({
+          left: 14 + activeIndex * (42 + 7),
+          top: 8,
+          width: 42,
+          height: 42,
+          visible: true,
+        });
+      } else {
+        setIndicatorStyle((prev) => ({ ...prev, visible: false }));
+      }
+    }
+  };
+
+  useEffect(() => {
+    updateIndicator();
+  }, [activeTab]);
+
+  useEffect(() => {
+    window.addEventListener("resize", updateIndicator);
+    return () => window.removeEventListener("resize", updateIndicator);
+  }, [activeTab]);
+
   return (
     <div ref={dockRef} className="relative">
       {/* 右键快捷菜单（悬浮于 Dock 上方） */}
@@ -119,6 +172,20 @@ export const Dock: React.FC<DockProps> = ({
           setMenuOpen((v) => !v);
         }}
       >
+        {/* 丝滑滑动高亮滑块与底部光点 */}
+        <div
+          className="dock-indicator"
+          style={{
+            transform: `translate3d(${indicatorStyle.left}px, ${indicatorStyle.top}px, 0)`,
+            width: `${indicatorStyle.width}px`,
+            height: `${indicatorStyle.height}px`,
+            opacity: indicatorStyle.visible ? 1 : 0,
+          }}
+          aria-hidden
+        >
+          <span className="dock-dot" />
+        </div>
+
         {DOCK_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -126,6 +193,9 @@ export const Dock: React.FC<DockProps> = ({
           return (
             <button
               key={item.id}
+              ref={(el) => {
+                itemRefs.current[item.id] = el;
+              }}
               type="button"
               onClick={() => onTabChange(item.id)}
               data-active={isActive}
@@ -134,7 +204,6 @@ export const Dock: React.FC<DockProps> = ({
               aria-current={isActive ? "page" : undefined}
             >
               <Icon className="h-[19px] w-[19px]" strokeWidth={isActive ? 2.2 : 1.9} />
-              <span className="dock-dot" />
               <span className="dock-tip">
                 {item.label}
                 {tip && <kbd>{tip}</kbd>}

@@ -887,7 +887,13 @@ impl MultiTierPipeline {
             req = req.header("Authorization", format!("Bearer {}", config.api_key));
         }
 
-        let res = tokio::time::timeout(Duration::from_secs(4), req.send())
+        // 批量行数越多，非流式生成的耗时越长：固定 4s 会让几十行的大批量整包
+        // 超时塌落到逐行在线兜底（更慢且质量更差）。按 4s 基础 + 每行 400ms 缩放，
+        // 上限 24s。
+        let llm_timeout = Duration::from_secs(
+            (4u64 + (phrases.len() as u64) * 400 / 1000).min(24)
+        );
+        let res = tokio::time::timeout(llm_timeout, req.send())
             .await
             .map_err(|_| "LLM request timed out".to_string())?
             .map_err(|e| format!("LLM network error: {}", e))?;

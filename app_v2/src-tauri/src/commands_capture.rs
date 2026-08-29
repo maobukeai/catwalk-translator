@@ -141,12 +141,14 @@ fn region_ocr_layout(
     // 5.5 Drop obvious OCR noise before clustering: detection-only boxes fired
     // on texture/shadow carry near-zero recognition probability. Real text from
     // every engine (WinRT 0.99 / daemon ≥0.9 default / ONNX real CTC probs)
-    // stays far above this threshold.
+    // stays far above this threshold. 物理高度 <6px 的框必是误检——真实文本
+    // 在任何缩放下都不可能低于该值，进 rec/聚类只会产出乱码。
     const MIN_OCR_CONFIDENCE: f32 = 0.35;
+    const MIN_OCR_BLOCK_HEIGHT: u32 = 6;
     let confident_blocks: Vec<TextBlock> = ocr_result
         .blocks
         .into_iter()
-        .filter(|b| b.confidence >= MIN_OCR_CONFIDENCE)
+        .filter(|b| b.confidence >= MIN_OCR_CONFIDENCE && b.box_rect.height >= MIN_OCR_BLOCK_HEIGHT)
         .collect();
 
     // 5.6 内容过滤:命中规则的块(时间戳/纯数字/水印)整块剔除,不进翻译
@@ -284,7 +286,13 @@ pub async fn cmd_region_ocr_layout(
         .ok()
         .and_then(|s| Some((s.ocr_engine.clone(), ocr_filter_from_settings(&s))))
         .unwrap_or((None, None));
-    let blocks = region_ocr_layout(selection, scale_factor, overlay_width, overlay_height, ocr_engine, ocr_filter)?;
+    // OCR 是 CPU 密集的同步推理：放进 blocking 线程池，避免卡死 tokio worker
+    //（否则 watch tick、翻译 HTTP 等并发任务都会被一起拖住）。
+    let blocks = tauri::async_runtime::spawn_blocking(move || {
+        region_ocr_layout(selection, scale_factor, overlay_width, overlay_height, ocr_engine, ocr_filter)
+    })
+    .await
+    .map_err(|e| format!("OCR task join failed: {}", e))??;
     Ok(OverlayResult {
         blocks,
         selection_x: selection.x as f64,
@@ -490,8 +498,12 @@ pub async fn cmd_region_ocr_translate(
         .ok()
         .and_then(|s| Some((s.ocr_engine.clone(), ocr_filter_from_settings(&s))))
         .unwrap_or((None, None));
-    // Stage 1: OCR + layout + colors
-    let mut overlay_blocks = region_ocr_layout(selection, scale_factor, overlay_width, overlay_height, ocr_engine, ocr_filter)?;
+    // Stage 1: OCR + layout + colors（同步 CPU 推理 → blocking 线程池，不卡 runtime）
+    let mut overlay_blocks = tauri::async_runtime::spawn_blocking(move || {
+        region_ocr_layout(selection, scale_factor, overlay_width, overlay_height, ocr_engine, ocr_filter)
+    })
+    .await
+    .map_err(|e| format!("OCR task join failed: {}", e))??;
     if overlay_blocks.is_empty() {
         return Ok(OverlayResult {
             blocks: vec![],
@@ -948,7 +960,8 @@ pub async fn cmd_watch_tick(
             });
         }
         let hwnd_raw = window.hwnd().map_err(|e| format!("hwnd: {}", e))?;
-        crate::capture::refresh_capture_region_quietly(hwnd_raw.0 as isize, phys)?;
+        // HWND 内含裸指针非 Send：先转成 isize 再移入 blocking 闭包
+        let hwnd_isize = hwnd_raw.0 as isize;
 
         let (ocr_engine, ocr_filter) = state
         .settings
@@ -956,7 +969,13 @@ pub async fn cmd_watch_tick(
         .ok()
         .and_then(|s| Some((s.ocr_engine.clone(), ocr_filter_from_settings(&s))))
         .unwrap_or((None, None));
-        let blocks = region_ocr_layout(selection, scale_factor, overlay_width, overlay_height, ocr_engine, ocr_filter)?;
+        // 安静刷新(GDI BitBlt) + stage-1 OCR 都是同步阻塞操作 → blocking 线程池
+        let blocks = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<OverlayBlock>, String> {
+            crate::capture::refresh_capture_region_quietly(hwnd_isize, phys)?;
+            region_ocr_layout(selection, scale_factor, overlay_width, overlay_height, ocr_engine, ocr_filter)
+        })
+        .await
+        .map_err(|e| format!("watch tick join failed: {}", e))??;
         Ok(OverlayResult {
             blocks,
             selection_x: selection.x as f64,
@@ -1005,19 +1024,27 @@ pub async fn cmd_capture_and_ocr(
             height: ((selection.height as f64 * sf_y).round() as u32).min(bmp_h),
         };
 
-        if let Some(cropped) = crate::ocr::crop_bmp(&bmp_data, bmp_w, bmp_h, phys) {
-            if let Ok(ocr_res) = crate::ocr::execute_native_ocr(&cropped) {
-                if !ocr_res.blocks.is_empty() {
-                    let lines = LineClusterer::cluster_into_lines(ocr_res.blocks, 8.0);
-                    let merged_blocks: Vec<TextBlock> = lines
-                        .into_iter()
-                        .filter(|line| !line.is_empty())
-                        .map(|line| WordMerger::merge_line(line, 20.0))
-                        .filter(|b| !b.text.trim().is_empty())
-                        .collect();
-                    return Ok(OcrResult { blocks: merged_blocks });
-                }
+        // Crop + OCR + 行聚类为同步 CPU 工作 → blocking 线程池（None = 未识别到，走底部 fixture）
+        let cropped_line_result = tauri::async_runtime::spawn_blocking(move || {
+            let cropped = crate::ocr::crop_bmp(&bmp_data, bmp_w, bmp_h, phys)?;
+            let ocr_res = crate::ocr::execute_native_ocr(&cropped).ok()?;
+            if ocr_res.blocks.is_empty() {
+                return None;
             }
+            let lines = LineClusterer::cluster_into_lines(ocr_res.blocks, 8.0);
+            let merged_blocks: Vec<TextBlock> = lines
+                .into_iter()
+                .filter(|line| !line.is_empty())
+                .map(|line| WordMerger::merge_line(line, 20.0))
+                .filter(|b| !b.text.trim().is_empty())
+                .collect();
+            Some(OcrResult { blocks: merged_blocks })
+        })
+        .await
+        .map_err(|e| format!("OCR task join failed: {}", e))?;
+
+        if let Some(result) = cropped_line_result {
+            return Ok(result);
         }
     }
 

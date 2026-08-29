@@ -440,7 +440,7 @@ pub fn execute_winrt_ocr(crop_bmp_bytes: &[u8]) -> Result<OcrResult, String> {
     Ok(OcrResult { blocks })
 }
 
-fn clean_ocr_text(raw: &str) -> String {
+pub(crate) fn clean_ocr_text(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return String::new();

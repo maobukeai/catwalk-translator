@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   Square,
   MoveUpRight,
@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import type { LanguageCode, AppSettings } from '../../services/types';
 import { useSettingsStore } from '../../stores/useSettingsStore';
+import { buildCaptureEngineChoices } from '../../services/engineOptions';
 
 export type AnnotationTool = 'rect' | 'arrow' | 'pen' | 'mosaic' | 'text' | null;
 
@@ -136,19 +137,8 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
   const storeSettings = useSettingsStore((s) => s.settings);
   const effectiveSettings = settingsProp || storeSettings;
 
-  const enabledLlmConfigs = (effectiveSettings.llmConfigs || []).filter(
-    (cfg) => !!cfg.apiKey?.trim() || cfg.endpoint?.includes('localhost') || cfg.endpoint?.includes('127.0.0.1')
-  );
-
-  const onlineEnginesList = [
-    { key: 'google', label: 'Google 翻译', enabled: effectiveSettings.onlineEngines?.google ?? true },
-    { key: 'bing', label: '微软 Bing 翻译', enabled: effectiveSettings.onlineEngines?.bing ?? true },
-    { key: 'youdao', label: '网易有道翻译', enabled: effectiveSettings.onlineEngines?.youdao ?? true },
-    { key: 'deepl', label: 'DeepL 极速翻译', enabled: !!effectiveSettings.onlineEngines?.deepl },
-    { key: 'baidu', label: '百度通用翻译', enabled: !!effectiveSettings.onlineEngines?.baidu },
-    { key: 'myMemory', label: 'MyMemory 记忆库', enabled: !!effectiveSettings.onlineEngines?.myMemory },
-    { key: 'tencent', label: '腾讯交互翻译', enabled: !!effectiveSettings.onlineEngines?.tencent },
-  ].filter((item) => item.enabled);
+  // 与设置页下拉 / Tab 轮播同源：按当前配置动态生成 LLM 模型池 + 已开启在线引擎/词库
+  const engineChoices = useMemo(() => buildCaptureEngineChoices(effectiveSettings), [effectiveSettings]);
 
   return (
     <div
@@ -387,39 +377,23 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             ))}
           </select>
 
-          {/* 引擎选择极简下拉框 */}
+          {/* 引擎选择极简下拉框（选项 = 设置中的模型池 + 已开启引擎/词库，与设置页同源） */}
           <select
             value={selectedEngine}
             onChange={(e) => onSelectEngine?.(e.target.value)}
             className="bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/60 dark:border-slate-700/60 rounded-lg text-[11px] px-2 py-1 font-medium text-slate-700 dark:text-slate-200 outline-none cursor-pointer hover:border-sky-400 transition shrink-0 max-w-[155px]"
             title="切换翻译引擎 (Tab)"
           >
-            <option value="auto">⚡ 默认多级队列 (智能回退)</option>
-
-            {/* 🤖 AI 深度翻译（仅展示已配置/启用的模型） */}
-            {enabledLlmConfigs.length > 0 && (
-              <optgroup label="🤖 AI 深度翻译">
-                {enabledLlmConfigs.map((cfg) => {
-                  const val = `llm:${cfg.id || cfg.model || cfg.provider}`.toLowerCase();
-                  return (
-                    <option key={cfg.id || cfg.model} value={val}>
-                      {cfg.provider} ({cfg.model || '默认'})
-                    </option>
-                  );
-                })}
-              </optgroup>
-            )}
-
-            {/* 🌐 在线翻译通道（仅展示已开启的引擎） */}
-            {onlineEnginesList.length > 0 && (
-              <optgroup label="🌐 在线翻译通道">
-                {onlineEnginesList.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.label}
+            <option value={engineChoices.auto.value}>{engineChoices.auto.label}</option>
+            {engineChoices.groups.map((g) => (
+              <optgroup key={g.key} label={g.label}>
+                {g.options.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
                   </option>
                 ))}
               </optgroup>
-            )}
+            ))}
           </select>
         </div>
 

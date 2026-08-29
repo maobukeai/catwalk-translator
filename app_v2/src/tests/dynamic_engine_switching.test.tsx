@@ -143,7 +143,7 @@ describe('Dynamic Engine Switching and Online Channels Persistence Test Suite', 
   });
 
   // ── 3. SnippingToolbar Categorized Dynamic Optgroups ─────────────────────────
-  it('SnippingToolbar renders only enabled AI models and online channels, and excludes CG dicts', () => {
+  it('SnippingToolbar shares engineOptions source: full model pool, enabled online channels and enabled dicts', () => {
     vi.useRealTimers();
     const customSettings: AppSettings = {
       ...useSettingsStore.getState().settings,
@@ -196,22 +196,17 @@ describe('Dynamic Engine Switching and Online Channels Persistence Test Suite', 
     const select = screen.getByTitle('切换翻译引擎 (Tab)') as HTMLSelectElement;
     expect(select).toBeTruthy();
 
-    // Verify AI group with configured models
-    expect(screen.getByText('DeepSeek (deepseek-chat)')).toBeTruthy();
-    expect(screen.getByText('OpenAI (gpt-4o-mini)')).toBeTruthy();
-    expect(screen.queryByText('CustomUnconfigured (custom-none)')).toBeNull();
+    // Verify AI group with configured models（仅已配置 Key 的模型会展示，未配置的不出现）
+    expect(screen.getByText('🤖 DeepSeek (deepseek-chat)')).toBeTruthy();
+    expect(screen.getByText('🤖 OpenAI (gpt-4o-mini)')).toBeTruthy();
+    expect(screen.queryByText(/CustomUnconfigured/)).toBeNull();
 
     // Verify Online group with enabled channels only
-    expect(screen.getByText('DeepL 极速翻译')).toBeTruthy();
-    expect(screen.getByText('百度通用翻译')).toBeTruthy();
-    expect(screen.getByText('Google 翻译')).toBeTruthy();
-    expect(screen.queryByText('MyMemory 记忆库')).toBeNull();
-    expect(screen.queryByText('腾讯交互翻译')).toBeNull();
-
-    // Verify CG dicts are completely removed from dropdown
-    expect(screen.queryByText('Blender 词库')).toBeNull();
-    expect(screen.queryByText('Maya 建模词库')).toBeNull();
-    expect(screen.queryByText('📚 CG 术语词库')).toBeNull();
+    expect(screen.getByText('🚀 DeepL 深度翻译')).toBeTruthy();
+    expect(screen.getByText('🐯 百度通用翻译')).toBeTruthy();
+    expect(screen.getByText('🌐 Google 官方翻译 (免 Key 极速)')).toBeTruthy();
+    expect(screen.queryByText('📚 MyMemory 记忆库')).toBeNull();
+    expect(screen.queryByText('🐧 腾讯交互翻译')).toBeNull();
 
     // Trigger engine switch
     fireEvent.change(select, { target: { value: 'deepl' } });

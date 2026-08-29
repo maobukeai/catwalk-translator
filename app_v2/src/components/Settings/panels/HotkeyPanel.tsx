@@ -15,6 +15,7 @@ import {
 } from '../../../services/tauri';
 import type { OfflineEngineStatus } from '../../../services/tauri';
 import { normalizeHotkeyForCompare } from '../../../services/hotkeys';
+import { buildCaptureEngineChoices, findEngineOption } from '../../../services/engineOptions';
 import { useLlmPanelState, PROVIDER_DEFAULT_ENDPOINTS } from './useLlmPanelState';
 import type {
   LlmConfig, OcrEngineStatus, ThemeMode, FontFamilyOption, FontSizeOption, CustomDictItem,
@@ -168,12 +169,11 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
     };
   }, [recordingTarget, setHotkey, setSpotlightHotkey, setClipboardHotkey, setToggleWindowHotkey, settings.hotkey, settings.spotlightHotkey, settings.clipboardHotkey, settings.toggleWindowHotkey]);
 
-  void onTriggerClipboard;
 
   return (
     <>
         <div className="space-y-4 animate-in fade-in duration-150">
-          <div className={`p-5 space-y-5 rounded-2xl border transition-colors ${
+          <div className={`p-4 space-y-3.5 rounded-2xl border transition-colors ${
             isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
             <div>
@@ -181,8 +181,8 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                 <Zap className="h-4 w-4 text-blue-500" />
                 <span>全局划词快捷键</span>
               </div>
-              <p className={`mt-1 text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
-                按下快捷键后将控制软件瞬间截取桌面背景并调出高精度划词选区蒙版。
+              <p className={`mt-0.5 text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                按下快捷键后瞬间截取桌面背景并调出高精度划词选区蒙版。
               </p>
             </div>
 
@@ -194,26 +194,28 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
               </div>
             )}
 
-            {/* 全局快捷键控制中心 - 紧凑型极简列表 */}
-            <div className={`rounded-xl border divide-y overflow-hidden shadow-xs ${
-              isLight ? 'bg-white/70 border-slate-200 divide-slate-100' : 'bg-zinc-950/60 border-white/[0.08] divide-white/[0.05]'
-            }`}>
+            {/* 全局快捷键控制中心 - 紧凑型 2x2 网格 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
               {/* 1. 全局划词选区 */}
-              <div className="flex items-center justify-between p-2.5 sm:px-3.5 gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
-                <div className="flex items-center space-x-2.5 min-w-0">
-                  <span className="text-sm p-1 rounded-lg bg-blue-500/10 border border-blue-500/20 shrink-0 select-none">📸</span>
+              <div className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
+                isLight ? 'bg-white/80 border-slate-200/90 shadow-2xs hover:border-blue-300' : 'bg-zinc-950/60 border-white/[0.08] shadow-2xs hover:border-blue-500/30'
+              }`}>
+                <div className="flex items-center space-x-2 min-w-0 mr-2">
+                  <span className={`text-xs p-1.5 rounded-lg shrink-0 select-none ${
+                    isLight ? 'bg-blue-50 text-blue-600 border border-blue-200/80' : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                  }`}>📸</span>
                   <div className="min-w-0">
-                    <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>全局划词选区</div>
-                    <div className={`text-[10.5px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate`}>桌面全屏鼠标划词与擦除翻译</div>
+                    <div className={`text-xs font-bold leading-tight ${isLight ? 'text-slate-800' : 'text-zinc-100'} truncate`}>全局划词选区</div>
+                    <div className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate mt-0.5`}>全屏鼠标划词与擦除</div>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-1.5 shrink-0">
+                <div className="flex items-center space-x-1 shrink-0">
                   <kbd
                     onClick={() => setRecordingTarget(recordingTarget === 'capture' ? null : 'capture')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider transition-all shadow-xs cursor-pointer border ${
+                    className={`px-2 py-0.5 rounded-md text-xs font-mono font-bold tracking-wide transition-all shadow-2xs cursor-pointer border ${
                       recordingTarget === 'capture'
-                        ? 'bg-blue-600/30 text-blue-600 border-blue-500 animate-pulse'
+                        ? 'bg-blue-600/20 text-blue-600 border-blue-500 animate-pulse ring-2 ring-blue-500/20'
                         : (isLight ? 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50' : 'bg-zinc-900 text-blue-400 border-blue-500/40 hover:bg-zinc-800')
                     } ${!(settings.captureHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
                     title="点击开始录制按键"
@@ -224,7 +226,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => setRecordingTarget(recordingTarget === 'capture' ? null : 'capture')}
-                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                    className={`px-1.5 py-0.5 rounded-md text-[11px] font-semibold border transition cursor-pointer ${
                       recordingTarget === 'capture'
                         ? 'bg-rose-500/20 text-rose-600 border-rose-300'
                         : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
@@ -237,7 +239,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                     <button
                       type="button"
                       onClick={onStartCapture}
-                      className="px-2 py-1 rounded-lg bg-blue-600/10 hover:bg-blue-600/20 text-blue-600 dark:text-sky-400 text-[11px] font-semibold border border-blue-500/30 transition cursor-pointer"
+                      className="px-1.5 py-0.5 rounded-md bg-blue-600/10 hover:bg-blue-600/20 text-blue-600 dark:text-sky-400 text-[11px] font-semibold border border-blue-500/30 transition cursor-pointer"
                     >
                       🚀 测试
                     </button>
@@ -246,34 +248,38 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => setCaptureHotkeyEnabled(!(settings.captureHotkeyEnabled ?? true))}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-1 ${
+                    className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-0.5 ${
                       (settings.captureHotkeyEnabled ?? true) ? 'bg-blue-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                     }`}
                     title="开启或关闭该快捷键"
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.captureHotkeyEnabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
+                      (settings.captureHotkeyEnabled ?? true) ? 'translate-x-3.5' : 'translate-x-0.5'
                     }`} />
                   </button>
                 </div>
               </div>
 
               {/* 2. Spotlight 居中查词 */}
-              <div className="flex items-center justify-between p-2.5 sm:px-3.5 gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
-                <div className="flex items-center space-x-2.5 min-w-0">
-                  <span className="text-sm p-1 rounded-lg bg-purple-500/10 border border-purple-500/20 shrink-0 select-none">🔍</span>
+              <div className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
+                isLight ? 'bg-white/80 border-slate-200/90 shadow-2xs hover:border-purple-300' : 'bg-zinc-950/60 border-white/[0.08] shadow-2xs hover:border-purple-500/30'
+              }`}>
+                <div className="flex items-center space-x-2 min-w-0 mr-2">
+                  <span className={`text-xs p-1.5 rounded-lg shrink-0 select-none ${
+                    isLight ? 'bg-purple-50 text-purple-600 border border-purple-200/80' : 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
+                  }`}>🔍</span>
                   <div className="min-w-0">
-                    <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>Spotlight 居中查词</div>
-                    <div className={`text-[10.5px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate`}>屏幕中央弹框，极速打字查词</div>
+                    <div className={`text-xs font-bold leading-tight ${isLight ? 'text-slate-800' : 'text-zinc-100'} truncate`}>Spotlight 居中查词</div>
+                    <div className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate mt-0.5`}>中央弹框打字查词</div>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-1.5 shrink-0">
+                <div className="flex items-center space-x-1 shrink-0">
                   <kbd
                     onClick={() => setRecordingTarget(recordingTarget === 'spotlight' ? null : 'spotlight')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider transition-all shadow-xs cursor-pointer border ${
+                    className={`px-2 py-0.5 rounded-md text-xs font-mono font-bold tracking-wide transition-all shadow-2xs cursor-pointer border ${
                       recordingTarget === 'spotlight'
-                        ? 'bg-purple-600/30 text-purple-600 border-purple-500 animate-pulse'
+                        ? 'bg-purple-600/20 text-purple-600 border-purple-500 animate-pulse ring-2 ring-purple-500/20'
                         : (isLight ? 'bg-white text-purple-600 border-purple-300 hover:bg-purple-50' : 'bg-zinc-900 text-purple-400 border-purple-500/40 hover:bg-zinc-800')
                     } ${!(settings.spotlightHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
                     title="点击开始录制按键"
@@ -284,7 +290,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => setRecordingTarget(recordingTarget === 'spotlight' ? null : 'spotlight')}
-                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                    className={`px-1.5 py-0.5 rounded-md text-[11px] font-semibold border transition cursor-pointer ${
                       recordingTarget === 'spotlight'
                         ? 'bg-rose-500/20 text-rose-600 border-rose-300'
                         : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
@@ -297,7 +303,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                     <button
                       type="button"
                       onClick={onTriggerSpotlight}
-                      className="px-2 py-1 rounded-lg bg-purple-600/10 hover:bg-purple-600/20 text-purple-600 dark:text-purple-400 text-[11px] font-semibold border border-purple-500/30 transition cursor-pointer"
+                      className="px-1.5 py-0.5 rounded-md bg-purple-600/10 hover:bg-purple-600/20 text-purple-600 dark:text-purple-400 text-[11px] font-semibold border border-purple-500/30 transition cursor-pointer"
                     >
                       🚀 测试
                     </button>
@@ -306,60 +312,102 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => setSpotlightHotkeyEnabled(!(settings.spotlightHotkeyEnabled ?? true))}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-1 ${
+                    className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-0.5 ${
                       (settings.spotlightHotkeyEnabled ?? true) ? 'bg-purple-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                     }`}
                     title="开启或关闭该快捷键"
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.spotlightHotkeyEnabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
+                      (settings.spotlightHotkeyEnabled ?? true) ? 'translate-x-3.5' : 'translate-x-0.5'
                     }`} />
                   </button>
                 </div>
               </div>
 
               {/* 3. 剪贴板静默翻译 */}
-              <div className="flex items-center justify-between p-2.5 sm:px-3.5 gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
-                <div className="flex items-center space-x-2.5 min-w-0">
-                  <span className="text-sm p-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 shrink-0 select-none">📋</span>
+              <div className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
+                isLight ? 'bg-white/80 border-slate-200/90 shadow-2xs hover:border-emerald-300' : 'bg-zinc-950/60 border-white/[0.08] shadow-2xs hover:border-emerald-500/30'
+              }`}>
+                <div className="flex items-center space-x-2 min-w-0 mr-2">
+                  <span className={`text-xs p-1.5 rounded-lg shrink-0 select-none ${
+                    isLight ? 'bg-emerald-50 text-emerald-600 border border-emerald-200/80' : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                  }`}>📋</span>
                   <div className="min-w-0">
-                    <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>剪贴板静默翻译</div>
-                    <div className={`text-[10.5px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate`}>读取剪贴板文本并右下角弹出</div>
+                    <div className={`text-xs font-bold leading-tight ${isLight ? 'text-slate-800' : 'text-zinc-100'} truncate`}>剪贴板静默翻译</div>
+                    <div className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate mt-0.5`}>读取剪贴板右下角弹出</div>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-1.5 shrink-0">
+                <div className="flex items-center space-x-1 shrink-0">
+                  <kbd
+                    onClick={() => setRecordingTarget(recordingTarget === 'clipboard' ? null : 'clipboard')}
+                    className={`px-2 py-0.5 rounded-md text-xs font-mono font-bold tracking-wide transition-all shadow-2xs cursor-pointer border ${
+                      recordingTarget === 'clipboard'
+                        ? 'bg-emerald-600/20 text-emerald-600 border-emerald-500 animate-pulse ring-2 ring-emerald-500/20'
+                        : (isLight ? 'bg-white text-emerald-600 border-emerald-300 hover:bg-emerald-50' : 'bg-zinc-900 text-emerald-400 border-emerald-500/40 hover:bg-zinc-800')
+                    } ${!(settings.clipboardHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
+                    title="点击开始录制按键"
+                  >
+                    {recordingTarget === 'clipboard' ? '⌨️ 请按下按键...' : settings.clipboardHotkey || 'Ctrl+Shift+C'}
+                  </kbd>
+
+                  <button
+                    type="button"
+                    onClick={() => setRecordingTarget(recordingTarget === 'clipboard' ? null : 'clipboard')}
+                    className={`px-1.5 py-0.5 rounded-md text-[11px] font-semibold border transition cursor-pointer ${
+                      recordingTarget === 'clipboard'
+                        ? 'bg-rose-500/20 text-rose-600 border-rose-300'
+                        : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
+                    }`}
+                  >
+                    {recordingTarget === 'clipboard' ? '取消' : '重新录制'}
+                  </button>
+
+                  {onTriggerClipboard && (
+                    <button
+                      type="button"
+                      onClick={onTriggerClipboard}
+                      className="px-1.5 py-0.5 rounded-md bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold border border-emerald-500/30 transition cursor-pointer"
+                    >
+                      🚀 测试
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => setClipboardHotkeyEnabled(!(settings.clipboardHotkeyEnabled ?? true))}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-1 ${
+                    className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-0.5 ${
                       (settings.clipboardHotkeyEnabled ?? true) ? 'bg-emerald-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                     }`}
                     title="开启或关闭该快捷键"
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.clipboardHotkeyEnabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
+                      (settings.clipboardHotkeyEnabled ?? true) ? 'translate-x-3.5' : 'translate-x-0.5'
                     }`} />
                   </button>
                 </div>
               </div>
 
               {/* 4. 唤醒 / 隐藏主程序 */}
-              <div className="flex items-center justify-between p-2.5 sm:px-3.5 gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition">
-                <div className="flex items-center space-x-2.5 min-w-0">
-                  <span className="text-sm p-1 rounded-lg bg-amber-500/10 border border-amber-500/20 shrink-0 select-none">⚡</span>
+              <div className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
+                isLight ? 'bg-white/80 border-slate-200/90 shadow-2xs hover:border-amber-300' : 'bg-zinc-950/60 border-white/[0.08] shadow-2xs hover:border-amber-500/30'
+              }`}>
+                <div className="flex items-center space-x-2 min-w-0 mr-2">
+                  <span className={`text-xs p-1.5 rounded-lg shrink-0 select-none ${
+                    isLight ? 'bg-amber-50 text-amber-600 border border-amber-200/80' : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                  }`}>⚡</span>
                   <div className="min-w-0">
-                    <div className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>唤醒 / 隐藏主程序</div>
-                    <div className={`text-[10.5px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate`}>托盘后台与前台窗口秒切</div>
+                    <div className={`text-xs font-bold leading-tight ${isLight ? 'text-slate-800' : 'text-zinc-100'} truncate`}>唤醒 / 隐藏主程序</div>
+                    <div className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate mt-0.5`}>托盘后台与前台秒切</div>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-1.5 shrink-0">
+                <div className="flex items-center space-x-1 shrink-0">
                   <kbd
                     onClick={() => setRecordingTarget(recordingTarget === 'toggleWindow' ? null : 'toggleWindow')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold tracking-wider transition-all shadow-xs cursor-pointer border ${
+                    className={`px-2 py-0.5 rounded-md text-xs font-mono font-bold tracking-wide transition-all shadow-2xs cursor-pointer border ${
                       recordingTarget === 'toggleWindow'
-                        ? 'bg-amber-600/30 text-amber-600 border-amber-500 animate-pulse'
+                        ? 'bg-amber-600/20 text-amber-600 border-amber-500 animate-pulse ring-2 ring-amber-500/20'
                         : (isLight ? 'bg-white text-amber-600 border-amber-300 hover:bg-amber-50' : 'bg-zinc-900 text-amber-400 border-amber-500/40 hover:bg-zinc-800')
                     } ${!(settings.toggleWindowHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
                     title="点击开始录制按键"
@@ -370,7 +418,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => setRecordingTarget(recordingTarget === 'toggleWindow' ? null : 'toggleWindow')}
-                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
+                    className={`px-1.5 py-0.5 rounded-md text-[11px] font-semibold border transition cursor-pointer ${
                       recordingTarget === 'toggleWindow'
                         ? 'bg-rose-500/20 text-rose-600 border-rose-300'
                         : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
@@ -383,7 +431,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                     <button
                       type="button"
                       onClick={onToggleWindow}
-                      className="px-2 py-1 rounded-lg bg-amber-600/10 hover:bg-amber-600/20 text-amber-600 dark:text-amber-400 text-[11px] font-semibold border border-amber-500/30 transition cursor-pointer"
+                      className="px-1.5 py-0.5 rounded-md bg-amber-600/10 hover:bg-amber-600/20 text-amber-600 dark:text-amber-400 text-[11px] font-semibold border border-amber-500/30 transition cursor-pointer"
                     >
                       🚀 测试
                     </button>
@@ -392,13 +440,13 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => setToggleWindowHotkeyEnabled(!(settings.toggleWindowHotkeyEnabled ?? true))}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-1 ${
+                    className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-0.5 ${
                       (settings.toggleWindowHotkeyEnabled ?? true) ? 'bg-amber-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                     }`}
                     title="开启或关闭该快捷键"
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.toggleWindowHotkeyEnabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
+                      (settings.toggleWindowHotkeyEnabled ?? true) ? 'translate-x-3.5' : 'translate-x-0.5'
                     }`} />
                   </button>
                 </div>
@@ -417,22 +465,25 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-950/80 border-white/15 text-zinc-100'
                 }`}
               >
-                <optgroup label="── 智能自动降级 ──">
-                  <option value="auto">🤖 默认多级智能优先级队列 (词库 ➔ AI ➔ 在线)</option>
-                </optgroup>
-                <optgroup label="── 强行指定 AI 大语言模型 ──">
-                  <option value="deepseek">🧠 DeepSeek (Chat / V3 极速高准确率)</option>
-                  <option value="openai">🧠 OpenAI (GPT-4o / GPT-4o-mini)</option>
-                  <option value="ollama">🦙 Local Ollama (本地私有化大模型)</option>
-                  <option value="custom">⚡ Custom API (自定义 Base URL & Key)</option>
-                </optgroup>
-                <optgroup label="── 强行指定免 Key 公共通道 ──">
-                  <option value="google">🌐 Google 官方翻译 (免 Key 极速)</option>
-                  <option value="bing">🔷 Bing 必应神经网络翻译</option>
-                </optgroup>
-                <optgroup label="── 强行指定 3D 离线词库 ──">
-                  <option value="blender">🧊 Blender CG 专属词库优先</option>
-                </optgroup>
+                {(() => {
+                  const choices = buildCaptureEngineChoices(settings);
+                  const legacy = settings.captureEngine && !findEngineOption(choices, settings.captureEngine)
+                    ? { value: settings.captureEngine, label: `⚙️ ${settings.captureEngine}（旧版通道，重新选择即更新）` }
+                    : null;
+                  return (
+                    <>
+                      <option value={choices.auto.value}>{choices.auto.label}</option>
+                      {legacy && <option value={legacy.value}>{legacy.label}</option>}
+                      {choices.groups.map((g) => (
+                        <optgroup key={g.key} label={`── ${g.label} ──`}>
+                          {g.options.map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </>
+                  );
+                })()}
               </select>
               <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
                 框选截图后将直接调用所选 AI 模型进行识别翻译，也可在划词浮层顶部随时秒切。

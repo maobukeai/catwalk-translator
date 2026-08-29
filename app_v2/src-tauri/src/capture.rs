@@ -303,12 +303,13 @@ pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
         DeleteDC(mem_dc);
         ReleaseDC(std::ptr::null_mut(), screen_dc);
 
-        // Store raw BMP data (including header) globally with scale factor
-        set_latest_capture(bmp_data.clone(), w, h, scale_factor);
+        // Store raw BMP data (including header) globally with scale factor.
+        // 不再编码 base64 data URL：唯一 IPC 消费方 cmd_begin_capture 会把它置空，
+        // 而整屏 BMP 的 base64 编码每次热键要多花几十 ms 与 ~11MB 临时字符串。
+        set_latest_capture(bmp_data, w, h, scale_factor);
 
-        let base64_str = encode_base64(&bmp_data);
         Ok(ScreenCapturePayload {
-            data_url: format!("data:image/bmp;base64,{}", base64_str),
+            data_url: String::new(),
             width: w,
             height: h,
             scale_factor,

@@ -185,6 +185,31 @@ export function isLightBg(bgCss?: string, fgCss?: string): boolean {
   return false;
 }
 
+/**
+ * 智能计算高清晰度文字颜色：
+ * 浅色/中浅色背景下：强制使用纯黑 (#000000) 确保极致深邃与清晰度，消除发灰发虚；
+ * 深色背景下：若采样前景过暗或发灰，拉升至纯白 (#ffffff)，确保强对比度。
+ */
+export function getCardTextColor(bgCss?: string, fgCss?: string): string {
+  const isLight = isLightBg(bgCss, fgCss);
+  if (isLight) {
+    return '#000000';
+  }
+  if (fgCss && fgCss !== 'transparent') {
+    const rgbMatch = fgCss.match(/rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+    if (rgbMatch) {
+      const r = parseInt(rgbMatch[1], 10);
+      const g = parseInt(rgbMatch[2], 10);
+      const b = parseInt(rgbMatch[3], 10);
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (lum < 160) return '#ffffff';
+    }
+    return fgCss;
+  }
+  return '#ffffff';
+}
+
+
 export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   block,
   blockIndex,
@@ -385,16 +410,23 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         maxWidth,
         minHeight: block.logicalH,
         height: 'auto',
-        color: block.fgCss,
+        color: getCardTextColor(block.bgCss, block.fgCss),
         fontSize: `${fontSize}px`,
-        fontFamily: 'var(--app-font-family, "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif)',
-        fontWeight: 400,
-        lineHeight: 1.15,
+        fontFamily: 'var(--app-font-family, "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif)',
+        fontWeight: fontSize <= 20 ? 600 : 500,
+        WebkitFontSmoothing: 'antialiased',
+        MozOsxFontSmoothing: 'grayscale',
+        textRendering: 'optimizeLegibility',
+        letterSpacing: '0.015em',
+        lineHeight: 1.2,
         cursor: dragging ? 'grabbing' : 'move',
         zIndex: isPinned ? 210 : 200,
         borderRadius: 2,
         border: 'none',
         boxShadow: cardBoxShadow,
+        textShadow: isLight
+          ? '0 0 1px rgba(0, 0, 0, 0.15)'
+          : '0 0 1.5px rgba(0, 0, 0, 0.85), 0 1px 2px rgba(0, 0, 0, 0.6)',
         // pre-wrap：合并块 original 里的 \n 必须真实换行（normal 会折叠成空格
         // 导致整段在 maxWidth 处乱换行、卡片被撑高）
         // 单行锁定时用 nowrap 双保险:配合已收缩的字号,度量误差也绝不折行

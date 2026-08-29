@@ -15,6 +15,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub const DET_LIMIT_SIDE_LEN: f32 = 736.0;
+/// det 输入最长边硬上限：全屏/大选区按比例缩到该边长内推理，控制 DBNet 耗时。
+pub const DET_MAX_SIDE_LEN: f32 = 1280.0;
 pub const DET_THRESH: f32 = 0.25;
 pub const DET_BOX_THRESH: f32 = 0.5;
 pub const DET_UNCLIP_RATIO: f32 = 1.6;
@@ -359,6 +361,9 @@ impl OnnxOcrEngine {
             boxes.push((0u32, 0u32, img_w, img_h));
         } else {
             boxes = sort_boxes_reading_order(boxes);
+            // 丢弃映射回源图后高度不足的噪声条框：det 在纹理/渐变上的误检进入
+            // rec 只会产出乱码并白白消耗一次推理。正常文本物理高度不会 <6px。
+            boxes.retain(|(_, _, _, bh)| *bh >= 6);
         }
 
         let mut blocks = Vec::new();
@@ -368,6 +373,9 @@ impl OnnxOcrEngine {
             }
             let crop = crop_bgr(&bgr, w, h, bx, by, bw, bh);
             let (text, conf) = recognize_one(sessions, &crop, (bx, by, bw, bh))?;
+            // 统一 CJK 空格清理：PP-OCR rec 会在中日韩字符间偶发插入空格
+            //（此前只有 WinRT 路径做了该清理），英文文本不受影响。
+            let text = crate::ocr::clean_ocr_text(&text);
             if text.is_empty() {
                 continue;
             }
@@ -500,7 +508,13 @@ fn run_detection(
     h: u32,
 ) -> Result<(Vec<f32>, usize, usize), String> {
     let min_side = (w.min(h) as f32).max(1.0);
-    let ratio = (DET_LIMIT_SIDE_LEN / min_side).clamp(1.0, 3.0);
+    let max_side = (w.max(h) as f32).max(1.0);
+    // 小图放大提升小字召回（≤3x）；大图等比缩小钳制最长边控制 DBNet 耗时。
+    // rec 的裁剪始终取自原图，因此缩小 det 输入只影响定位速度、不伤识别精度。
+    let mut ratio = (DET_LIMIT_SIDE_LEN / min_side).clamp(1.0, 3.0);
+    if max_side * ratio > DET_MAX_SIDE_LEN {
+        ratio = DET_MAX_SIDE_LEN / max_side;
+    }
     let rw = (((w as f32 * ratio).round() as u32 / 32).max(1)) * 32;
     let rh = (((h as f32 * ratio).round() as u32 / 32).max(1)) * 32;
     let resized = resize_bgr_bilinear(bgr, w, h, rw, rh);
