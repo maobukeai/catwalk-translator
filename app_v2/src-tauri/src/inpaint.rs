@@ -141,21 +141,29 @@ pub fn erased_patch_rect(
         let n_right = n.x + n.width as i32;
         let n_top = n.y;
         let n_bottom = n.y + n.height as i32;
-        let x_overlap = n_right.min(self_right) - n_left.max(self_left) > 0;
-        let y_overlap = n_bottom.min(self_bottom) - n_top.max(self_top) > 0;
+        let shares_columns = n_right.min(self_right) - n_left.max(self_left) > 0;
+        let shares_rows = n_bottom.min(self_bottom) - n_top.max(self_top) > 0;
+        // 方向按中心线判定，而不是要求两框完全不相交：det 的 unclip 外扩会让
+        // 密排行的框在 x 与 y 上同时相交，旧写法（x_overlap && !y_overlap）
+        // 此时两个分支都不成立、完全不钳制，padding 于是盖住整条邻行文字。
+        // 钳制下限永远是自身框边，因此补丁绝不会缩进自己的字形。
+        let self_cy = self_top + (bbox.height as i32) / 2;
+        let self_cx = self_left + (bbox.width as i32) / 2;
+        let n_cy = n_top + (n.height as i32) / 2;
+        let n_cx = n_left + (n.width as i32) / 2;
 
-        if x_overlap && !y_overlap {
-            if n_bottom <= self_top {
-                // 上方邻行：padding 最多收到自身框顶，不吞邻行字形
-                y0 = y0.max(n_bottom + 1).min(self_top);
-            } else if n_top >= self_bottom {
-                y1 = y1.min(n_top - 1).max(self_bottom);
+        if shares_columns {
+            if n_cy < self_cy {
+                y0 = y0.max((n_bottom + 1).min(self_top));
+            } else if n_cy > self_cy {
+                y1 = y1.min((n_top - 1).max(self_bottom));
             }
-        } else if y_overlap && !x_overlap {
-            if n_right <= self_left {
-                x0 = x0.max(n_right + 1).min(self_left);
-            } else if n_left >= self_right {
-                x1 = x1.min(n_left - 1).max(self_right);
+        }
+        if shares_rows {
+            if n_cx < self_cx {
+                x0 = x0.max((n_right + 1).min(self_left));
+            } else if n_cx > self_cx {
+                x1 = x1.min((n_left - 1).max(self_right));
             }
         }
     }
@@ -510,6 +518,37 @@ mod tests {
 #[cfg(test)]
 mod ink_shrink_tests {
     use super::*;
+
+    #[test]
+    fn patch_never_extends_into_an_overlapping_neighbour_row() {
+        // 密排两行：det 的 unclip 外扩让上下行的框在 x 与 y 上同时相交
+        // （自身 y 20..46，邻行 y 42..68）。旧的 x_overlap && !y_overlap 判据
+        // 在这种情况下完全不钳制，补丁向下 padding 会盖住整条邻行文字。
+        let bmp = make_bmp_with_stripe(200, 100, 0, 0); // 干净白底，排除墨迹收缩干扰
+        let self_box = BoundingBox { x: 20, y: 20, width: 150, height: 26 };
+        let below = BoundingBox { x: 20, y: 42, width: 150, height: 26 };
+        let (_, _, _, y1) = erased_patch_rect(self_box, 200, 100, &[below], &bmp);
+        let self_bottom = self_box.y + self_box.height as i32;
+        assert_eq!(
+            y1, self_bottom,
+            "补丁底边必须停在自身框底 {}，不得侵入邻行，得到 {}",
+            self_bottom, y1
+        );
+    }
+
+    #[test]
+    fn patch_still_pads_away_from_a_distant_neighbour() {
+        // 邻行足够远时 padding 保持完整（不被过度钳制）
+        let bmp = make_bmp_with_stripe(200, 200, 0, 0);
+        let self_box = BoundingBox { x: 20, y: 20, width: 150, height: 26 };
+        let far_below = BoundingBox { x: 20, y: 150, width: 150, height: 26 };
+        let (_, _, _, y1) = erased_patch_rect(self_box, 200, 200, &[far_below], &bmp);
+        assert!(
+            y1 > self_box.y + self_box.height as i32,
+            "远处邻行不应压掉 padding，得到 y1={}",
+            y1
+        );
+    }
 
     fn make_bmp_with_stripe(w: u32, h: u32, stripe_y0: i32, stripe_y1: i32) -> Vec<u8> {
         // 白底 + 指定行范围的深色"文字"条带

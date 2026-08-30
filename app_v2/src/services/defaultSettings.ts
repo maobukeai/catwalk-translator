@@ -107,7 +107,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   watchIntervalMs: 3000,
   clipboardWatchEnabled: false,
   ocrEngine: 'auto',
-  ocrVersion: 'v4' as 'v3' | 'v4' | 'v5',
+  // 默认档 v6Tiny：划词/小图实测最快且 100% 全对（7.3ms vs v4 14.3ms/张）
+  ocrVersion: 'v6t' as 'v3' | 'v4' | 'v5' | 'v6' | 'v6t',
   closeAction: 'ask',
   miniWindowCloseAction: 'hide',
 };

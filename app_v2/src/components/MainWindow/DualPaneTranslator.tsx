@@ -1444,16 +1444,16 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
             )}
           </div>
 
-          <div className={`flex items-center justify-between pt-2 border-t text-xs ${
+          <div className={`flex items-center justify-between gap-3 pt-2 border-t text-xs ${
             isLight ? 'border-slate-200' : 'border-zinc-800/60'
           }`}>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-2 shrink-0">
               {currentTranslationText && (
                 <>
                   <button
                     type="button"
                     onClick={() => handleSpeech(currentTranslationText, targetLang)}
-                    className={`p-1.5 rounded-lg border transition cursor-pointer ${
+                    className={`p-1.5 rounded-lg border transition cursor-pointer shrink-0 ${
                       isSpeaking
                         ? "bg-blue-600/30 border-blue-400 text-blue-600"
                         : (isLight ? "bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800" : "bg-zinc-800/80 hover:bg-zinc-700 border-zinc-700 text-zinc-200")
@@ -1466,7 +1466,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   <button
                     type="button"
                     onClick={() => handleCopy(currentTranslationText)}
-                    className="flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-500 text-white font-medium px-3 py-1.5 rounded-lg transition shadow-sm cursor-pointer"
+                    className="flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-500 text-white font-medium px-3 py-1.5 rounded-lg transition shadow-sm cursor-pointer whitespace-nowrap shrink-0"
                   >
                     {copied ? (
                       <>
@@ -1484,7 +1484,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   <button
                     type="button"
                     onClick={handlePinTranslation}
-                    className={`flex items-center space-x-1.5 font-medium px-3 py-1.5 rounded-lg border transition cursor-pointer ${
+                    className={`flex items-center space-x-1.5 font-medium px-3 py-1.5 rounded-lg border transition cursor-pointer whitespace-nowrap shrink-0 ${
                       isLight
                         ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
                         : 'bg-zinc-800/80 hover:bg-zinc-700 border-zinc-700 text-zinc-200'
@@ -1499,7 +1499,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     type="button"
                     onClick={() => void handleExportImage()}
                     disabled={exportingImage}
-                    className={`flex items-center space-x-1.5 font-medium px-3 py-1.5 rounded-lg border transition cursor-pointer disabled:opacity-60 ${
+                    className={`flex items-center space-x-1.5 font-medium px-3 py-1.5 rounded-lg border transition cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0 ${
                       isLight
                         ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
                         : 'bg-zinc-800/80 hover:bg-zinc-700 border-zinc-700 text-zinc-200'
@@ -1514,7 +1514,10 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
               )}
             </div>
 
-            <div className="text-[11px] text-zinc-400 font-medium">
+            <div
+              className="text-[11px] text-zinc-400 font-medium whitespace-nowrap truncate min-w-0 text-right"
+              title={response?.engines?.length ? `已汇聚 ${response.engines.length} 个引擎对照结果` : undefined}
+            >
               {response?.engines && response.engines.length > 0 && (
                 <span>已汇聚 {response.engines.length} 个引擎对照结果</span>
               )}

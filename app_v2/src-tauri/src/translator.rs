@@ -155,6 +155,34 @@ pub fn glossary_hash(pairs: &[(String, String)]) -> u64 {
     h
 }
 
+/// 判断一段文本是否为「技术标识符」——应原样保留、绝不翻译。
+///
+/// 命中三类单词级(不含空白)字符串:
+/// 1. 含 `/` 的路径式标识:模型 ID (`moonshotai/kimi-k3`)、URL;
+/// 2. 同时含数字与 `-`/`.`/`_` 的版本式标识:`MiniMax-H3`、`wan3.0-video`、
+///    `nemotron-3.5-lightning`、`v0.1.8`;
+/// 3. 完全不含字母:纯数字/符号(`99.9%`,以及 OCR 噪声如 `%6'66`)。
+///
+/// 含空白的短语一律不命中,`Always-On`、`Kimi-long-context model`、`UPTIME`
+/// 等正常文本因此照常翻译(无数字或含空白)。
+pub fn is_technical_identifier(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() || t.chars().any(|c| c.is_whitespace()) {
+        return false;
+    }
+    let has_letter = t.chars().any(|c| c.is_alphabetic());
+    if !has_letter {
+        // 纯数字/符号:翻译毫无意义,且 LLM 会把数字写成中文数字。
+        return t.chars().any(|c| c.is_ascii_digit() || !c.is_alphanumeric());
+    }
+    if t.contains('/') {
+        return true;
+    }
+    let has_digit = t.chars().any(|c| c.is_ascii_digit());
+    let has_version_sep = t.contains('-') || t.contains('.') || t.contains('_');
+    has_digit && has_version_sep
+}
+
 /// 从设置中的自定义词条构建术语对(过滤空项并 trim)。
 pub fn glossary_from_settings(items: &[crate::models::CustomDictItem]) -> GlossaryPairs {
     items
@@ -385,11 +413,22 @@ struct TmDiskFile {
 }
 
 /// 翻译记忆落盘路径（启动时由 lib.rs 注入 app_config_dir）
-static TM_FILE: OnceLock<std::path::PathBuf> = OnceLock::new();
+///
+/// 用 RwLock 而非 OnceLock：OnceLock 会静默忽略第二次 set，导致后续调用者拿到
+/// 的路径与自己刚设置的不一致（测试里表现为偶发的 TM 往返失败，生产上则是
+/// 配置目录变更后仍写旧路径）。
+static TM_FILE: std::sync::RwLock<Option<std::path::PathBuf>> = std::sync::RwLock::new(None);
 const TM_SAVE_THRESHOLD: u32 = 32;
 
 pub fn set_tm_path(path: std::path::PathBuf) {
-    let _ = TM_FILE.set(path);
+    if let Ok(mut g) = TM_FILE.write() {
+        *g = Some(path);
+    }
+}
+
+/// 当前翻译记忆文件路径（未注入时为 None，此时不落盘）。
+fn tm_path() -> Option<std::path::PathBuf> {
+    TM_FILE.read().ok().and_then(|g| g.clone())
 }
 
 pub struct TranslationCache {
@@ -449,7 +488,7 @@ impl TranslationCache {
 
     /// 启动时从磁盘加载翻译记忆（缺失/损坏时静默为空缓存）
     pub fn load_from_disk(&self) {
-        let Some(path) = TM_FILE.get() else {
+        let Some(path) = tm_path() else {
             return;
         };
         let Ok(content) = std::fs::read_to_string(path) else {
@@ -487,7 +526,7 @@ impl TranslationCache {
 
     /// 持久化到磁盘（best-effort；失败仅记日志不影响翻译）
     pub fn save_to_disk(&self) {
-        let Some(path) = TM_FILE.get() else {
+        let Some(path) = tm_path() else {
             return;
         };
         let snapshot = match self.inner.read() {
@@ -699,6 +738,22 @@ impl MultiTierPipeline {
                     results[i] = Some(res);
                     continue;
                 }
+            }
+
+            // Step 0.6: 技术标识符原样透传——模型 ID / 版本号 / URL / 纯数字。
+            // LLM 会把它们逐词意译("MiniMax-H3"→"最小最大-H3"、
+            // "nemotron-3.5-lightning"→"nemotron-3.5-闪电"),而这类字符串的
+            // 价值恰恰在于可复制、可搜索,翻译只会破坏它。放在自定义词库之后,
+            // 用户仍可用术语表强制指定某个标识符的译法。
+            if is_technical_identifier(trimmed) {
+                let res = TranslationResult {
+                    original: phrase.clone(),
+                    translated: trimmed.to_string(),
+                    source_tier: "标识符透传".to_string(),
+                };
+                self.cache.store(res.clone());
+                results[i] = Some(res);
+                continue;
             }
 
             // Step 1 & 2: Local Preset Dictionary & CG Fallback Dictionary
@@ -1811,7 +1866,14 @@ pub async fn translate_deepl(
 
 /// ── 腾讯交互翻译 ────────────────────────────────────────────────────────────
 pub async fn translate_tencent(client: &Client, q: &str, _src: &str, tgt: &str) -> Option<String> {
-    let clean_tgt = if tgt.starts_with("zh") { "zh" } else { "en" };
+    // Transmart API 语种码约定：简体中文传 "zh"，繁体中文传 "zh-TW"，其余按基础码透传
+    let clean_tgt = if tgt.eq_ignore_ascii_case("zh-CN") {
+        "zh".to_string()
+    } else if tgt.eq_ignore_ascii_case("zh-TW") {
+        "zh-TW".to_string()
+    } else {
+        tgt.split('-').next().unwrap_or("en").to_lowercase()
+    };
     let body = serde_json::json!({
         "header": {
             "fn": "auto_translation",
@@ -2137,6 +2199,20 @@ pub fn is_retry_translation(text: &str) -> bool {
         || text.contains("额度不足")
 }
 
+/// 解析实际生效的目标语言：目标为 "auto" 时按源语言智能翻转（中文→英文，其他→中文）；
+/// 显式选择的目标语言原样保留，不做同语种自动翻转。
+fn resolve_actual_target<'a>(req_target: &'a str, actual_source: &str) -> &'a str {
+    if req_target == "auto" {
+        if actual_source.starts_with("zh") {
+            "en"
+        } else {
+            "zh-CN"
+        }
+    } else {
+        req_target
+    }
+}
+
 pub async fn execute_universal_translate(
     req: UniversalTranslationRequest,
     glossary: &[(String, String)],
@@ -2165,26 +2241,7 @@ pub async fn execute_universal_translate(
         req.source_lang.as_str()
     };
 
-    let mut actual_target = if req.target_lang == "auto" {
-        if actual_source.starts_with("zh") {
-            "en"
-        } else {
-            "zh-CN"
-        }
-    } else {
-        req.target_lang.as_str()
-    };
-
-    // 智能同语种防呆：如输入中文而目标也是中文，自动调整为英译；反之亦然
-    if (actual_source.starts_with("zh") && actual_target.starts_with("zh"))
-        || (actual_source.starts_with("en") && actual_target.starts_with("en"))
-    {
-        if actual_source.starts_with("zh") {
-            actual_target = "en";
-        } else {
-            actual_target = "zh-CN";
-        }
-    }
+    let actual_target = resolve_actual_target(req.target_lang.as_str(), actual_source);
 
     let forced = req.forced_engine.as_deref().map(|s| s.trim().to_lowercase());
     let is_forced = forced.as_ref().map_or(false, |f| !f.is_empty() && f != "auto");
@@ -2665,6 +2722,66 @@ mod tm_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identifier_passthrough_matches_model_ids_and_versions() {
+        // 模型 ID / URL / 版本号：原样保留
+        for id in [
+            "moonshotai/kimi-k3",
+            "x-ai/grok-4.6",
+            "deepseek/deepseek-v4-pro-0813",
+            "nvidia/nemotron-3.5-lightning",
+            "z-ai/glm-5.3-flash",
+            "https://api.tokenrouter.com/v1",
+            "MiniMax-H3",
+            "wan3.0-video",
+            "v0.1.8",
+        ] {
+            assert!(is_technical_identifier(id), "应透传: {}", id);
+        }
+
+        // 纯数字/符号（含 OCR 噪声）：翻译无意义
+        for num in ["99.9%", "%6'66", "%666", "3.5"] {
+            assert!(is_technical_identifier(num), "应透传: {}", num);
+        }
+    }
+
+    #[test]
+    fn identifier_passthrough_leaves_real_text_translatable() {
+        for text in [
+            "Always-On",
+            "UPTIME",
+            "CACHING",
+            "Smart",
+            "Read Docs",
+            "Unified Model Access",
+            "Kimi-long-context model",
+            "Faster·Better·Cheaper",
+            "Just switch your base URL.",
+            "Route once. Scale across models with better pricing, better",
+            "MiniMax · video generation model",
+            "",
+        ] {
+            assert!(!is_technical_identifier(text), "应翻译: {}", text);
+        }
+    }
+
+    #[test]
+    fn test_resolve_actual_target_respects_explicit_choice() {
+        // 回归：源中文 + 显式中文目标，不得被强制翻转为英文
+        assert_eq!(resolve_actual_target("zh-CN", "zh-CN"), "zh-CN");
+        // 对称场景：源英文 + 显式英文目标
+        assert_eq!(resolve_actual_target("en", "en"), "en");
+        // 显式选择的其他语种原样保留
+        assert_eq!(resolve_actual_target("ja", "zh-CN"), "ja");
+        assert_eq!(resolve_actual_target("fr", "en"), "fr");
+    }
+
+    #[test]
+    fn test_resolve_actual_target_auto_smart_flip() {
+        assert_eq!(resolve_actual_target("auto", "zh-CN"), "en");
+        assert_eq!(resolve_actual_target("auto", "en"), "zh-CN");
+    }
 
     #[test]
     fn test_is_valid_translation_normal() {

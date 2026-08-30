@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   AlertCircle,
   RotateCcw,
@@ -23,12 +23,20 @@ import { APP_VERSION } from '../../version';
 
 type SettingCategory = 'appearance' | 'hotkey' | 'online' | 'dicts' | 'preference' | 'backup';
 
+export type SettingsCategory = SettingCategory;
+
 interface SettingsDashboardProps {
   onStartCapture?: () => void;
   onTriggerSpotlight?: () => void;
   onTriggerClipboard?: () => void;
   onToggleWindow?: () => void;
   onOpenAbout?: () => void;
+  /** 首次挂载时直接选中该分类（OCR 模型引导弹窗「去下载」跳转用）。 */
+  initialCategory?: SettingCategory;
+  /** 定位到内嵌的 OCR 模型管理卡片并滚动到可见。 */
+  focusOcrModels?: boolean;
+  /** 一次性跳转处理完成后的回调（App 用它清空跳转提示，避免下次手动进设置也停在词库页）。 */
+  onInitialApplied?: () => void;
 }
 
 /**
@@ -44,6 +52,9 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   onTriggerClipboard,
   onToggleWindow,
   onOpenAbout,
+  initialCategory,
+  focusOcrModels,
+  onInitialApplied,
 }) => {
   const {
     settings,
@@ -58,7 +69,24 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   } = useSettingsStore();
 
   const { isLight } = useAppTheme();
-  const [activeCategory, setActiveCategory] = useState<SettingCategory>('appearance');
+  const [activeCategory, setActiveCategory] = useState<SettingCategory>(initialCategory ?? 'appearance');
+
+  // 引导跳转：切到指定分类后滚动到 OCR 模型卡片，用户可直接一键下载
+  const initialAppliedRef = useRef(false);
+  useEffect(() => {
+    if (focusOcrModels) {
+      const raf = requestAnimationFrame(() => {
+        document
+          .getElementById('ocr-models-card-anchor')
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      if (!initialAppliedRef.current) {
+        initialAppliedRef.current = true;
+        onInitialApplied?.();
+      }
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [focusOcrModels, activeCategory, onInitialApplied]);
 
   // App 挂载时已全局 fetchSettings；这里只在首次进入设置页时兜底拉取一次，
   // 避免每次切 tab 都用服务端数据覆盖用户可能存在的未保存编辑

@@ -31,6 +31,45 @@ fn is_cjk_or_fullwidth(c: char) -> bool {
 pub struct LineClusterer;
 
 impl LineClusterer {
+    /// Maximum horizontal gap for two blocks to sit on the same visual line,
+    /// derived from the shorter block's height and clamped to sane absolutes:
+    /// - floor 24px keeps split fragments of small UI text together;
+    /// - cap 200px is what separates layout COLUMNS — a two-column page has a
+    ///   ≥250px gutter, and without a cap a tall heading vertically spanning a
+    ///   right-column row chained the whole foreign column into one line.
+    /// 2.0× tolerates the wider breaks DBNet leaves in faint low-contrast text
+    /// (a whole word can vanish between two fragment boxes) while buttons and
+    /// stat labels (gaps ≥3× line height) still stay independent.
+    fn max_line_gap(h_ref: f32) -> f32 {
+        (h_ref * 2.0).clamp(24.0, 200.0)
+    }
+
+    /// Pixel gap between two boxes (0 when they already overlap horizontally).
+    fn horizontal_gap(a: &BoundingBox, b: &BoundingBox) -> f32 {
+        let a_right = a.x + a.width as i32;
+        let b_right = b.x + b.width as i32;
+        let gap = if a_right <= b.x {
+            b.x - a_right
+        } else if b_right <= a.x {
+            a.x - b_right
+        } else {
+            0
+        };
+        gap as f32
+    }
+
+    /// Vertical alignment test for a candidate PAIR (not a union bbox): real
+    /// overlap ≥40% of the shorter box, or centers within 0.6× of it. Using
+    /// min_h keeps tall blocks from absorbing the neighbouring line.
+    fn pair_same_row(a: &BoundingBox, b: &BoundingBox) -> bool {
+        let h1 = (a.height as f32).max(1.0);
+        let h2 = (b.height as f32).max(1.0);
+        let overlap = (a.y + a.height as i32).min(b.y + b.height as i32) - a.y.max(b.y);
+        let min_h = h1.min(h2).max(1.0);
+        let center_diff = (a.y as f32 + h1 * 0.5 - (b.y as f32 + h2 * 0.5)).abs();
+        (overlap > 0 && (overlap as f32 / min_h) >= 0.40) || center_diff <= min_h * 0.6
+    }
+
     pub fn cluster_into_lines(mut blocks: Vec<TextBlock>, _threshold: f32) -> Vec<Vec<TextBlock>> {
         if blocks.is_empty() {
             return Vec::new();
@@ -48,39 +87,22 @@ impl LineClusterer {
 
         for block in blocks {
             let mut added = false;
-            let y2 = block.box_rect.y;
-            let h2 = (block.box_rect.height as i32).max(1);
-
             for line in lines.iter_mut() {
-                // Compare against the line's running union bbox (not just its first
-                // block): once a line has merged several blocks, its first block
-                // alone must not let the group swallow the next visual line.
-                let (union_y, union_bottom) = line.iter().fold(
-                    (i32::MAX, i32::MIN),
-                    |(min_y, max_y), b| {
-                        (
-                            min_y.min(b.box_rect.y),
-                            max_y.max(b.box_rect.y + b.box_rect.height as i32),
-                        )
-                    },
-                );
-                let y1 = union_y;
-                let h1 = (union_bottom - union_y).max(1);
-
-                let overlap = (y1 + h1).min(y2 + h2) - y1.max(y2);
-                let min_h = (h1.min(h2) as f32).max(1.0);
-
-                let c1 = y1 as f32 + h1 as f32 * 0.5;
-                let c2 = y2 as f32 + h2 as f32 * 0.5;
-                let center_diff = (c1 - c2).abs();
-
-                // Same line = real vertical overlap, or centers within 0.6× the
-                // SHORTER height. Using min_h (instead of the old max_h*0.5) keeps
-                // tall blocks from absorbing the neighbouring line.
-                let is_same_line = (overlap > 0 && (overlap as f32 / min_h) >= 0.40)
-                    || (center_diff <= min_h * 0.6);
-
-                if is_same_line {
+                // Same line requires BOTH vertical alignment AND horizontal
+                // proximity to some member. Pairwise member checks (instead of
+                // the old line-union bbox) stop chain absorption: a union bbox
+                // grows as blocks merge, letting each next right-column row
+                // overlap its bottom edge and join — mixing two columns into
+                // one "line". With pairwise + gap cap, every cross-column pair
+                // fails the gap test, so the chain can never start.
+                let matched = line.iter().any(|m| {
+                    Self::pair_same_row(&m.box_rect, &block.box_rect)
+                        && Self::horizontal_gap(&m.box_rect, &block.box_rect)
+                            <= Self::max_line_gap(
+                                m.box_rect.height.min(block.box_rect.height) as f32,
+                            )
+                });
+                if matched {
                     line.push(block.clone());
                     added = true;
                     break;
@@ -277,6 +299,84 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].len(), 2);
         assert_eq!(lines[1].len(), 1);
+    }
+
+    #[test]
+    fn test_line_clusterer_rejects_cross_column_merge() {
+        // Two-column page: the tall left heading vertically spans the right
+        // column's first row — the old union-bbox check chained them into one
+        // line. The ≥200px column gutter must veto the merge via the gap cap.
+        let blocks = vec![
+            TextBlock {
+                text: "One TokenRouter".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 10, y: 100, width: 600, height: 60 },
+            },
+            TextBlock {
+                text: "Unified Model Access".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 950, y: 105, width: 200, height: 14 },
+            },
+            TextBlock {
+                text: "All Models".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 10, y: 170, width: 200, height: 60 },
+            },
+        ];
+
+        let lines = LineClusterer::cluster_into_lines(blocks, 8.0);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0][0].text, "One TokenRouter");
+        assert_eq!(lines[1][0].text, "Unified Model Access");
+        assert_eq!(lines[2][0].text, "All Models");
+    }
+
+    #[test]
+    fn test_line_clusterer_splits_wide_same_row_gaps() {
+        // Same visual row, but the ~90px gaps between separate UI labels
+        // exceed the gap cap — they stay independent blocks instead of one
+        // mashed "99.9% Smart Always-On" line.
+        let blocks = vec![
+            TextBlock {
+                text: "99.9%".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 10, y: 100, width: 60, height: 24 },
+            },
+            TextBlock {
+                text: "Smart".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 160, y: 100, width: 70, height: 24 },
+            },
+            TextBlock {
+                text: "Always-On".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 310, y: 100, width: 90, height: 24 },
+            },
+        ];
+
+        let lines = LineClusterer::cluster_into_lines(blocks, 8.0);
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn test_line_clusterer_merges_nearby_fragments() {
+        // Two fragments of one label on the same row, 15px apart → same line.
+        let blocks = vec![
+            TextBlock {
+                text: "Principled".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 10, y: 100, width: 80, height: 20 },
+            },
+            TextBlock {
+                text: "BSDF".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 105, y: 104, width: 40, height: 20 },
+            },
+        ];
+
+        let lines = LineClusterer::cluster_into_lines(blocks, 8.0);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].len(), 2);
     }
 
     #[test]

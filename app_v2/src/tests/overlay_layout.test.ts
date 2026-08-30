@@ -48,35 +48,76 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
       expect(resolved[1].logicalY).toBe(110);
     });
 
-    it('ignores tiny overlaps below threshold (overlapX <= 8 or overlapY <= minH * 0.4)', () => {
-      // Horizontal overlap is only 6px (<= 8)
+    it('ignores sub-glyph jitter below the 3px threshold', () => {
+      // Horizontal overlap is only 2px (<= 3)
       const block1 = createMockBlock('1', 50, 100, 100, 30); // X: [50, 150]
-      const block2 = createMockBlock('2', 144, 110, 100, 30); // X: [144, 244], overlapX = 6
+      const block2 = createMockBlock('2', 148, 110, 100, 30); // X: [148, 248], overlapX = 2
       const resolvedX = resolveAABBCollisions([block1, block2], 800, 600, 4);
       expect(resolvedX[1].logicalY).toBe(110); // unchanged
 
-      // Vertical overlap is only 5px (<= 30 * 0.4 = 12)
+      // Vertical overlap is only 2px (<= 3)
       const block3 = createMockBlock('3', 50, 100, 100, 30); // Y: [100, 130]
-      const block4 = createMockBlock('4', 50, 125, 100, 30); // Y: [125, 155], overlapY = 5
+      const block4 = createMockBlock('4', 50, 128, 100, 30); // Y: [128, 158], overlapY = 2
       const resolvedY = resolveAABBCollisions([block3, block4], 800, 600, 4);
-      expect(resolvedY[1].logicalY).toBe(125); // unchanged
+      expect(resolvedY[1].logicalY).toBe(128); // unchanged
+    });
+
+    it('pushes on a small partial overlap the old 40% tolerance left stacked', () => {
+      // 6px vertical intersection (< 30*0.4 = 12) used to be tolerated — the
+      // exact "text stacked together" complaint. Any real overlap must push.
+      const block1 = createMockBlock('1', 50, 100, 200, 30); // Y: [100, 130]
+      const block2 = createMockBlock('2', 50, 124, 200, 30); // Y: [124, 154], overlapY = 6
+      const resolved = resolveAABBCollisions([block1, block2], 800, 600, 4);
+      expect(resolved[0].logicalY).toBe(100);
+      expect(resolved[1].logicalY).toBe(134); // 100 + 30 + 4
+    });
+
+    it('uses aabbW for horizontal collision when the rendered card is wider', () => {
+      // logicalW says the cards do not overlap horizontally (150 < 200), but
+      // block1 really renders 260px wide (nowrap overflow) — block2 must move.
+      const block1 = { ...createMockBlock('1', 50, 100, 100, 30), aabbW: 260 }; // X: [50, 310]
+      const block2 = createMockBlock('2', 200, 105, 100, 30); // X: [200, 300]
+      const resolved = resolveAABBCollisions([block1, block2], 800, 600, 4);
+      expect(resolved[0].logicalY).toBe(100);
+      expect(resolved[1].logicalY).toBe(134); // 100 + 30 + 4
+    });
+
+    it('pulls an overflowing multi-column chain up while preserving margins', () => {
+      // Container height 200. Same-column chain A→B→C overflows after the push
+      // pass; the pull-up must keep exact 4px gaps and clamp to the bottom.
+      // D sits in another column: it only clamps to the container, never gets
+      // dragged by (or drags) the chain.
+      const blockA = createMockBlock('A', 50, 100, 100, 60); // Y: [100, 160]
+      const blockB = createMockBlock('B', 50, 150, 100, 60); // pushed to 164 → bottom 224
+      const blockC = createMockBlock('C', 50, 220, 100, 60); // pushed to 228 → bottom 288
+      const blockD = createMockBlock('D', 400, 190, 50, 20); // other column, bottom 210
+      const resolved = resolveAABBCollisions([blockA, blockB, blockC, blockD], 800, 200, 4);
+      const byId = (id: string) => resolved.find((b) => b.original === `original-${id}`)!;
+      expect(byId('A').logicalY).toBe(12); // 76 - 4 - 60
+      expect(byId('B').logicalY).toBe(76); // 140 - 4 - 60
+      expect(byId('C').logicalY).toBe(140); // 200 - 60
+      expect(byId('D').logicalY).toBe(180); // 200 - 20, untouched by the chain
+      // Margins between chain cards stay exactly `margin`
+      expect(byId('B').logicalY - (byId('A').logicalY + 60)).toBe(4);
+      expect(byId('C').logicalY - (byId('B').logicalY + 60)).toBe(4);
+      expect(byId('C').logicalY + 60).toBeLessThanOrEqual(200);
     });
 
     it('compresses blocks upward if bottom overflow occurs', () => {
       // Container height is 200
       // block1: Y=100, H=50 -> bottom is 150
-      // block2: Y=120, H=50 -> overlapY = 30 > 50*0.4=20. After push, Y2 = 154, bottom = 204 (overflows 200 by 4)
+      // block2: Y=120, H=50 -> overlapY = 30. After push, Y2 = 154, bottom = 204 (overflows 200 by 4)
       const block1 = createMockBlock('1', 50, 100, 100, 50);
       const block2 = createMockBlock('2', 50, 120, 100, 50);
-      
+
       const resolved = resolveAABBCollisions([block1, block2], 800, 200, 4);
       expect(resolved).toHaveLength(2);
-      
-      // Without compression: block1=100, block2=154 (overflow = 204 - 200 = 4)
-      // Compression pushes block1 by (1/2)*4 = 2 -> Y1 = 98
-      // Compression pushes block2 by (2/2)*4 = 4 -> Y2 = 150
-      expect(resolved[0].logicalY).toBe(98);
+
+      // Pull-up pass clamps block2 to the container bottom (150), then pulls
+      // block1 up to keep the exact 4px margin (96) — no negative gaps.
+      expect(resolved[0].logicalY).toBe(96);
       expect(resolved[1].logicalY).toBe(150);
+      expect(resolved[1].logicalY - (resolved[0].logicalY + 50)).toBe(4);
       expect(resolved[1].logicalY + resolved[1].logicalH).toBeLessThanOrEqual(200);
     });
 

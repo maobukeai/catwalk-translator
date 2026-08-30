@@ -140,6 +140,11 @@ describe('OcrModelsCard (real OCR model downloads)', () => {
   });
 
   it('supports PP-OCRv3 / PP-OCRv4 / PP-OCRv5 version tabs switching', async () => {
+    // 默认档现在是 v6Tiny；本用例只装 v3/v4/v5 的 mock，先显式切到 v4 再验证页签。
+    act(() => {
+      useSettingsStore.getState().setOcrVersion('v4');
+    });
+
     const multiVersionStatus = [
       { id: 'ppocrv3-det', version: 'v3', name: 'PP-OCRv3 文本检测', fileName: 'ch_PP-OCRv3_det_infer.onnx', installed: true, sizeBytes: 4_700_000, approxBytes: 4_700_000 },
       { id: 'ppocrv3-rec', version: 'v3', name: 'PP-OCRv3 文本识别', fileName: 'ch_PP-OCRv3_rec_infer.onnx', installed: true, sizeBytes: 10_800_000, approxBytes: 10_800_000 },

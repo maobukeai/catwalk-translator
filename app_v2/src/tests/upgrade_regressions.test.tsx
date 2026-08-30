@@ -411,6 +411,10 @@ describe('capture overlay v2.3: Enter fullscreen / R repeat / W watch', () => {
     await screen.findByText(/猫步划词/);
 
     await mouseSelection();
+    const confirmBtn = screen.queryByTestId('btn-tool-confirm');
+    if (confirmBtn) {
+      fireEvent.click(confirmBtn);
+    }
     await waitFor(() => {
       expect(screen.getByText('粗糙度')).toBeInTheDocument();
     });

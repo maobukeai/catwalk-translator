@@ -236,7 +236,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   const [cardViewMode, setCardViewMode] = useState<'translated' | 'original' | 'bilingual'>('translated');
   const [globalFontScale, setGlobalFontScale] = useState<number>(1.0);
   const [cardScales, setCardScales] = useState<Record<number, number>>({});
-  const [renderedHeights, setRenderedHeights] = useState<Record<number, number>>({});
+  const [renderedSizes, setRenderedSizes] = useState<Record<number, { width: number; height: number }>>({});
   const [activeBlockIdx, setActiveBlockIdx] = useState<number | null>(null);
 
   // ── Hover lookup (frozen-frame word taking): debounced OCR at the cursor.
@@ -284,19 +284,22 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     if (!overlayResult || overlayResult.blocks.length === 0) return [] as (OverlayBlock & { __i: number })[];
     const kept = overlayResult.blocks
       .map((block, i) => {
-        // Wrapped cards grow taller than the OCR box — the real rendered height
-        // (reported via ResizeObserver) participates in collision avoidance via aabbH,
-        // leaving the original logicalH intact so font sizing never inflates in a loop.
-        const realH = renderedHeights[i];
-        const aabbH = realH && realH > block.logicalH ? realH : block.logicalH;
-        return { ...block, aabbH, __i: i };
+        // Rendered cards are typically taller than the OCR box (font fit × 1.2
+        // line-height) and can overflow horizontally — the real rendered size
+        // (reported via ResizeObserver) participates in collision avoidance via
+        // aabbH/aabbW, leaving the logical box intact so font sizing never
+        // inflates in a loop.
+        const real = renderedSizes[i];
+        const aabbH = real?.height && real.height > block.logicalH ? real.height : block.logicalH;
+        const aabbW = real?.width && real.width > block.logicalW ? real.width : block.logicalW;
+        return { ...block, aabbH, aabbW, __i: i };
       })
       .filter((b) => !dismissedBlockIndexes.includes(b.__i));
     if (!enableAabb) return kept;
     const w = typeof window !== 'undefined' ? window.innerWidth : 1920;
     const h = typeof window !== 'undefined' ? window.innerHeight : 1080;
     return resolveAABBCollisions(kept, w, h);
-  }, [overlayResult, enableAabb, dismissedBlockIndexes, renderedHeights]);
+  }, [overlayResult, enableAabb, dismissedBlockIndexes, renderedSizes]);
 
   // 定时器持有引用：连续 showFeedback 时先清旧 timer，
   // 防止新 toast 被上一个 toast 的定时器提前清除
@@ -1103,7 +1106,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     // PREVIOUS result — stale values would mis-apply to new blocks at the
     // same index (wrong zoom, inflated collision heights).
     setCardScales({});
-    setRenderedHeights({});
+    setRenderedSizes({});
     setActiveBlockIdx(null);
     setTranslatingProgress({ done: 0, total: layout.blocks.length });
 
@@ -1335,12 +1338,12 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     }
   }, [scaleFactor]);
 
-  /** Stable callback: real card heights join the AABB collision layout. */
-  const handleRenderedHeight = useCallback((blockIndex: number, height: number) => {
-    setRenderedHeights((prev) => {
+  /** Stable callback: real card sizes join the AABB collision layout. */
+  const handleRenderedSize = useCallback((blockIndex: number, size: { width: number; height: number }) => {
+    setRenderedSizes((prev) => {
       const cur = prev[blockIndex];
-      if (cur !== undefined && Math.abs(cur - height) <= 2) return prev;
-      return { ...prev, [blockIndex]: height };
+      if (cur && Math.abs(cur.height - size.height) <= 2 && Math.abs(cur.width - size.width) <= 2) return prev;
+      return { ...prev, [blockIndex]: size };
     });
   }, []);
 
@@ -1781,7 +1784,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     setPinnedLookups([]);
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     setCardScales({});
-    setRenderedHeights({});
+    setRenderedSizes({});
     setActiveBlockIdx(null);
     setCardViewMode('translated');
     processEpochRef.current += 1;
@@ -2657,7 +2660,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           onViewCycle={cycleCardView}
           onActive={() => setActiveBlockIdx(block.__i)}
           isActive={activeBlockIdx === block.__i}
-          onRenderedHeight={handleRenderedHeight}
+          onRenderedSize={handleRenderedSize}
         />
       ))}
 

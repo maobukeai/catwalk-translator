@@ -44,6 +44,8 @@ export interface OverlayBlock {
   logicalH: number;
   /** Height used for AABB collision avoidance if different from logicalH */
   aabbH?: number;
+  /** Real rendered width for AABB collision (nowrap text can overflow logicalW) */
+  aabbW?: number;
   /** CSS rgba() background color sampled from desktop */
   bgCss: string;
   /** Real sampled ink colour (rgb() string) or high-contrast fallback */
@@ -269,8 +271,8 @@ export interface AppSettings {
   clipboardWatchEnabled?: boolean;
   /** OCR engine preference: 'auto' | 'onnx' | 'winrt' */
   ocrEngine?: 'auto' | 'onnx' | 'winrt';
-  /** Selected ONNX OCR model version: 'v3' | 'v4' | 'v5' */
-  ocrVersion?: 'v3' | 'v4' | 'v5';
+  /** Selected ONNX OCR model version */
+  ocrVersion?: 'v3' | 'v4' | 'v5' | 'v6' | 'v6t';
   /** Primary translation engine: 'auto' | 'dict' | 'llm' | 'online' */
   primaryTranslationEngine?: 'auto' | 'dict' | 'llm' | 'online';
   /** 百度翻译开放平台 AppID（免费注册，每月 100 万字符）*/

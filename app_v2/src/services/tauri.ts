@@ -369,7 +369,7 @@ export interface OfflineModelStatus {
   approxBytes: number;
 }
 
-/// Installed state + sizes of local PP-OCRv3 / PP-OCRv4 / PP-OCRv5 OCR models.
+/// Installed state + sizes of local PP-OCRv3 / v4 / v5 / v6 / v6-Tiny OCR models.
 export async function cmdOfflineModelsStatus(): Promise<OfflineModelStatus[]> {
   if (isTauri()) {
     return await invoke<OfflineModelStatus[]>('cmd_offline_models_status');
@@ -381,13 +381,19 @@ export async function cmdOfflineModelsStatus(): Promise<OfflineModelStatus[]> {
     { id: 'ppocrv4-det', version: 'v4', name: 'PP-OCRv4 文本检测', fileName: 'ch_PP-OCRv4_det_infer.onnx', installed: true, sizeBytes: 4_700_000, approxBytes: 4_700_000 },
     { id: 'ppocrv4-rec', version: 'v4', name: 'PP-OCRv4 文本识别', fileName: 'ch_PP-OCRv4_rec_infer.onnx', installed: true, sizeBytes: 10_800_000, approxBytes: 10_800_000 },
     { id: 'ppocrv4-cls', version: 'v4', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: true, sizeBytes: 1_400_000, approxBytes: 1_400_000 },
-    { id: 'ppocrv5-det', version: 'v5', name: 'PP-OCRv5 文本检测', fileName: 'ch_PP-OCRv5_det_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 4_900_000 },
-    { id: 'ppocrv5-rec', version: 'v5', name: 'PP-OCRv5 文本识别', fileName: 'ch_PP-OCRv5_rec_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 11_200_000 },
+    { id: 'ppocrv5-det', version: 'v5', name: 'PP-OCRv5 文本检测', fileName: 'ch_PP-OCRv5_det_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 4_819_576 },
+    { id: 'ppocrv5-rec', version: 'v5', name: 'PP-OCRv5 文本识别', fileName: 'ch_PP-OCRv5_rec_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 16_631_306 },
     { id: 'ppocrv5-cls', version: 'v5', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_400_000 },
+    { id: 'ppocrv6-det', version: 'v6', name: 'PP-OCRv6 文本检测 (Small)', fileName: 'ch_PP-OCRv6_det_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 9_929_594 },
+    { id: 'ppocrv6-rec', version: 'v6', name: 'PP-OCRv6 文本识别 (Small)', fileName: 'ch_PP-OCRv6_rec_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 21_234_383 },
+    { id: 'ppocrv6-cls', version: 'v6', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_400_000 },
+    { id: 'ppocrv6t-det', version: 'v6t', name: 'PP-OCRv6 文本检测 (Tiny)', fileName: 'ch_PP-OCRv6_tiny_det_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_829_618 },
+    { id: 'ppocrv6t-rec', version: 'v6t', name: 'PP-OCRv6 文本识别 (Tiny)', fileName: 'ch_PP-OCRv6_tiny_rec_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 4_489_813 },
+    { id: 'ppocrv6t-cls', version: 'v6t', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_400_000 },
   ];
 }
 
-/// Get current active ONNX OCR engine version ("v3", "v4", or "v5").
+/// Get current active ONNX OCR engine version ("v3" | "v4" | "v5" | "v6" | "v6t").
 export async function cmdGetActiveOcrVersion(): Promise<string> {
   if (isTauri()) {
     return await invoke<string>('cmd_get_active_ocr_version');
@@ -1110,13 +1116,8 @@ export async function cmdUniversalTranslate(
   // 2. 纯网页开发模式 Fallback
   const { detected, suggestedTarget } = detectLanguage(trimmed);
   const actualSource = req.sourceLang === 'auto' ? detected : req.sourceLang;
-  let actualTarget = req.targetLang === 'auto' ? suggestedTarget : req.targetLang;
-
-  // 智能同语种翻转
-  if ((actualSource.startsWith('zh') && actualTarget.startsWith('zh')) ||
-      (actualSource.startsWith('en') && actualTarget.startsWith('en'))) {
-    actualTarget = actualSource.startsWith('zh') ? 'en' : 'zh-CN';
-  }
+  // 显式选择的目标语言原样保留，不做同语种翻转；仅 auto 目标按源语言智能推荐
+  const actualTarget = req.targetLang === 'auto' ? suggestedTarget : req.targetLang;
 
   const engines: import('./types').MultiEngineTranslation[] = [];
 

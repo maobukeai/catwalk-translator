@@ -11,6 +11,7 @@ import { CaptureOverlay } from "./components/Overlay/CaptureOverlay";
 import { CheatSheetModal } from "./components/Overlay/CheatSheetModal";
 import { SpotlightModal } from "./components/SpotlightModal";
 import { OnboardingModal } from "./components/OnboardingModal";
+import { OcrModelGuideModal } from "./components/OcrModelGuideModal";
 import { ClipboardToast, type ClipboardPayload } from "./components/ClipboardToast";
 import { CloseConfirmModal } from "./components/CloseConfirmModal";
 import { isTauri, cmdQueryText, cmdSetWindowBlur, cmdExitApp, cmdGetAutoStart, cmdSetAutoStart } from "./services/tauri";
@@ -66,6 +67,14 @@ function App() {
     setIsOnboardingOpen(false);
   };
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false);
+  // OCR 模型引导弹窗 → 设置页跳转目标（切到「专业词库」页并定位到模型卡片）
+  const [settingsInitialCategory, setSettingsInitialCategory] = useState<'appearance' | 'hotkey' | 'online' | 'dicts' | 'preference' | 'backup' | undefined>(undefined);
+  const [settingsFocusOcr, setSettingsFocusOcr] = useState(false);
+  const goDownloadOcrModels = () => {
+    setSettingsInitialCategory('dicts');
+    setSettingsFocusOcr(true);
+    setActiveTab('settings');
+  };
   const [clipboardPayload, setClipboardPayload] = useState<ClipboardPayload | null>(null);
   // seq 保证从划词 overlay 二次发送「相同文本」时也能强制重挂载 DualPaneTranslator
   const [transferred, setTransferred] = useState<{ text: string; seq: number }>({ text: "", seq: 0 });
@@ -486,6 +495,12 @@ function App() {
               )}
               {activeTab === "settings" && (
                 <SettingsDashboard
+                  initialCategory={settingsInitialCategory}
+                  focusOcrModels={settingsFocusOcr}
+                  onInitialApplied={() => {
+                    setSettingsInitialCategory(undefined);
+                    setSettingsFocusOcr(false);
+                  }}
                   onStartCapture={() => setIsOverlayOpen(true)}
                   onTriggerSpotlight={() => setIsSpotlightOpen(true)}
                   onTriggerClipboard={handleTriggerClipboard}
@@ -532,6 +547,9 @@ function App() {
 
       {/* 首次使用引导 */}
       <OnboardingModal isOpen={isOnboardingOpen} onClose={closeOnboarding} />
+
+      {/* 离线 OCR 模型未安装时的新手引导（自动探测，可「去下载」直达设置页） */}
+      <OcrModelGuideModal onGoDownload={goDownloadOcrModels} />
 
       {/* Spotlight Instant Search Float Window */}
       <SpotlightModal

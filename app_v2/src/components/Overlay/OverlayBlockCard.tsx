@@ -63,8 +63,8 @@ interface OverlayBlockCardProps {
   /** Hover marks this card as the active keyboard target (Space / Ctrl+D / ↑↓). */
   onActive?: () => void;
   isActive?: boolean;
-  /** Reports the real rendered height so wrapped cards avoid overlapping. */
-  onRenderedHeight?: (blockIndex: number, height: number) => void;
+  /** Reports the real rendered size so wrapped/wide cards avoid overlapping. */
+  onRenderedSize?: (blockIndex: number, size: { width: number; height: number }) => void;
 }
 
 export const clampCardScale = (s: number) => Math.min(2.0, Math.max(0.6, s));
@@ -224,7 +224,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   onViewCycle,
   onActive,
   isActive,
-  onRenderedHeight,
+  onRenderedSize,
 }) => {
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ mx: 0, my: 0, ox: 0, oy: 0 });
@@ -245,21 +245,26 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
     }
   }, [block.logicalX, block.logicalY, pos.x, pos.y]);
 
-  // Real rendered height feeds the parent's AABB collision avoidance so wrapped
-  // (multi-line) cards push neighbours down instead of covering them.
-  const lastReportedHRef = useRef(0);
+  // Real rendered size feeds the parent's AABB collision avoidance so wrapped
+  // (multi-line/taller) cards push neighbours down instead of covering them.
+  // Width uses scrollWidth: fit-content caps at maxWidth, but a single-line-
+  // locked card whose text still overflows reports its true ink width.
+  const lastReportedSizeRef = useRef({ w: 0, h: 0 });
   useEffect(() => {
-    if (typeof ResizeObserver === 'undefined' || !cardRef.current || !onRenderedHeight) return;
+    if (typeof ResizeObserver === 'undefined' || !cardRef.current || !onRenderedSize) return;
+    const el = cardRef.current;
     const ro = new ResizeObserver((entries) => {
       const h = entries[0]?.contentRect.height ?? 0;
-      if (h > 0 && Math.abs(h - lastReportedHRef.current) > 2) {
-        lastReportedHRef.current = h;
-        onRenderedHeight(blockIndex, h);
+      const w = el.scrollWidth || entries[0]?.contentRect.width || 0;
+      const last = lastReportedSizeRef.current;
+      if (h > 0 && (Math.abs(h - last.h) > 2 || Math.abs(w - last.w) > 2)) {
+        lastReportedSizeRef.current = { w, h };
+        onRenderedSize(blockIndex, { width: w, height: h });
       }
     });
-    ro.observe(cardRef.current);
+    ro.observe(el);
     return () => ro.disconnect();
-  }, [blockIndex, onRenderedHeight]);
+  }, [blockIndex, onRenderedSize]);
 
   // Ctrl+wheel zooms this card's font (native listener: wheel must be
   // non-passive to preventDefault the browser page zoom).

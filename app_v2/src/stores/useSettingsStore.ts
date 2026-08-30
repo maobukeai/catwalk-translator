@@ -74,7 +74,7 @@ interface SettingsState {
   setWatchIntervalMs: (ms: number) => void;
   setClipboardWatchEnabled: (enabled: boolean) => void;
   setOcrEngine: (engine: 'auto' | 'onnx' | 'winrt') => void;
-  setOcrVersion: (version: 'v3' | 'v4' | 'v5') => void;
+  setOcrVersion: (version: 'v3' | 'v4' | 'v5' | 'v6' | 'v6t') => void;
   setPrimaryTranslationEngine: (engine: 'auto' | 'dict' | 'llm' | 'online') => void;
   setBaiduConfig: (appId: string, secret: string) => void;
   setDeeplConfig: (apiKey: string, customUrl: string) => void;
@@ -196,7 +196,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         watchIntervalMs: fetched.watchIntervalMs ?? 3000,
         clipboardWatchEnabled: fetched.clipboardWatchEnabled ?? false,
         ocrEngine: fetched.ocrEngine || 'auto',
-        ocrVersion: (fetched.ocrVersion as 'v3' | 'v4' | 'v5') || 'v4',
+        ocrVersion: (fetched.ocrVersion as 'v3' | 'v4' | 'v5' | 'v6' | 'v6t') || 'v4',
         ocrFilterEnabled: fetched.ocrFilterEnabled ?? true,
         ocrFilterRules: fetched.ocrFilterRules ?? [],
         selectionLookupEnabled: fetched.selectionLookupEnabled ?? false,

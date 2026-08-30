@@ -1,6 +1,6 @@
 
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Search,
   Volume2,
@@ -11,6 +11,11 @@ import {
   Layers,
   Check,
   X,
+  Clock,
+  TextCursorInput,
+  MousePointer2,
+  Keyboard,
+  Settings,
 } from "lucide-react";
 import { cmdQueryText, cmdGetHistory, cmdAddHistory, cmdToggleFavorite } from "../../services/tauri";
 import { speakText } from "../../services/tts";
@@ -22,6 +27,18 @@ interface SearchPanelProps {
   settings: AppSettings;
 }
 
+/** 空状态常用术语快捷标签（点按即查） */
+const CG_QUICK_TERMS = [
+  "Principled BSDF",
+  "Subsurface Scattering",
+  "Normal Map",
+  "PBR",
+  "Lumen",
+  "Nanite",
+  "Topology",
+  "Roughness",
+];
+
 export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -29,8 +46,33 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [isFavorite, setIsFavorite] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [recent, setRecent] = useState<HistoryItem[]>([]);
 
   const { isLight } = useAppTheme();
+
+  // 最近查询：历史按最新在前存储，去重后取前 6 条作为一键回查入口
+  const loadRecent = async () => {
+    try {
+      const all = await cmdGetHistory();
+      const list = Array.isArray(all) ? all : [];
+      const seen = new Set<string>();
+      const dedup: HistoryItem[] = [];
+      for (const item of list) {
+        const key = item.original.trim().toLowerCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        dedup.push(item);
+        if (dedup.length >= 6) break;
+      }
+      setRecent(dedup);
+    } catch (err) {
+      console.error("Load recent failed:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadRecent();
+  }, []);
 
   const handleSearch = async (textToSearch?: string) => {
     const q = textToSearch !== undefined ? textToSearch : query;
@@ -58,6 +100,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
           isFavorite: false,
         };
         await cmdAddHistory(newHist);
+        loadRecent();
       }
     } catch (err) {
       console.error("Query failed:", err);
@@ -99,10 +142,27 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
         fav = true;
       }
       setIsFavorite(fav);
+      loadRecent();
     } catch (err) {
       console.error("Toggle favorite failed:", err);
     }
   };
+
+  // 空状态无感查词提示（依据设置动态生成）
+  const hoverModLabel =
+    settings.hoverLookupModifier === "alt" ? "Alt" : settings.hoverLookupModifier === "shift" ? "Shift" : "Ctrl";
+  const emptyTips: { icon: React.ReactNode; text: string }[] = [
+    ...(settings.selectionLookupEnabled
+      ? [{ icon: <TextCursorInput className="h-3.5 w-3.5 text-blue-500" />, text: "划选屏幕文字，自动弹出翻译词卡" }]
+      : []),
+    ...(settings.hoverLookupEnabled
+      ? [{ icon: <MousePointer2 className="h-3.5 w-3.5 text-blue-500" />, text: `按住 ${hoverModLabel} 悬停屏幕文字取词` }]
+      : []),
+    { icon: <Keyboard className="h-3.5 w-3.5 text-blue-500" />, text: `${settings.spotlightHotkey || "Alt+Space"} 随时呼出查词窗` },
+  ];
+  if (!settings.selectionLookupEnabled || !settings.hoverLookupEnabled) {
+    emptyTips.push({ icon: <Settings className="h-3.5 w-3.5 text-blue-500" />, text: "设置中可开启划词 / 悬停无感查词" });
+  }
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -168,12 +228,77 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
         </button>
       </div>
 
-      {/* 极简无图 Empty State 隐形指示 */}
+      {/* 空状态：快捷术语 + 最近查询 + 无感查词提示 */}
       {!result && !loading && (
-        <div className="text-center py-12 space-y-2 select-none opacity-60">
-          <p className={`text-xs font-mono ${isLight ? "text-slate-500" : "text-zinc-500"}`}>
-            按 Enter 或点击“查询词条”获取音标、专业注解及多源对比结果
-          </p>
+        <div className="space-y-6 pt-2">
+          {/* 常用术语快捷标签 */}
+          <div className="space-y-2.5">
+            <div className={`flex items-center space-x-1.5 px-1 text-xs font-semibold ${isLight ? "text-slate-500" : "text-zinc-400"}`}>
+              <Sparkles className="h-3.5 w-3.5 text-blue-500" />
+              <span>常用术语 · 点按即查</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {CG_QUICK_TERMS.map((term) => (
+                <button
+                  key={term}
+                  type="button"
+                  onClick={() => handleSearch(term)}
+                  className={`flex items-center space-x-1.5 rounded-full border px-3.5 py-1.5 text-xs font-medium transition cursor-pointer active:scale-95 shadow-xs ${
+                    isLight
+                      ? "bg-white border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700 hover:bg-blue-50/60"
+                      : "bg-white/[0.04] border-white/10 text-zinc-300 hover:border-blue-400/40 hover:text-sky-300 hover:bg-blue-500/10"
+                  }`}
+                >
+                  <Search className="h-3 w-3 opacity-50" />
+                  <span>{term}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 最近查询（一键回查） */}
+          {recent.length > 0 && (
+            <div className="space-y-2.5">
+              <div className={`flex items-center space-x-1.5 px-1 text-xs font-semibold ${isLight ? "text-slate-500" : "text-zinc-400"}`}>
+                <Clock className="h-3.5 w-3.5 text-blue-500" />
+                <span>最近查询</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {recent.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleSearch(item.original)}
+                    className={`p-3.5 rounded-xl border text-left space-y-1 transition cursor-pointer active:scale-[0.98] shadow-sm ${
+                      isLight
+                        ? "bg-white border-slate-200 hover:border-blue-300 hover:shadow-md"
+                        : "bg-white/[0.04] border-white/10 hover:border-white/25 hover:bg-white/[0.07]"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-sm font-bold truncate ${isLight ? "text-slate-900" : "text-white"}`}>{item.original}</span>
+                      {item.isFavorite && <Star className="h-3.5 w-3.5 shrink-0 fill-amber-400 text-amber-400" />}
+                    </div>
+                    <p className={`text-xs truncate ${isLight ? "text-slate-500" : "text-zinc-400"}`}>{item.translated}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 无感查词提示条 */}
+          <div className={`flex flex-wrap items-center justify-center gap-x-5 gap-y-2 rounded-2xl border px-5 py-3.5 text-xs select-none ${
+            isLight
+              ? "bg-slate-50/70 border-slate-200 text-slate-500"
+              : "bg-white/[0.02] border-white/8 text-zinc-400"
+          }`}>
+            {emptyTips.map((tip, idx) => (
+              <span key={idx} className="flex items-center space-x-1.5">
+                {tip.icon}
+                <span>{tip.text}</span>
+              </span>
+            ))}
+          </div>
         </div>
       )}
 

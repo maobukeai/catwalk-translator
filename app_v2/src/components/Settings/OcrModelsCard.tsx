@@ -11,6 +11,7 @@ import {
   ArrowRight,
   RefreshCw,
 } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
 import {
   cmdOfflineModelsStatus,
   cmdDownloadOfflineModel,
@@ -29,7 +30,7 @@ interface ProgressInfo {
   done?: boolean;
 }
 
-type OcrVersion = 'v3' | 'v4' | 'v5';
+type OcrVersion = 'v3' | 'v4' | 'v5' | 'v6' | 'v6t';
 
 interface VersionTabConfig {
   id: OcrVersion;
@@ -60,24 +61,49 @@ const VERSION_CONFIGS: VersionTabConfig[] = [
   {
     id: 'v5',
     label: 'PP-OCRv5',
-    badge: '2026 最新增强',
+    badge: '生僻字增强',
     badgeColor: 'bg-violet-500/15 text-violet-500 border-violet-400/30',
-    desc: '2026最新增强版 · 特别增强生僻字、复杂排版及英文混合识别',
-    recommendNote: '最新增强',
+    desc: '增强版 · 长句与低对比度小字更准；速度与 v4 相近，体积 21MB',
+    recommendNote: '长句更准',
+  },
+  {
+    id: 'v6',
+    label: 'PP-OCRv6',
+    badge: '最新 · 精度优先',
+    badgeColor: 'bg-amber-500/15 text-amber-500 border-amber-400/30',
+    desc: '最新版 Small · 实测识别质量最优：模型名、副标题、长句与低对比度小字全部正确；速度约为 v4 的 1.3 倍耗时，体积 31MB',
+    recommendNote: '最新精度',
+  },
+  {
+    id: 'v6t',
+    label: 'PP-OCRv6 Tiny',
+    badge: '最快 · 6MB',
+    badgeColor: 'bg-cyan-500/15 text-cyan-500 border-cyan-400/30',
+    desc: '最新版 Tiny · 实测同图耗时约为 v4 的 45%，体积仅 6MB；密排小字的漏读比 Small 更多',
+    recommendNote: '极速首选',
   },
 ];
 
 const getModelVersion = (m: OfflineModelStatus): OcrVersion => {
-  if (m.version === 'v3' || m.version === 'v4' || m.version === 'v5') {
+  if (
+    m.version === 'v3' ||
+    m.version === 'v4' ||
+    m.version === 'v5' ||
+    m.version === 'v6' ||
+    m.version === 'v6t'
+  ) {
     return m.version;
   }
+  // 后备匹配按「长前缀优先」：v6t 与 v6 前缀相同，顺序反了会把 Tiny 归到 Small。
+  if (m.id.includes('v6t') || m.fileName.includes('v6_tiny')) return 'v6t';
+  if (m.id.includes('v6') || m.fileName.includes('v6')) return 'v6';
   if (m.id.includes('v4') || m.fileName.includes('v4')) return 'v4';
   if (m.id.includes('v5') || m.fileName.includes('v5')) return 'v5';
   return 'v3';
 };
 
 /**
- * Local OCR model manager: supports PP-OCRv3, PP-OCRv4, and PP-OCRv5
+ * Local OCR model manager: supports PP-OCRv3 / v4 / v5 / v6 / v6-Tiny
  * multi-version switching, streaming progress download, Windows lock-safe deletion,
  * and hot reloading without client restart.
  */
@@ -85,8 +111,8 @@ export const OcrModelsCard: React.FC = () => {
   const { isLight } = useAppTheme();
   const setOcrVersion = useSettingsStore((s) => s.setOcrVersion);
   const [models, setModels] = useState<OfflineModelStatus[]>([]);
-  const [activeVersion, setActiveVersion] = useState<OcrVersion>('v4');
-  const [selectedTab, setSelectedTab] = useState<OcrVersion>('v4');
+  const [activeVersion, setActiveVersion] = useState<OcrVersion>('v6t');
+  const [selectedTab, setSelectedTab] = useState<OcrVersion>('v6t');
   const [progress, setProgress] = useState<Record<string, ProgressInfo>>({});
   const [isBatchDownloading, setIsBatchDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +134,10 @@ export const OcrModelsCard: React.FC = () => {
 
       let cleanActive: OcrVersion = 'v4';
       const lower = activeVer.toLowerCase();
-      if (lower.includes('v3')) cleanActive = 'v3';
+      // v6t 先判定：与 v6 前缀相同，顺序反了极速档会被显示成 Small 档。
+      if (lower.includes('v6t')) cleanActive = 'v6t';
+      else if (lower.includes('v6')) cleanActive = 'v6';
+      else if (lower.includes('v3')) cleanActive = 'v3';
       else if (lower.includes('v5')) cleanActive = 'v5';
       else cleanActive = 'v4';
 
@@ -141,29 +170,29 @@ export const OcrModelsCard: React.FC = () => {
     void refresh();
     if (!isTauri()) return;
     let unlisten: (() => void) | null = null;
-    import('@tauri-apps/api/event')
-      .then(({ listen }) => {
-        listen<{ modelId: string; received: number; total: number; done?: boolean }>(
-          'model-download-progress',
-          (event) => {
-            const p = event.payload;
-            if (!p?.modelId) return;
-            setProgress((prev) => ({
-              ...prev,
-              [p.modelId]: { received: p.received, total: p.total, done: p.done },
-            }));
-          }
-        ).then((u) => {
+    try {
+      listen<{ modelId: string; received: number; total: number; done?: boolean }>(
+        'model-download-progress',
+        (event) => {
+          const p = event.payload;
+          if (!p?.modelId) return;
+          setProgress((prev) => ({
+            ...prev,
+            [p.modelId]: { received: p.received, total: p.total, done: p.done },
+          }));
+        }
+      )
+        .then((u) => {
           unlisten = u;
-        });
-      })
-      .catch(() => {
-        /* event channel unavailable in browser mode */
-      });
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
     return () => {
-      unlisten?.();
+      if (unlisten) unlisten();
     };
-  }, [refresh]);
+  }, []);
 
   const handleDownload = async (id: string) => {
     setError(null);
@@ -247,6 +276,7 @@ export const OcrModelsCard: React.FC = () => {
   return (
     <div
       className="rounded-xl border p-4 space-y-4 shadow-sm"
+      id="ocr-models-card-anchor"
       data-testid="ocr-models-card"
       style={{
         borderColor: isLight ? 'rgba(148,163,184,0.35)' : 'rgba(255,255,255,0.12)',
@@ -266,14 +296,13 @@ export const OcrModelsCard: React.FC = () => {
               </span>
               <span
                 className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
-                  activeVersion === 'v4'
-                    ? 'bg-emerald-500/15 text-emerald-500 border-emerald-400/30'
-                    : activeVersion === 'v5'
-                    ? 'bg-violet-500/15 text-violet-500 border-violet-400/30'
-                    : 'bg-blue-500/15 text-blue-500 border-blue-400/30'
+                  VERSION_CONFIGS.find((c) => c.id === activeVersion)?.badgeColor ??
+                  'bg-blue-500/15 text-blue-500 border-blue-400/30'
                 }`}
               >
-                当前使用: {activeVersion.toUpperCase()}
+                当前使用:{' '}
+                {VERSION_CONFIGS.find((c) => c.id === activeVersion)?.label ??
+                  activeVersion.toUpperCase()}
               </span>
             </div>
             <p className="text-[11px] mt-0.5" style={{ color: 'var(--g-text-3)' }}>
@@ -293,7 +322,7 @@ export const OcrModelsCard: React.FC = () => {
       </div>
 
       {/* ── Version Tabs ── */}
-      <div className="grid grid-cols-3 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
         {VERSION_CONFIGS.map((cfg) => {
           const tabModels = models.filter((m) => getModelVersion(m) === cfg.id);
           const installedCount = tabModels.filter((m) => m.installed).length;
