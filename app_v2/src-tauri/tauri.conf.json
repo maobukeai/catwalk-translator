@@ -53,7 +53,8 @@
         ],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "nsis/installer-hooks.nsh"
       },
       "wix": {
         "language": "zh-CN"
