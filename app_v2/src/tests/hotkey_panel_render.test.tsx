@@ -140,4 +140,25 @@ describe('HotkeyPanel 快捷键控制中心渲染与交互测试', () => {
     // 旧值不在动态选项中，必须以兜底选项呈现而不是下拉空白
     expect(screen.getByText('⚙️ deepseek（旧版通道，重新选择即更新）')).toBeInTheDocument();
   });
+
+  it('默认状态下仅开启「全局划词选区」，其余三个快捷键默认关闭', () => {
+    expect(DEFAULT_SETTINGS.captureHotkeyEnabled).toBe(true);
+    expect(DEFAULT_SETTINGS.spotlightHotkeyEnabled).toBe(false);
+    expect(DEFAULT_SETTINGS.clipboardHotkeyEnabled).toBe(false);
+    expect(DEFAULT_SETTINGS.toggleWindowHotkeyEnabled).toBe(false);
+
+    useSettingsStore.setState({
+      settings: { ...DEFAULT_SETTINGS },
+    });
+    render(<HotkeyPanel />);
+
+    const toggles = screen.getAllByTitle('开启或关闭该快捷键');
+    expect(toggles).toHaveLength(4);
+    // 第 1 个是划词选区：激活高亮 bg-blue-600
+    expect(toggles[0].className).toContain('bg-blue-600');
+    // 其余 3 个默认关闭：未激活
+    expect(toggles[1].className).not.toContain('bg-purple-600');
+    expect(toggles[2].className).not.toContain('bg-emerald-600');
+    expect(toggles[3].className).not.toContain('bg-amber-600');
+  });
 });

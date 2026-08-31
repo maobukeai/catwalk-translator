@@ -175,7 +175,7 @@ pub fn register_all_user_shortcuts(
     }
 
     // 2. Spotlight hotkey
-    if settings.spotlight_hotkey_enabled.unwrap_or(true) {
+    if settings.spotlight_hotkey_enabled.unwrap_or(false) {
         let hk = settings
             .spotlight_hotkey
             .as_deref()
@@ -198,7 +198,7 @@ pub fn register_all_user_shortcuts(
     }
 
     // 3. Clipboard hotkey
-    if settings.clipboard_hotkey_enabled.unwrap_or(true) {
+    if settings.clipboard_hotkey_enabled.unwrap_or(false) {
         let hk = settings
             .clipboard_hotkey
             .as_deref()
@@ -221,7 +221,7 @@ pub fn register_all_user_shortcuts(
     }
 
     // 4. Toggle Window hotkey
-    if settings.toggle_window_hotkey_enabled.unwrap_or(true) {
+    if settings.toggle_window_hotkey_enabled.unwrap_or(false) {
         let hk = settings
             .toggle_window_hotkey
             .as_deref()
@@ -362,7 +362,7 @@ pub fn run() {
                             }
 
                             // Match spotlight hotkey
-                            if settings.spotlight_hotkey_enabled.unwrap_or(true) {
+                            if settings.spotlight_hotkey_enabled.unwrap_or(false) {
                                 let hk = settings
                                     .spotlight_hotkey
                                     .as_deref()
@@ -378,7 +378,7 @@ pub fn run() {
                             }
 
                             // Match clipboard hotkey
-                            if settings.clipboard_hotkey_enabled.unwrap_or(true) {
+                            if settings.clipboard_hotkey_enabled.unwrap_or(false) {
                                 let hk = settings
                                     .clipboard_hotkey
                                     .as_deref()
@@ -394,7 +394,7 @@ pub fn run() {
                             }
 
                             // Match toggle window hotkey
-                            if settings.toggle_window_hotkey_enabled.unwrap_or(true) {
+                            if settings.toggle_window_hotkey_enabled.unwrap_or(false) {
                                 let hk = settings
                                     .toggle_window_hotkey
                                     .as_deref()

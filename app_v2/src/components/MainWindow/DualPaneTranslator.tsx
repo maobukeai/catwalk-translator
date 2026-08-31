@@ -24,6 +24,8 @@ import {
   Pin,
   Image as ImageIcon,
   Settings,
+  Flame,
+  MessageSquare,
 } from "lucide-react";
 import { cmdUniversalTranslate, detectLanguage, saveTranslationHistory, cmdImageOcrTranslate, cmdOpenPin } from "../../services/tauri";
 import { exportTranslationImage } from "../../services/exportImage";
@@ -58,6 +60,7 @@ interface DualPaneTranslatorProps {
 /** 引擎 → lucide 图标映射（取代旧 emoji 徽章，统一苹果极简视觉） */
 function getEngineIcon(shortName: string): React.ElementType {
   const n = shortName || '';
+  if (n.includes('Lingva')) return Globe;
   if (n.includes('Google')) return Globe;
   if (n.includes('Bing')) return Hexagon;
   if (n.includes('有道')) return BookOpen;
@@ -65,6 +68,11 @@ function getEngineIcon(shortName: string): React.ElementType {
   if (n.includes('MyMemory')) return Brain;
   if (n.includes('DeepL')) return Zap;
   if (n.includes('腾讯')) return Bird;
+  if (n.includes('彩云')) return Sparkles;
+  if (n.includes('Papago')) return Bird;
+  if (n.includes('Urban') || n.includes('俚语')) return MessageSquare;
+  if (n.includes('火山')) return Flame;
+  if (n.includes('Yandex')) return Globe;
   if (n.includes('CG') || n.includes('词库')) return Snowflake;
   if (n.includes('AI') || n.includes('LLM')) return Bot;
   return Sparkles;
@@ -95,7 +103,7 @@ export const SUPPORTED_LANGUAGES: LanguageOption[] = [
   { code: "sv", name: "瑞典语 (Svenska)" },
   { code: "cs", name: "捷克语 (Čeština)" },
   { code: "el", name: "希腊语 (Ελληνικά)" },
-  { code: "he", name: "希伯来语 (עברית)" },
+  { code: "he", name: "希伯来语 (עברי特)" },
   { code: "da", name: "丹麦语 (Dansk)" },
   { code: "fi", name: "芬兰语 (Suomi)" },
   { code: "no", name: "挪威语 (Norsk)" },
@@ -105,6 +113,7 @@ export const SUPPORTED_LANGUAGES: LanguageOption[] = [
 
 function getShortEngineName(fullName: string): string {
   if (!fullName) return '';
+  if (fullName.includes('Lingva')) return 'Lingva';
   if (fullName.includes('Google') || fullName.includes('谷歌')) return 'Google';
   if (fullName.includes('Bing') || fullName.includes('微软')) return 'Bing';
   if (fullName.includes('有道')) return '有道';
@@ -112,6 +121,11 @@ function getShortEngineName(fullName: string): string {
   if (fullName.includes('MyMemory')) return 'MyMemory';
   if (fullName.includes('DeepL')) return 'DeepL';
   if (fullName.includes('腾讯') || fullName.includes('Transmart')) return '腾讯';
+  if (fullName.includes('彩云')) return '彩云';
+  if (fullName.includes('Papago') || fullName.includes('Naver')) return 'Papago';
+  if (fullName.includes('Urban') || fullName.includes('俚语')) return 'Urban 俚语';
+  if (fullName.includes('火山')) return '火山翻译';
+  if (fullName.includes('Yandex')) return 'Yandex';
   if (fullName.includes('AI') || fullName.includes('LLM')) {
     const match = fullName.match(/\((.*?)\)/);
     const provider = match ? match[1] : 'AI';
@@ -740,9 +754,16 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       tabs.push({ name: 'CG 词库', icon: Snowflake });
     }
     const online = settings.onlineEngines;
-    if (online?.google !== false) tabs.push({ name: 'Google', icon: Globe });
     if (online?.bing) tabs.push({ name: 'Bing', icon: Hexagon });
     if (online?.youdao) tabs.push({ name: '有道', icon: BookOpen });
+    if (online?.tencent) tabs.push({ name: '腾讯', icon: Bird });
+    if (online?.caiyun) tabs.push({ name: '彩云', icon: Sparkles });
+    if (online?.lingva) tabs.push({ name: 'Lingva', icon: Globe });
+    if (online?.papago) tabs.push({ name: 'Papago', icon: Bird });
+    if (online?.volcengine) tabs.push({ name: '火山翻译', icon: Flame });
+    if (online?.urban) tabs.push({ name: 'Urban 俚语', icon: MessageSquare });
+    if (online?.yandex) tabs.push({ name: 'Yandex', icon: Globe });
+    if (online?.google) tabs.push({ name: 'Google', icon: Globe });
     if (online?.deepl && (settings.deeplApiKey?.trim() || settings.deeplCustomUrl?.trim())) {
       tabs.push({ name: 'DeepL', icon: Zap });
     }
@@ -750,9 +771,8 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       tabs.push({ name: '百度', icon: PawPrint });
     }
     if (online?.myMemory) tabs.push({ name: 'MyMemory', icon: Brain });
-    if (online?.tencent) tabs.push({ name: '腾讯', icon: Bird });
     if (tabs.length === 0) {
-      tabs.push({ name: 'Google', icon: Globe });
+      tabs.push({ name: 'Bing', icon: Hexagon });
     }
     return tabs;
   }, [

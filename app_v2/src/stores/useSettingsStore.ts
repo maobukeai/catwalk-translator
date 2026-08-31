@@ -43,7 +43,7 @@ interface SettingsState {
   setActiveLlmConfig: (id: string) => void;
   setPresetDictToggle: (dict: keyof PresetDicts, enabled: boolean) => void;
   setOnlineEngineToggle: (engine: keyof OnlineEngines, enabled: boolean) => void;
-  setAllOnlineEngines: (mode: 'all' | 'recommended' | 'none') => void;
+  setAllOnlineEngines: (mode: 'all' | 'recommended' | 'domestic' | 'none') => void;
   setTranslationTiers: (tiers: string[]) => void;
   moveTier: (fromIndex: number, toIndex: number) => void;
   setAppearance: (updates: Partial<AppearanceSettings>) => void;
@@ -185,6 +185,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         spotlightHotkey: fetched.spotlightHotkey || 'Alt+Space',
         clipboardHotkey: fetched.clipboardHotkey || 'Ctrl+Shift+C',
         toggleWindowHotkey: fetched.toggleWindowHotkey || 'Alt+Q',
+        captureHotkeyEnabled: fetched.captureHotkeyEnabled ?? (fetched as any).hotkeyEnabled ?? true,
+        spotlightHotkeyEnabled: fetched.spotlightHotkeyEnabled ?? false,
+        clipboardHotkeyEnabled: fetched.clipboardHotkeyEnabled ?? false,
+        toggleWindowHotkeyEnabled: fetched.toggleWindowHotkeyEnabled ?? false,
         appearance: initialAppearance,
         llmConfig: fetched.llmConfig || fetchedPool[0] || null,
         llmConfigs: fetchedPool,
@@ -395,7 +399,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     debouncedSaveSettings(get, set);
   },
 
-  setAllOnlineEngines: (mode: 'all' | 'recommended' | 'none') => {
+  setAllOnlineEngines: (mode: 'all' | 'recommended' | 'domestic' | 'none') => {
     const { settings, initialSettings } = get();
     let updatedOnline: OnlineEngines;
     if (mode === 'all') {
@@ -407,16 +411,28 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         myMemory: true,
         baidu: true,
         tencent: true,
+        lingva: true,
+        caiyun: true,
+        papago: true,
+        urban: true,
+        volcengine: true,
+        yandex: true,
       };
-    } else if (mode === 'recommended') {
+    } else if (mode === 'recommended' || mode === 'domestic') {
       updatedOnline = {
-        google: true,
+        google: false,
         bing: true,
         youdao: true,
         deepl: false,
         myMemory: false,
         baidu: false,
-        tencent: false,
+        tencent: true,
+        lingva: true,
+        caiyun: true,
+        papago: false,
+        urban: false,
+        volcengine: true,
+        yandex: false,
       };
     } else {
       updatedOnline = {
@@ -427,6 +443,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         myMemory: false,
         baidu: false,
         tencent: false,
+        lingva: false,
+        caiyun: false,
+        papago: false,
+        urban: false,
+        volcengine: false,
+        yandex: false,
       };
     }
     const updated = { ...settings, onlineEngines: updatedOnline };

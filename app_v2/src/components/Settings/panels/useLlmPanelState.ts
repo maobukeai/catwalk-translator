@@ -10,6 +10,22 @@ export const PROVIDER_DEFAULT_ENDPOINTS: Record<string, { endpoint: string; mode
     endpoint: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
   },
+  SiliconFlow: {
+    endpoint: 'https://api.siliconflow.cn/v1',
+    model: 'deepseek-ai/DeepSeek-V3',
+  },
+  '智谱 GLM': {
+    endpoint: 'https://open.bigmodel.cn/api/paas/v4',
+    model: 'glm-4-flash',
+  },
+  '通义千问': {
+    endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-plus',
+  },
+  Kimi: {
+    endpoint: 'https://api.moonshot.cn/v1',
+    model: 'moonshot-v1-8k',
+  },
   OpenAI: {
     endpoint: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
@@ -17,10 +33,6 @@ export const PROVIDER_DEFAULT_ENDPOINTS: Record<string, { endpoint: string; mode
   Ollama: {
     endpoint: 'http://localhost:11434/v1',
     model: 'llama3',
-  },
-  '智谱 GLM': {
-    endpoint: 'https://open.bigmodel.cn/api/paas/v4',
-    model: 'glm-4-flash',
   },
   Custom: {
     endpoint: 'https://api.custom-llm.com/v1',

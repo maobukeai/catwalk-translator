@@ -148,6 +148,12 @@ export interface OnlineEngines {
   myMemory?: boolean;
   baidu?: boolean;
   tencent?: boolean;
+  lingva?: boolean;
+  caiyun?: boolean;
+  papago?: boolean;
+  urban?: boolean;
+  volcengine?: boolean;
+  yandex?: boolean;
   [key: string]: boolean | undefined;
 }
 

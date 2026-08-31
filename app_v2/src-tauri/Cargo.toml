@@ -1,6 +1,6 @@
 [package]
 name = "MaobuTranslator"
-version = "0.1.9"
+version = "0.2.0"
 description = "猫步翻译"
 authors = ["maobukeai"]
 edition = "2021"

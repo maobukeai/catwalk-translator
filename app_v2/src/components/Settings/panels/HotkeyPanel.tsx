@@ -281,7 +281,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                       recordingTarget === 'spotlight'
                         ? 'bg-purple-600/20 text-purple-600 border-purple-500 animate-pulse ring-2 ring-purple-500/20'
                         : (isLight ? 'bg-white text-purple-600 border-purple-300 hover:bg-purple-50' : 'bg-zinc-900 text-purple-400 border-purple-500/40 hover:bg-zinc-800')
-                    } ${!(settings.spotlightHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
+                    } ${!(settings.spotlightHotkeyEnabled ?? false) ? 'opacity-40 line-through' : ''}`}
                     title="点击开始录制按键"
                   >
                     {recordingTarget === 'spotlight' ? '⌨️ 请按下按键...' : settings.spotlightHotkey || 'Alt+Space'}
@@ -311,14 +311,14 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => setSpotlightHotkeyEnabled(!(settings.spotlightHotkeyEnabled ?? true))}
+                    onClick={() => setSpotlightHotkeyEnabled(!(settings.spotlightHotkeyEnabled ?? false))}
                     className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-0.5 ${
-                      (settings.spotlightHotkeyEnabled ?? true) ? 'bg-purple-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                      (settings.spotlightHotkeyEnabled ?? false) ? 'bg-purple-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                     }`}
                     title="开启或关闭该快捷键"
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.spotlightHotkeyEnabled ?? true) ? 'translate-x-3.5' : 'translate-x-0.5'
+                      (settings.spotlightHotkeyEnabled ?? false) ? 'translate-x-3.5' : 'translate-x-0.5'
                     }`} />
                   </button>
                 </div>
@@ -345,7 +345,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                       recordingTarget === 'clipboard'
                         ? 'bg-emerald-600/20 text-emerald-600 border-emerald-500 animate-pulse ring-2 ring-emerald-500/20'
                         : (isLight ? 'bg-white text-emerald-600 border-emerald-300 hover:bg-emerald-50' : 'bg-zinc-900 text-emerald-400 border-emerald-500/40 hover:bg-zinc-800')
-                    } ${!(settings.clipboardHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
+                    } ${!(settings.clipboardHotkeyEnabled ?? false) ? 'opacity-40 line-through' : ''}`}
                     title="点击开始录制按键"
                   >
                     {recordingTarget === 'clipboard' ? '⌨️ 请按下按键...' : settings.clipboardHotkey || 'Ctrl+Shift+C'}
@@ -375,14 +375,14 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => setClipboardHotkeyEnabled(!(settings.clipboardHotkeyEnabled ?? true))}
+                    onClick={() => setClipboardHotkeyEnabled(!(settings.clipboardHotkeyEnabled ?? false))}
                     className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-0.5 ${
-                      (settings.clipboardHotkeyEnabled ?? true) ? 'bg-emerald-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                      (settings.clipboardHotkeyEnabled ?? false) ? 'bg-emerald-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                     }`}
                     title="开启或关闭该快捷键"
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.clipboardHotkeyEnabled ?? true) ? 'translate-x-3.5' : 'translate-x-0.5'
+                      (settings.clipboardHotkeyEnabled ?? false) ? 'translate-x-3.5' : 'translate-x-0.5'
                     }`} />
                   </button>
                 </div>
@@ -409,7 +409,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                       recordingTarget === 'toggleWindow'
                         ? 'bg-amber-600/20 text-amber-600 border-amber-500 animate-pulse ring-2 ring-amber-500/20'
                         : (isLight ? 'bg-white text-amber-600 border-amber-300 hover:bg-amber-50' : 'bg-zinc-900 text-amber-400 border-amber-500/40 hover:bg-zinc-800')
-                    } ${!(settings.toggleWindowHotkeyEnabled ?? true) ? 'opacity-40 line-through' : ''}`}
+                    } ${!(settings.toggleWindowHotkeyEnabled ?? false) ? 'opacity-40 line-through' : ''}`}
                     title="点击开始录制按键"
                   >
                     {recordingTarget === 'toggleWindow' ? '⌨️ 请按下按键...' : settings.toggleWindowHotkey || 'Alt+Q'}
@@ -439,14 +439,14 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => setToggleWindowHotkeyEnabled(!(settings.toggleWindowHotkeyEnabled ?? true))}
+                    onClick={() => setToggleWindowHotkeyEnabled(!(settings.toggleWindowHotkeyEnabled ?? false))}
                     className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-0.5 ${
-                      (settings.toggleWindowHotkeyEnabled ?? true) ? 'bg-amber-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                      (settings.toggleWindowHotkeyEnabled ?? false) ? 'bg-amber-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                     }`}
                     title="开启或关闭该快捷键"
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      (settings.toggleWindowHotkeyEnabled ?? true) ? 'translate-x-3.5' : 'translate-x-0.5'
+                      (settings.toggleWindowHotkeyEnabled ?? false) ? 'translate-x-3.5' : 'translate-x-0.5'
                     }`} />
                   </button>
                 </div>

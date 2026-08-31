@@ -36,7 +36,7 @@ export function isLlmChannelReady(cfg: LlmConfig): boolean {
 
 const AUTO_OPTION: EngineOption = {
   value: 'auto',
-  label: '🤖 默认多级智能优先级队列 (词库 ➔ AI ➔ 在线)',
+  label: '🤖 默认智能极速并发 (词库 ➔ AI ➔ 在线竞速)',
 };
 
 // 与后端 translator.rs 的 forced_engine 关键字匹配一一对应
@@ -47,6 +47,12 @@ const ONLINE_ENGINE_META: Array<{ key: keyof OnlineEngines; label: string; defau
   { key: 'deepl', label: '🚀 DeepL 深度翻译', defaultOn: false },
   { key: 'baidu', label: '🐯 百度通用翻译', defaultOn: false },
   { key: 'tencent', label: '🐧 腾讯交互翻译', defaultOn: false },
+  { key: 'caiyun', label: '🌈 彩云小译 (地道文学意译)', defaultOn: false },
+  { key: 'papago', label: '🦜 Naver Papago (日韩顶流)', defaultOn: false },
+  { key: 'urban', label: '🧢 Urban 俚语黑话 (欧美流行梗)', defaultOn: false },
+  { key: 'volcengine', label: '🌋 字节跳动火山翻译 (抖音同款)', defaultOn: false },
+  { key: 'yandex', label: '🇷🇺 Yandex Translate (俄语东欧)', defaultOn: false },
+  { key: 'lingva', label: '🕊️ Lingva (免翻 Google 镜像)', defaultOn: false },
   { key: 'myMemory', label: '📚 MyMemory 记忆库', defaultOn: false },
 ];
 

@@ -273,6 +273,12 @@ pub struct OnlineEngines {
     pub my_memory: Option<bool>,
     pub baidu: Option<bool>,
     pub tencent: Option<bool>,
+    pub lingva: Option<bool>,
+    pub caiyun: Option<bool>,
+    pub papago: Option<bool>,
+    pub urban: Option<bool>,
+    pub volcengine: Option<bool>,
+    pub yandex: Option<bool>,
 }
 
 impl Default for OnlineEngines {
@@ -285,6 +291,12 @@ impl Default for OnlineEngines {
             my_memory: Some(false),
             baidu: Some(false),
             tencent: Some(false),
+            lingva: Some(false),
+            caiyun: Some(false),
+            papago: Some(false),
+            urban: Some(false),
+            volcengine: Some(false),
+            yandex: Option::from(false),
         }
     }
 }
@@ -567,9 +579,9 @@ impl Default for AppSettings {
             clipboard_hotkey: Some("Ctrl+Shift+C".to_string()),
             toggle_window_hotkey: Some("Alt+Q".to_string()),
             capture_hotkey_enabled: Some(true),
-            spotlight_hotkey_enabled: Some(true),
-            clipboard_hotkey_enabled: Some(true),
-            toggle_window_hotkey_enabled: Some(true),
+            spotlight_hotkey_enabled: Some(false),
+            clipboard_hotkey_enabled: Some(false),
+            toggle_window_hotkey_enabled: Some(false),
             default_preset: "blender".to_string(),
             auto_detect_preset: Some(true),
             ocr_filter_enabled: Some(true),

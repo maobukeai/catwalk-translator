@@ -29,6 +29,8 @@ export const ONLINE_ENGINE_DEFS = [
     tag: '快速稳定',
     tagColor: 'text-blue-300 bg-blue-500/15 border-blue-400/30',
     desc: '谷歌高质量公共多语言通道，响应迅速，支持全语种',
+    region: 'foreign',
+    note: '国外引擎：默认大陆网络通常无法直连，需代理或可访问 Google 的网络环境',
     icon: '🌐',
   },
   {
@@ -37,6 +39,8 @@ export const ONLINE_ENGINE_DEFS = [
     tag: '神经翻译',
     tagColor: 'text-sky-300 bg-sky-500/15 border-sky-400/30',
     desc: '微软神经网络智能翻译引擎，长短句自然流畅',
+    region: 'foreign',
+    note: '国外引擎：走 cn.bing.com 国内节点，一般可直接访问',
     icon: '🔷',
   },
   {
@@ -45,6 +49,8 @@ export const ONLINE_ENGINE_DEFS = [
     tag: '地道中英',
     tagColor: 'text-rose-300 bg-rose-500/15 border-rose-400/30',
     desc: '网易专业词典与智能翻译通道，中文与中英互译极度地道',
+    region: 'domestic',
+    note: '国内引擎：无需代理，直连可用',
     icon: '🔴',
   },
   {
@@ -53,6 +59,8 @@ export const ONLINE_ENGINE_DEFS = [
     tag: '德系精准',
     tagColor: 'text-teal-300 bg-teal-500/15 border-teal-400/30',
     desc: '欧洲顶级高语境翻译引擎，长难句与学术语境翻译首选',
+    region: 'foreign',
+    note: '国外引擎：默认大陆网络通常无法直连；首次使用需在下方填入 API Key 或自建 DeepLX 地址',
     icon: '⚡',
   },
   {
@@ -61,6 +69,8 @@ export const ONLINE_ENGINE_DEFS = [
     tag: '语料记忆库',
     tagColor: 'text-indigo-300 bg-indigo-500/15 border-indigo-400/30',
     desc: '全球大型翻译记忆库，汇聚数亿条人工翻译真实语料',
+    region: 'foreign',
+    note: '国外引擎：免费有频率限制（1 分钟约 20 次），需可访问其服务的网络环境',
     icon: '🧠',
   },
   {
@@ -69,6 +79,8 @@ export const ONLINE_ENGINE_DEFS = [
     tag: '中文优化',
     tagColor: 'text-blue-300 bg-blue-500/15 border-blue-400/30',
     desc: '百度中文语义增强翻译引擎，多语种覆盖全面',
+    region: 'domestic',
+    note: '国内引擎：无需代理；需在下方填入百度翻译 API 凭据（每月 100 万字符免费额度）',
     icon: '🐾',
   },
   {
@@ -77,7 +89,69 @@ export const ONLINE_ENGINE_DEFS = [
     tag: 'AI实验室',
     tagColor: 'text-cyan-300 bg-cyan-500/15 border-cyan-400/30',
     desc: '腾讯 AI 翻译实验室神经机器翻译，专业流畅',
+    region: 'domestic',
+    note: '国内引擎：无需代理，直连可用',
     icon: '🐧',
+  },
+  {
+    id: 'lingva',
+    name: 'Lingva Google 镜像',
+    tag: '免翻镜像',
+    tagColor: 'text-amber-300 bg-amber-500/15 border-amber-400/30',
+    desc: '开源 Google 翻译镜像直连通道，国内免翻墙直接使用 Google 翻译能力',
+    region: 'domestic',
+    note: '免密镜像：国内直连，无需代理即可使用 Google 翻译核心能力',
+    icon: '🕊️',
+  },
+  {
+    id: 'caiyun',
+    name: '彩云小译 (地道意译)',
+    tag: '地道文学',
+    tagColor: 'text-emerald-300 bg-emerald-500/15 border-emerald-400/30',
+    desc: '国内文学与科技长句意译顶流，中文表达自然生动，机翻感极轻',
+    region: 'domestic',
+    note: '国内引擎：免密内置，国内网络直接高速访问',
+    icon: '🌈',
+  },
+  {
+    id: 'papago',
+    name: 'Naver Papago (日韩顶流)',
+    tag: '日韩天花板',
+    tagColor: 'text-green-300 bg-green-500/15 border-green-400/30',
+    desc: '韩国 Naver 打造，中日/中韩互译行业公认天花板，敬语与二次元语境极佳',
+    region: 'foreign',
+    note: '免密直连通道：支持中日韩极速互译',
+    icon: '🦜',
+  },
+  {
+    id: 'urban',
+    name: 'Urban Dictionary (欧美网络俚语/流行梗)',
+    tag: '欧美黑话',
+    tagColor: 'text-purple-300 bg-purple-500/15 border-purple-400/30',
+    desc: '全球最大网络黑话、流行梗与俚语缩写词库，专解 Reddit、Twitter、游戏最新热词',
+    region: 'foreign',
+    note: '免密开放通道：全球直连，专为欧美网络流行黑话与缩写词打造',
+    icon: '🧢',
+  },
+  {
+    id: 'volcengine',
+    name: '字节跳动火山翻译 (抖音同款 NMT)',
+    tag: '字节抖音',
+    tagColor: 'text-orange-300 bg-orange-500/15 border-orange-400/30',
+    desc: '字节跳动抖音/TikTok 同款 NMT 机器翻译引擎，现代互联网科技与口语翻译极度地道',
+    region: 'domestic',
+    note: '国内引擎：免密直连高速通道，毫秒级极速返回',
+    icon: '🌋',
+  },
+  {
+    id: 'yandex',
+    name: 'Yandex Translate (俄语/东欧顶流)',
+    tag: '斯拉夫霸主',
+    tagColor: 'text-red-300 bg-red-500/15 border-red-400/30',
+    desc: '俄罗斯搜索巨头旗舰引擎，俄语、白俄、乌克兰及东欧斯拉夫语系翻译行业顶流',
+    region: 'foreign',
+    note: '免密公共通道：俄语与东欧小语种翻译质量卓越',
+    icon: '🇷🇺',
   },
 ] as const;
 
@@ -135,43 +209,49 @@ export const OnlinePanel: React.FC = () => {
           <div className={`p-5 space-y-4 rounded-2xl border transition-colors ${
             isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div className="min-w-0 flex-1">
                 <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
-                  <Globe className="h-4 w-4 text-blue-500" />
-                  <span>在线公共翻译服务通道 (7 大主流引擎)</span>
+                  <Globe className="h-4 w-4 text-blue-500 shrink-0" />
+                  <span className="truncate">在线公共翻译服务通道 (10 大主流引擎 · 免 Key 极速与专有 API 分区)</span>
                 </div>
                 <p className={`mt-1 text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
                   支持多引擎免 Key 并发极速查询，开启的引擎将在双栏翻译与多源对照面板中实时呈现
                 </p>
+                <p className={`mt-1 text-[10.5px] ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
+                  <span className="text-emerald-500 font-semibold">🇨🇳 国内直连 (免 Key)</span>
+                  （必应 / 有道 / 腾讯 / Lingva 镜像 / 彩云小译，毫秒级直达） ·
+                  <span className="text-violet-400 font-semibold">🌐 国际/日韩 (免 Key)</span>
+                  （Google 官方 / Naver Papago / MyMemory） ·
+                  <span className="text-blue-500 font-semibold">🔑 需配 Key 专享</span>
+                  （下方百度 / DeepL / AI大模型）
+                </p>
               </div>
 
-              {/* 快捷批量操作按钮组 */}
-              <div className={`flex items-center space-x-1.5 self-start sm:self-auto p-1 rounded-xl border text-xs ${
+              {/* 快捷批量操作按钮组：强制单行不折行 */}
+              <div className={`flex items-center space-x-1.5 self-start md:self-auto p-1 rounded-xl border text-xs shrink-0 whitespace-nowrap ${
                 isLight ? 'bg-slate-100 border-slate-200' : 'bg-zinc-950/80 border-white/[0.06]'
               }`}>
                 <button
                   type="button"
-                  onClick={() => setAllOnlineEngines('recommended')}
-                  className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
-                    isLight ? 'text-slate-700 hover:text-slate-900 hover:bg-slate-200' : 'text-zinc-300 hover:text-white hover:bg-white/[0.06]'
-                  }`}
-                  title="仅启用 Google + Bing + 有道"
+                  onClick={() => setAllOnlineEngines('domestic')}
+                  className="px-2.5 py-1 rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition cursor-pointer font-medium whitespace-nowrap shrink-0"
+                  title="仅启用国内免代理极速引擎（微软必应 + 网易有道 + 腾讯交互 + Lingva 镜像 + 彩云小译）"
                 >
-                  推荐配置
+                  国内直连推荐
                 </button>
                 <button
                   type="button"
                   onClick={() => setAllOnlineEngines('all')}
-                  className="px-2.5 py-1 rounded-lg text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition cursor-pointer font-semibold"
-                  title="启用全部 7 大在线引擎"
+                  className="px-2.5 py-1 rounded-lg text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition cursor-pointer font-semibold whitespace-nowrap shrink-0"
+                  title="启用全部 10 大在线引擎"
                 >
                   开启全部
                 </button>
                 <button
                   type="button"
                   onClick={() => setAllOnlineEngines('none')}
-                  className="px-2.5 py-1 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                  className="px-2.5 py-1 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer whitespace-nowrap shrink-0"
                   title="关闭所有在线公共引擎"
                 >
                   全部关闭
@@ -180,49 +260,116 @@ export const OnlinePanel: React.FC = () => {
             </div>
 
             {/* 7 大在线引擎精简卡片网格 (高密度 Apple/Fluent 精致胶囊矩阵) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-              {ONLINE_ENGINE_DEFS.map((eng) => {
-                const isEnabled = (online as Record<string, boolean | undefined>)[eng.id] ?? false;
-                return (
-                  <div
-                    key={eng.id}
-                    title={eng.desc}
-                    className={`flex items-center justify-between rounded-xl px-3 py-2 border transition-all duration-200 cursor-pointer select-none ${
-                      isEnabled
-                        ? (isLight ? 'bg-blue-50/80 border-blue-300 shadow-2xs ring-1 ring-blue-400/20' : 'bg-blue-950/30 border-blue-500/40 shadow-xs ring-1 ring-blue-500/20')
-                        : (isLight ? 'bg-slate-50/80 border-slate-200 opacity-70 hover:opacity-100 hover:bg-slate-100' : 'bg-zinc-950/40 border-white/[0.06] opacity-60 hover:opacity-100 hover:bg-zinc-900/60')
-                    }`}
-                    onClick={() => setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled)}
-                  >
-                    <div className="flex items-center space-x-2 min-w-0 pr-2">
-                      <span className="text-sm shrink-0">{eng.icon}</span>
-                      <span className={`text-xs font-bold truncate ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
-                        {eng.name.replace(/（.*?）|\(.*?\)/g, '')}
-                      </span>
-                      <span className={`text-[9px] font-mono font-medium px-1.5 py-0.2 rounded border shrink-0 ${eng.tagColor}`}>
-                        {eng.tag}
-                      </span>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled);
-                      }}
-                      className={`relative inline-flex h-4.5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
-                        isEnabled ? 'bg-blue-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                          isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+            <div className="space-y-3 pt-1">
+              {/* 1. 国内免代理直连组 */}
+              <div>
+                <div className="flex items-center gap-1.5 mb-2 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  <span>🇨🇳 国内免代理直连通道 (极速响应)</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  {ONLINE_ENGINE_DEFS.filter((e) => e.region === 'domestic' || e.id === 'bing').map((eng) => {
+                    const isEnabled = (online as Record<string, boolean | undefined>)[eng.id] ?? false;
+                    return (
+                      <div
+                        key={eng.id}
+                        title={(eng.desc + '\n\n' + (eng.note ?? '')).trim()}
+                        className={`flex items-center justify-between rounded-xl px-3 py-2 border transition-all duration-200 cursor-pointer select-none ${
+                          isEnabled
+                            ? (isLight ? 'bg-emerald-50/80 border-emerald-300 shadow-2xs ring-1 ring-emerald-400/20' : 'bg-emerald-950/30 border-emerald-500/40 shadow-xs ring-1 ring-emerald-500/20')
+                            : (isLight ? 'bg-slate-50/80 border-slate-200 opacity-70 hover:opacity-100 hover:bg-slate-100' : 'bg-zinc-950/40 border-white/[0.06] opacity-60 hover:opacity-100 hover:bg-zinc-900/60')
                         }`}
-                      />
-                    </button>
-                  </div>
-                );
-              })}
+                        onClick={() => setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled)}
+                      >
+                        <div className="flex items-center space-x-2 min-w-0 pr-2">
+                          <span className="text-sm shrink-0">{eng.icon}</span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1">
+                              <span className={`text-xs font-bold truncate ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
+                                {eng.name.replace(/（.*?）|\(.*?\)/g, '')}
+                              </span>
+                            </div>
+                            <span className={`text-[9px] font-mono font-medium px-1.5 py-0.2 rounded border shrink-0 ${eng.tagColor}`}>
+                              {eng.tag}
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled);
+                          }}
+                          className={`relative inline-flex h-4.5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
+                            isEnabled ? 'bg-emerald-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                              isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 2. 国际 / 海外网络通道组 */}
+              <div>
+                <div className="flex items-center gap-1.5 mb-2 text-[11px] font-semibold text-violet-600 dark:text-violet-400">
+                  <span>🌐 国际/海外通道 (需代理或海外网络)</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                  {ONLINE_ENGINE_DEFS.filter((e) => e.region === 'foreign' && e.id !== 'bing').map((eng) => {
+                    const isEnabled = (online as Record<string, boolean | undefined>)[eng.id] ?? false;
+                    return (
+                      <div
+                        key={eng.id}
+                        title={(eng.desc + '\n\n' + (eng.note ?? '')).trim()}
+                        className={`flex items-center justify-between rounded-xl px-3 py-2 border transition-all duration-200 cursor-pointer select-none ${
+                          isEnabled
+                            ? (isLight ? 'bg-violet-50/80 border-violet-300 shadow-2xs ring-1 ring-violet-400/20' : 'bg-violet-950/30 border-violet-500/40 shadow-xs ring-1 ring-violet-500/20')
+                            : (isLight ? 'bg-slate-50/80 border-slate-200 opacity-70 hover:opacity-100 hover:bg-slate-100' : 'bg-zinc-950/40 border-white/[0.06] opacity-60 hover:opacity-100 hover:bg-zinc-900/60')
+                        }`}
+                        onClick={() => setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled)}
+                      >
+                        <div className="flex items-center space-x-2 min-w-0 pr-2">
+                          <span className="text-sm shrink-0">{eng.icon}</span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1">
+                              <span className={`text-xs font-bold truncate ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
+                                {eng.name.replace(/（.*?）|\(.*?\)/g, '')}
+                              </span>
+                            </div>
+                            <span className={`text-[9px] font-mono font-medium px-1.5 py-0.2 rounded border shrink-0 ${eng.tagColor}`}>
+                              {eng.tag}
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled);
+                          }}
+                          className={`relative inline-flex h-4.5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
+                            isEnabled ? 'bg-violet-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                              isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </div>
 

@@ -191,9 +191,9 @@ function App() {
   // 变化（如拖动模糊滑杆）都重挂 window 级监听器。
   const captureHotkeyEnabled = settings.captureHotkeyEnabled ?? settings.hotkeyEnabled ?? true;
   const captureHotkey = settings.hotkey || 'F4';
-  const spotlightHotkeyEnabled = settings.spotlightHotkeyEnabled ?? true;
+  const spotlightHotkeyEnabled = settings.spotlightHotkeyEnabled ?? false;
   const spotlightHotkey = settings.spotlightHotkey || 'Alt+Space';
-  const clipboardHotkeyEnabled = settings.clipboardHotkeyEnabled ?? true;
+  const clipboardHotkeyEnabled = settings.clipboardHotkeyEnabled ?? false;
   const clipboardHotkey = settings.clipboardHotkey || 'Ctrl+Shift+C';
 
   useEffect(() => {
