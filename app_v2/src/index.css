@@ -97,9 +97,12 @@
     color: var(--g-text-1);
     font-family: var(--app-font-family);
     user-select: none;
-    overflow-x: hidden;
+    overflow: hidden;
     margin: 0;
     padding: 0;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
     min-height: 100vh;
     height: 100%;
     text-rendering: optimizeLegibility;

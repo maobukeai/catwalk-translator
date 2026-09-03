@@ -32,6 +32,10 @@ pub struct OcrResult {
     pub blocks: Vec<TextBlock>,
 }
 
+fn default_true_opt() -> Option<bool> {
+    Some(true)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmConfig {
@@ -42,6 +46,22 @@ pub struct LlmConfig {
     pub api_key: String,
     pub model: String,
     pub endpoint: String,
+    /// 是否启用该模型（默认 true，关闭后不参与翻译）
+    #[serde(default = "default_true_opt", skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            id: None,
+            provider: "DeepSeek".to_string(),
+            api_key: String::new(),
+            model: "deepseek-chat".to_string(),
+            endpoint: "https://api.deepseek.com/v1".to_string(),
+            enabled: Some(true),
+        }
+    }
 }
 
 impl LlmConfig {
@@ -56,6 +76,7 @@ impl LlmConfig {
             api_key: api_key.to_string(),
             model: model.to_string(),
             endpoint: endpoint.to_string(),
+            enabled: Some(true),
         }
     }
 }
@@ -252,6 +273,16 @@ pub struct ImageTranslateBlock {
     pub height: u32,
     pub bg_css: String,
     pub fg_css: String,
+    #[serde(default)]
+    pub patch_png: Option<String>,
+    #[serde(default)]
+    pub patch_x: f64,
+    #[serde(default)]
+    pub patch_y: f64,
+    #[serde(default)]
+    pub patch_w: f64,
+    #[serde(default)]
+    pub patch_h: f64,
 }
 
 /// Result of translating a user-supplied image (paste or drag-drop).
@@ -275,7 +306,6 @@ pub struct OnlineEngines {
     pub tencent: Option<bool>,
     pub lingva: Option<bool>,
     pub caiyun: Option<bool>,
-    pub papago: Option<bool>,
     pub urban: Option<bool>,
     pub volcengine: Option<bool>,
     pub yandex: Option<bool>,
@@ -293,7 +323,6 @@ impl Default for OnlineEngines {
             tencent: Some(false),
             lingva: Some(false),
             caiyun: Some(false),
-            papago: Some(false),
             urban: Some(false),
             volcengine: Some(false),
             yandex: Option::from(false),
@@ -301,7 +330,7 @@ impl Default for OnlineEngines {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct UniversalTranslationRequest {
     pub text: String,
@@ -331,6 +360,21 @@ pub struct UniversalTranslationRequest {
     /// 自定义 DeepLX 自建服务地址（如 http://localhost:1188/translate）
     #[serde(default)]
     pub deepl_custom_url: Option<String>,
+    /// 字节跳动火山翻译 AccessKey ID
+    #[serde(default)]
+    pub volcengine_access_key: Option<String>,
+    /// 字节跳动火山翻译 Secret Access Key
+    #[serde(default)]
+    pub volcengine_secret_key: Option<String>,
+    /// Yandex Translate API Key
+    #[serde(default)]
+    pub yandex_api_key: Option<String>,
+    /// Yandex Folder ID
+    #[serde(default)]
+    pub yandex_folder_id: Option<String>,
+    /// 是否跳过大模型（用于首屏 150ms 闪电竞速机翻快通道）
+    #[serde(default)]
+    pub skip_llm: Option<bool>,
 }
 
 pub type UniversalTranslateParams = UniversalTranslationRequest;
@@ -399,6 +443,9 @@ pub struct BackupSettings {
     /// 最近一次备份时间（epoch 毫秒）。
     #[serde(default)]
     pub last_backup_at_ms: Option<u64>,
+    /// 备份包含的内容项清单（"settings" | "api_keys" | "custom_dict" | "history" | "capture_sessions"）。
+    #[serde(default)]
+    pub included_items: Option<Vec<String>>,
 }
 
 /// WebDAV 云同步配置（如坚果云 https://dav.jiangguoyun.com/dav/）。
@@ -565,6 +612,12 @@ pub struct AppSettings {
     /// WebDAV 云同步配置
     #[serde(default)]
     pub webdav_config: Option<WebdavConfig>,
+    /// 快慢双流渐进翻译：在线引擎并发大竞速秒出结果，大模型异步精翻无缝升级替换
+    #[serde(default)]
+    pub enable_llm_progressive_refine: Option<bool>,
+    /// 优质生词智能甄选收藏：自动识别专业 3D/CG 术语与 AI 精翻高价值表达并加入收藏
+    #[serde(default)]
+    pub auto_favorite_quality_terms: Option<bool>,
     /// 用户自定义词库(术语强制表):前端 CRUD,随 settings.json 持久化
     #[serde(default)]
     pub custom_dict_items: Vec<CustomDictItem>,
@@ -584,6 +637,8 @@ impl Default for AppSettings {
             toggle_window_hotkey_enabled: Some(false),
             default_preset: "blender".to_string(),
             auto_detect_preset: Some(true),
+            enable_llm_progressive_refine: Some(true),
+            auto_favorite_quality_terms: Some(true),
             ocr_filter_enabled: Some(true),
             ocr_filter_rules: None,
             selection_lookup_enabled: Some(false),

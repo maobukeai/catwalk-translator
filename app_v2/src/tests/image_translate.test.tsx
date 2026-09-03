@@ -220,4 +220,113 @@ describe('DualPaneTranslator 图片粘贴与拖拽翻译', () => {
     });
     expect(spy).toHaveBeenCalledTimes(2);
   });
+
+  it('单行复制按钮可将该行译文单独写入剪贴板', async () => {
+    vi.spyOn(tauriService, 'cmdImageOcrTranslate').mockResolvedValue(MOCK_IMAGE_RESULT);
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText, readText: vi.fn() },
+    });
+
+    render(<DualPaneTranslator settings={DEFAULT_SETTINGS} initialText="" />);
+    pasteImage(screen.getByRole('textbox'));
+
+    await waitFor(() => expect(screen.getAllByText('粗糙度').length).toBeGreaterThanOrEqual(1));
+    const singleCopyButtons = screen.getAllByTitle('复制单行译文');
+    expect(singleCopyButtons.length).toBeGreaterThanOrEqual(2);
+
+    fireEvent.click(singleCopyButtons[0]);
+    expect(writeText).toHaveBeenCalledWith('粗糙度');
+  });
+
+  it('auto 模式下优先从多模型池选用已就绪的 AI 大模型', async () => {
+    const spy = vi
+      .spyOn(tauriService, 'cmdImageOcrTranslate')
+      .mockResolvedValue(MOCK_IMAGE_RESULT);
+
+    const settingsWithPool: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      defaultPreset: 'auto',
+      llmConfig: null, // 旧单项配置为空
+      llmConfigs: [
+        {
+          id: 'cfg-deepseek',
+          provider: 'DeepSeek',
+          model: 'deepseek-chat',
+          apiKey: 'sk-ready-key',
+          endpoint: 'https://api.deepseek.com',
+          enabled: true,
+        },
+      ],
+    };
+
+    render(<DualPaneTranslator settings={settingsWithPool} initialText="" />);
+    pasteImage(screen.getByRole('textbox'));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    const [, presetArg, llmConfigArg] = spy.mock.calls[0];
+    expect(presetArg).toBe('auto');
+    expect(llmConfigArg).not.toBeNull();
+    expect(llmConfigArg?.apiKey).toBe('sk-ready-key');
+    expect(llmConfigArg?.provider).toBe('DeepSeek');
+  });
+
+  it('点击查看大图按钮可弹出高清大图模态框', async () => {
+    vi.spyOn(tauriService, 'cmdImageOcrTranslate').mockResolvedValue(MOCK_IMAGE_RESULT);
+
+    render(<DualPaneTranslator settings={DEFAULT_SETTINGS} initialText="" />);
+    pasteImage(screen.getByRole('textbox'));
+
+    await waitFor(() => expect(screen.getAllByText('粗糙度').length).toBeGreaterThanOrEqual(1));
+    const zoomBtn = screen.getByTitle('查看大图');
+    fireEvent.click(zoomBtn);
+
+    expect(await screen.findByText(/高清大图/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('关闭大图预览'));
+    await waitFor(() => {
+      expect(screen.queryByText(/高清大图/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('图片翻译通道下拉菜单中严格不包含任何字典或词库选项', async () => {
+    vi.spyOn(tauriService, 'cmdImageOcrTranslate').mockResolvedValue(MOCK_IMAGE_RESULT);
+
+    render(<DualPaneTranslator settings={DEFAULT_SETTINGS} initialText="" />);
+    pasteImage(screen.getByRole('textbox'));
+
+    await waitFor(() => expect(screen.getByText('图片翻译')).toBeInTheDocument());
+
+    // 验证下拉菜单中没有任何 3D/CG 专业词库或离线词典条目
+    expect(screen.queryByText(/3D\/CG 专业词库与离线词典/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Blender CG 词库/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ECDICT 通用离线词典/)).not.toBeInTheDocument();
+  });
+
+  it('支持切换到纯文排版视图通读整篇译文', async () => {
+    vi.spyOn(tauriService, 'cmdImageOcrTranslate').mockResolvedValue(MOCK_IMAGE_RESULT);
+
+    render(<DualPaneTranslator settings={DEFAULT_SETTINGS} initialText="" />);
+    pasteImage(screen.getByRole('textbox'));
+
+    await waitFor(() => expect(screen.getAllByText('粗糙度').length).toBeGreaterThanOrEqual(1));
+
+    const textModeBtn = screen.getByTitle(/纯译文排版/);
+    fireEvent.click(textModeBtn);
+
+    expect(await screen.findByText(/纯译文排版通读/)).toBeInTheDocument();
+    expect(screen.getByText('复制整篇译文')).toBeInTheDocument();
+  });
+
+  it('首页工具栏渲染【图片】选择按钮且 placeholder 提示支持图片翻译', async () => {
+    render(<DualPaneTranslator settings={DEFAULT_SETTINGS} initialText="" />);
+
+    const imgBtn = screen.getByTitle(/选择本地图片翻译/);
+    expect(imgBtn).toBeInTheDocument();
+    expect(imgBtn).toHaveTextContent('图片');
+
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(textarea.placeholder).toContain('直接拖入图片、按 Ctrl+V 粘贴图片翻译');
+  });
 });
+

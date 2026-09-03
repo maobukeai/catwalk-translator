@@ -15,10 +15,9 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub const DET_LIMIT_SIDE_LEN: f32 = 736.0;
-/// det 输入最长边硬上限：全屏/大选区按比例缩到该边长内推理，控制 DBNet 耗时。
-/// 保持 1280：det 耗时随面积增长，抬到 1600 会让检测慢 ~1.56×，而识别质量的
-/// 提升由行并集与水平内边距承担，不需要靠放大 det 输入换取。
-pub const DET_MAX_SIDE_LEN: f32 = 1280.0;
+/// det 输入最长边硬上限：全屏/大选区按比例等比缩小到 960 内推理，控制 DBNet 计算量。
+/// 960 为 PaddleOCR 官方速度与精度黄金分割点，避免大图面积膨胀。
+pub const DET_MAX_SIDE_LEN: f32 = 960.0;
 pub const DET_THRESH: f32 = 0.25;
 pub const DET_BOX_THRESH: f32 = 0.5;
 /// unclip 1.6（PP-OCR 参考值）。不要再往上调：2.0 会把 26px 文本框纵向膨胀到
@@ -211,12 +210,78 @@ pub fn model_files_present_for_version(ver: &str) -> bool {
     resolve_models_dir_for_version(ver).is_some()
 }
 
+/// Execution provider actually backing the ONNX session set.
+///
+/// 注册的 EP 不保证真正执行:DirectML 可能因驱动/虚拟机(WARP)静默退化,
+/// 因此在启动时通过基准测试选快的一方,而不是盲信注册顺序。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Accelerator {
+    DirectML,
+    Cpu,
+}
+
+impl Accelerator {
+    pub fn label(self) -> &'static str {
+        match self {
+            Accelerator::DirectML => "DirectML GPU 显卡加速",
+            Accelerator::Cpu => "CPU 多线程",
+        }
+    }
+}
+
+/// Engine 当前的加速方式与基准数据(供 UI / 诊断展示)。
+#[derive(Clone, Debug)]
+pub struct AccelInfo {
+    /// 实际用于推理的 EP(会话构建时已决定)。
+    pub ep: Accelerator,
+    /// true = 用户通过 `CATWALK_OCR_EP` 强制指定(或非 Windows 平台限定),
+    /// false = 启动基准自动选择。
+    pub forced: bool,
+    /// 基准耗时(ms),仅 Windows auto 模式且有两次有效采样时存在。
+    pub cpu_ms: Option<f64>,
+    pub dml_ms: Option<f64>,
+    /// 附加说明(如"DirectML EP 注册失败,回退 CPU 推理")。
+    pub note: Option<String>,
+}
+
 struct Sessions {
     det: Session,
     rec: Session,
     cls: Session,
     /// Character decode table (index 0 = first real char, last = space).
     chars: Vec<String>,
+    /// 实际选用的执行提供器(基准或强制决定)。
+    ep: Accelerator,
+    /// 输入张量复用缓冲:det/cls/rec 三个阶段在互斥锁内串行执行,
+    /// 各自用完即释放,共享一块「下一个阶段取容量优先」的复用区即可。
+    scratch: Vec<f32>,
+}
+
+/// 供 `ocr::runtime_status` 渲染成一句可读文案的加速方式描述。
+pub fn accel_status_text() -> String {
+    let Some(info) = get_engine().accel_info() else {
+        return "加速方式待定".to_string();
+    };
+    let mut parts = Vec::new();
+    if info.forced {
+        parts.push(format!("{} (强制)", info.ep.label()));
+    } else {
+        parts.push(info.ep.label().to_string());
+    }
+    match (info.cpu_ms, info.dml_ms) {
+        (Some(cpu), Some(dml)) if cpu > 0.0 && dml > 0.0 => {
+            if info.ep == Accelerator::DirectML {
+                parts.push(format!("基准较 CPU 快 {:.1}×", cpu / dml));
+            } else {
+                parts.push(format!("基准较 DirectML 快 {:.1}×", dml / cpu));
+            }
+        }
+        _ => {}
+    }
+    if let Some(note) = &info.note {
+        parts.push(note.clone());
+    }
+    parts.join(" · ")
 }
 
 static ONNX_ENGINE: OnceLock<Mutex<OnnxOcrEngine>> = OnceLock::new();
@@ -253,6 +318,8 @@ pub fn recognize_bmp(bmp: &[u8]) -> Result<OcrResult, String> {
 pub struct OnnxOcrEngine {
     inner: Mutex<Option<Sessions>>,
     load_error: Mutex<Option<String>>,
+    /// 最近一次成功加载时期的加速方式(会话卸载后清空)。
+    accel: Mutex<Option<AccelInfo>>,
 }
 
 impl Default for OnnxOcrEngine {
@@ -266,6 +333,7 @@ impl OnnxOcrEngine {
         Self {
             inner: Mutex::new(None),
             load_error: Mutex::new(None),
+            accel: Mutex::new(None),
         }
     }
 
@@ -278,6 +346,14 @@ impl OnnxOcrEngine {
         if let Ok(mut err_slot) = self.load_error.lock() {
             *err_slot = None;
         }
+        if let Ok(mut slot) = self.accel.lock() {
+            *slot = None;
+        }
+    }
+
+    /// 当前实际加速方式(仅会话加载成功后有值)。
+    pub fn accel_info(&self) -> Option<AccelInfo> {
+        self.accel.lock().ok().and_then(|g| g.clone())
     }
 
     /// Check if sessions are currently loaded in memory.
@@ -301,14 +377,20 @@ impl OnnxOcrEngine {
             return Ok(());
         }
         match Self::load_sessions() {
-            Ok(sess) => {
+            Ok((sess, accel)) => {
                 *guard = Some(sess);
+                if let Ok(mut slot) = self.accel.lock() {
+                    *slot = Some(accel);
+                }
                 if let Ok(mut err_slot) = self.load_error.lock() {
                     *err_slot = None;
                 }
                 Ok(())
             }
             Err(e) => {
+                if let Ok(mut slot) = self.accel.lock() {
+                    *slot = None;
+                }
                 if let Ok(mut err_slot) = self.load_error.lock() {
                     *err_slot = Some(e.clone());
                 }
@@ -317,7 +399,7 @@ impl OnnxOcrEngine {
         }
     }
 
-    fn load_sessions() -> Result<Sessions, String> {
+    fn load_sessions() -> Result<(Sessions, AccelInfo), String> {
         let active = get_active_version();
         let (actual_ver, dir) = if let Some(d) = resolve_models_dir_for_version(&active) {
             (active, d)
@@ -337,7 +419,24 @@ impl OnnxOcrEngine {
 
         let (det_name, rec_name, cls_name) = get_model_filenames_for_version(&actual_ver);
 
-        let commit = |name: &str| -> Result<Session, String> {
+        // CPU 侧推理线程数:每个模型会话各自一份,2..8 内按核数取。
+        let cpu_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(2, 8);
+        // DirectML 在显卡上跑,`with_intra_threads` 帮不到 GPU 算子,反而为
+        // det/rec/cls 各驻留一份无用线程池,固定为 1。
+        const DML_INTRATHREADS: usize = 1;
+
+        // EP 覆盖:CATWALK_OCR_EP=cpu|directml|auto(默认 auto 基准)。
+        let ep_override = std::env::var("CATWALK_OCR_EP")
+            .ok()
+            .map(|v| v.trim().to_ascii_lowercase())
+            .filter(|v| !v.is_empty());
+
+        // 返回 (session, 该会话是否成功注册 DirectML)。DirectML 注册失败时
+        // 内部退回 CPU builder,由 build 标记整组 ep=Cpu。
+        let commit = |name: &str, dml: bool| -> Result<(Session, bool), String> {
             let mut file_path = dir.join(name);
             if !file_path.exists() {
                 if let Some(ovr) = models_dir_override() {
@@ -346,31 +445,206 @@ impl OnnxOcrEngine {
                     }
                 }
             }
-            Session::builder()
+            let threads = if dml { DML_INTRATHREADS } else { cpu_threads };
+            let mut builder = Session::builder()
                 .map_err(|e| format!("onnxruntime init failed: {}", e))?
+                .with_intra_threads(threads)
+                .map_err(|e| format!("failed to configure intra threads: {}", e))?
+                .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
+                .map_err(|e| format!("failed to configure optimization level: {}", e))?;
+            let mut dml_registered = false;
+            if dml {
+                #[cfg(target_os = "windows")]
+                {
+                    match builder.clone().with_execution_providers([
+                        ort::ep::DirectML::default().build(),
+                        ort::ep::CPU::default().build(),
+                    ]) {
+                        Ok(b) => {
+                            builder = b;
+                            dml_registered = true;
+                        }
+                        Err(e) => {
+                            eprintln!("[OCR] DirectML EP 注册失败 ({})，回退 CPU 推理", e);
+                        }
+                    }
+                }
+            }
+            let sess = builder
                 .commit_from_file(Path::new(&file_path))
-                .map_err(|e| format!("failed to load {}: {}", name, e))
+                .map_err(|e| format!("failed to load {}: {}", name, e))?;
+            Ok((sess, dml_registered))
         };
 
-        let det = commit(det_name)?;
-        let rec = commit(rec_name)?;
-        let cls = commit(cls_name)?;
+        // 按 dml 与否构建整套会话。DirectML 注册失败时每个会话内部静默退回
+        // CPU builder,整体 ep 标记为 Cpu —— 调用方据此决定是否还做基准。
+        let build = |dml: bool| -> Result<Sessions, String> {
+            let mut dml_ok = dml;
+            let mut mk = |name: &str| -> Result<Session, String> {
+                let (s, reg) = commit(name, dml)?;
+                if dml && !reg {
+                    dml_ok = false;
+                }
+                Ok(s)
+            };
+            let det = mk(det_name)?;
+            let rec = mk(rec_name)?;
+            let cls = mk(cls_name)?;
 
-        // Character table embedded in rec model metadata (one char per line).
-        let raw = rec
-            .metadata()
-            .map_err(|e| format!("rec model metadata read failed: {}", e))?
-            .custom("character")
-            .or_else(|| rec.metadata().ok()?.custom("dict"))
-            .ok_or_else(|| "rec model is missing 'character' metadata".to_string())?;
+            // Character table embedded in rec model metadata (one char per line).
+            let raw = rec
+                .metadata()
+                .map_err(|e| format!("rec model metadata read failed: {}", e))?
+                .custom("character")
+                .or_else(|| rec.metadata().ok()?.custom("dict"))
+                .ok_or_else(|| "rec model is missing 'character' metadata".to_string())?;
 
-        let mut chars: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
-        if chars.len() < 100 {
-            return Err("rec model character table looks truncated".to_string());
+            let mut chars: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
+            if chars.len() < 100 {
+                return Err("rec model character table looks truncated".to_string());
+            }
+            chars.push(" ".to_string()); // last index -> space
+
+            Ok(Sessions {
+                det,
+                rec,
+                cls,
+                chars,
+                ep: if dml && dml_ok { Accelerator::DirectML } else { Accelerator::Cpu },
+                scratch: Vec::new(),
+            })
+        };
+
+        #[cfg(target_os = "windows")]
+        {
+            match ep_override.as_deref() {
+                Some("cpu") => {
+                    let s = build(false)?;
+                    let info = AccelInfo {
+                        ep: Accelerator::Cpu,
+                        forced: true,
+                        cpu_ms: None,
+                        dml_ms: None,
+                        note: None,
+                    };
+                    Ok((s, info))
+                }
+                Some("directml") | Some("gpu") => {
+                    let s = build(true)?;
+                    let info = match s.ep {
+                        Accelerator::DirectML => AccelInfo {
+                            ep: Accelerator::DirectML,
+                            forced: true,
+                            cpu_ms: None,
+                            dml_ms: None,
+                            note: None,
+                        },
+                        Accelerator::Cpu => AccelInfo {
+                            ep: Accelerator::Cpu,
+                            forced: true,
+                            cpu_ms: None,
+                            dml_ms: None,
+                            note: Some("DirectML EP 注册失败，回退 CPU 推理".to_string()),
+                        },
+                    };
+                    Ok((s, info))
+                }
+                _ => {
+                    // auto:两套都建,用同一合成图基准,选快的一方。
+                    // 基准在启动预热线程内跑,不占首次识别的路径。
+                    let mut cpu_s = build(false)?;
+                    let mut dml_s = build(true)?;
+                    if dml_s.ep == Accelerator::Cpu {
+                        return Ok((
+                            cpu_s,
+                            AccelInfo {
+                                ep: Accelerator::Cpu,
+                                forced: false,
+                                cpu_ms: None,
+                                dml_ms: None,
+                                note: Some("DirectML EP 注册失败，回退 CPU 推理".to_string()),
+                            },
+                        ));
+                    }
+                    let cpu_ms = Self::bench_sessions(&mut cpu_s)?;
+                    let dml_ms = match Self::bench_sessions(&mut dml_s) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!("[OCR] DirectML 基准推理失败 ({})，采用 CPU", e);
+                            return Ok((
+                                cpu_s,
+                                AccelInfo {
+                                    ep: Accelerator::Cpu,
+                                    forced: false,
+                                    cpu_ms: Some(cpu_ms),
+                                    dml_ms: None,
+                                    note: Some("DirectML 基准推理失败，回退 CPU".to_string()),
+                                },
+                            ));
+                        }
+                    };
+                    // 真实场景下 DirectML 伴随多文本行切片的 PCIe 显存往返与 D3D12 命令开销。
+                    // 仅当 DirectML 基准显著优于 CPU (>1.5×) 时才选用，否则采用无显存拷贝开销的高性能 CPU 多线程。
+                    let (sess, ep) = if dml_ms * 1.5 < cpu_ms {
+                        (dml_s, Accelerator::DirectML)
+                    } else {
+                        (cpu_s, Accelerator::Cpu)
+                    };
+                    eprintln!(
+                        "[OCR] EP 基准: DirectML {:.1}ms vs CPU {:.1}ms → 选用 {}",
+                        dml_ms,
+                        cpu_ms,
+                        ep.label()
+                    );
+                    Ok((
+                        sess,
+                        AccelInfo {
+                            ep,
+                            forced: false,
+                            cpu_ms: Some(cpu_ms),
+                            dml_ms: Some(dml_ms),
+                            note: None,
+                        },
+                    ))
+                }
+            }
         }
-        chars.push(" ".to_string()); // last index -> space
 
-        Ok(Sessions { det, rec, cls, chars })
+        #[cfg(not(target_os = "windows"))]
+        {
+            let s = build(false)?;
+            let info = AccelInfo {
+                ep: Accelerator::Cpu,
+                forced: true,
+                cpu_ms: None,
+                dml_ms: None,
+                note: None,
+            };
+            Ok((s, info))
+        }
+    }
+
+    /// 用固定合成图对一套会话做 1 次预热 + 2 次计时，返回 det+rec 最短合计毫秒。
+    /// 包含 2 行文本切片批量推理，真实评估 GPU 队列与多核 CPU 的吞吐。
+    /// 任一阶段推理失败返回 Err：该 EP 不可用，不应被基准选中。
+    fn bench_sessions(sess: &mut Sessions) -> Result<f64, String> {
+        let (bw, bh) = (400u32, 200u32);
+        let bgr = synthetic_bgr(bw, bh);
+        let crop = synthetic_bgr(160, 36);
+        let mut best = f64::INFINITY;
+        for rep in 0..3 {
+            let t0 = std::time::Instant::now();
+            run_detection(sess, &bgr, bw, bh).map_err(|e| format!("bench det: {}", e))?;
+            let (data, rw) = rec_preprocess(&crop, 160, 36);
+            let items = [(data.clone(), rw), (data, rw)];
+            recognize_prepared_batch(sess, &items)
+                .map_err(|e| format!("bench rec: {}", e))?;
+            let dt = t0.elapsed().as_secs_f64() * 1000.0;
+            if rep > 0 {
+                best = best.min(dt);
+            }
+        }
+        Ok(best)
     }
 
     pub fn last_error(&self) -> Option<String> {
@@ -398,8 +672,9 @@ impl OnnxOcrEngine {
         let timing = std::env::var("CATWALK_OCR_TIMING").map(|v| v != "0").unwrap_or(false);
         let t_det = std::time::Instant::now();
         // Run DBNet text box detection (long menu bars are properly segmented into word boxes).
-        let (map, mw, mh) = run_detection(sessions, &bgr, img_w, img_h)?;
-        let mut boxes = postprocess_db(&map, mw, mh, img_w, img_h);
+        // 检测 + DB 后处理都在 run_detection 内完成(score map 视图借用会话,
+        // 就地后处理避免整图拷贝)。
+        let mut boxes = run_detection(sessions, &bgr, img_w, img_h)?;
         let det_ms = t_det.elapsed().as_secs_f64() * 1000.0;
 
         // Fallback: if DBNet did not detect boxes on tiny/single-line crop, feed entire image to REC
@@ -429,23 +704,39 @@ impl OnnxOcrEngine {
         // 变慢」正是每行一次推理的线性开销)。
         let mut prepared: Vec<(Vec<f32>, u32)> = Vec::with_capacity(rec_units);
         let mut kept_boxes: Vec<(u32, u32, u32, u32)> = Vec::with_capacity(rec_units);
+        let mut crops_all: Vec<(Vec<u8>, u32, u32)> = Vec::with_capacity(rec_units);
         for (bx, by, bw, bh) in boxes {
             if bw == 0 || bh == 0 {
                 continue;
             }
-            let crop = crop_bgr(&bgr, w, h, bx, by, bw, bh);
-            let needs_rot = if bw >= bh {
-                false
+            kept_boxes.push((bx, by, bw, bh));
+            crops_all.push((crop_bgr(&bgr, w, h, bx, by, bw, bh), bw, bh));
+        }
+
+        // 竖排框先整批做一次 180° 角度分类:逐框一次 `run` 的固定开销
+        // (线程唤醒/图调度/拷贝)在文字多时会线性放大,合批摊薄;
+        // batch 维固定为 1 的模型由 classify_angles_batch 内部逐框回退。
+        let vertical: Vec<(&[u8], u32, u32)> = crops_all
+            .iter()
+            .filter_map(|(crop, cw, ch)| {
+                (*cw < *ch && !crop.is_empty()).then_some((crop.as_slice(), *cw, *ch))
+            })
+            .collect();
+        let rot_flags = classify_angles_batch(sessions, &vertical)?;
+        let mut rot_iter = rot_flags.into_iter();
+
+        for (crop, cw, ch) in crops_all {
+            let needs_rot = if cw < ch {
+                rot_iter.next().unwrap_or(false)
             } else {
-                classify_angle(sessions, &crop, bw, bh)?
+                false
             };
             let final_crop = if needs_rot {
-                rotate180_bgr(&crop, bw, bh)
+                rotate180_bgr(&crop, cw, ch)
             } else {
                 crop
             };
-            prepared.push(rec_preprocess(&final_crop, bw, bh));
-            kept_boxes.push((bx, by, bw, bh));
+            prepared.push(rec_preprocess(&final_crop, cw, ch));
         }
 
         let mut order: Vec<usize> = (0..prepared.len()).collect();
@@ -473,7 +764,7 @@ impl OnnxOcrEngine {
                 chunk.iter().map(|&i| prepared[i].clone()).collect();
             match recognize_prepared_batch(sessions, &items) {
                 Ok(texts) => {
-                    for (&i, t) in chunk.iter().zip(texts.into_iter()) {
+                    for (&i, t) in chunk.iter().zip(texts) {
                         recognized[i] = Some(t);
                     }
                 }
@@ -492,7 +783,7 @@ impl OnnxOcrEngine {
         }
 
         let mut blocks = Vec::new();
-        for ((bx, by, bw, bh), res) in kept_boxes.into_iter().zip(recognized.into_iter()) {
+        for ((bx, by, bw, bh), res) in kept_boxes.into_iter().zip(recognized) {
             let Some((text, conf)) = res else { continue };
             // 统一 CJK 空格清理：PP-OCR rec 会在中日韩字符间偶发插入空格
             //（此前只有 WinRT 路径做了该清理），英文文本不受影响。
@@ -515,7 +806,8 @@ impl OnnxOcrEngine {
         if timing {
             let rec_ms = t_rec.elapsed().as_secs_f64() * 1000.0;
             eprintln!(
-                "[OCR-TIMING] {}x{} det={:.1}ms rec={:.1}ms ({} 行, 均 {:.1}ms/行) 合计 {:.1}ms",
+                "[OCR-TIMING] EP={} {}x{} det={:.1}ms rec={:.1}ms ({} 行, 均 {:.1}ms/行) 合计 {:.1}ms",
+                sessions.ep.label(),
                 img_w,
                 img_h,
                 det_ms,
@@ -580,6 +872,25 @@ fn crop_bgr(bgr: &[u8], w: usize, h: usize, x: u32, y: u32, bw: u32, bh: u32) ->
 
 // ---- Detection (DET) --------------------------------------------------------
 
+/// 基准用合成图：白底 + 周期黑条纹，让 det 有真实形状可分、rec 有像素内容，
+/// 耗时主要反映卷积/图调度开销而非 I/O。
+fn synthetic_bgr(w: u32, h: u32) -> Vec<u8> {
+    let mut bgr = vec![255u8; (w as usize * h as usize) * 3];
+    let mut y = 4u32;
+    while y < h {
+        let mut x = 4u32;
+        while x < w {
+            let p = (y * w + x) as usize;
+            bgr[p * 3] = 0;
+            bgr[p * 3 + 1] = 0;
+            bgr[p * 3 + 2] = 0;
+            x += 3;
+        }
+        y += 16;
+    }
+    bgr
+}
+
 /// Global histogram equalization independently on BGR 3 channels.
 /// Builds a 256-bin cumulative distribution function (CDF) per channel
 /// and maps intensities via lookup table to stretch contrast.
@@ -621,8 +932,8 @@ fn hist_equalize_bgr(img: &[u8], w: usize, h: usize) -> Vec<u8> {
             }
         } else {
             // All pixels have the same value; preserve original intensities.
-            for i in 0..256 {
-                lut[i] = i as u8;
+            for (i, item) in lut.iter_mut().enumerate() {
+                *item = i as u8;
             }
         }
 
@@ -634,50 +945,74 @@ fn hist_equalize_bgr(img: &[u8], w: usize, h: usize) -> Vec<u8> {
     out
 }
 
-/// Resize + normalize + DET inference. Returns the (post-sigmoid) probability
-/// map and its dims (mw, mh).
+/// det 输入直方图均衡化开关(ONNX_PREPROCESS_HE=1 开启)。
+/// 与官方 PaddleOCR det 预处理一致，默认关闭：HE 每帧多两遍全图扫描，
+/// 在 GPU 推理只占几毫秒的模型上，host 侧扫描的开销反而更显眼。
+fn use_hist_equalize() -> bool {
+    static HE: OnceLock<bool> = OnceLock::new();
+    *HE.get_or_init(|| {
+        std::env::var("ONNX_PREPROCESS_HE")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+    })
+}
+
+/// Resize + normalize + DET inference. Returns the detected boxes (map is
+/// post-processed here since the ORT output borrows the session's buffers —
+/// keeping the postprocess inside avoids copying the score map out).
 fn run_detection(
     sessions: &mut Sessions,
     bgr: &[u8],
     w: u32,
     h: u32,
-) -> Result<(Vec<f32>, usize, usize), String> {
+) -> Result<Vec<(u32, u32, u32, u32)>, String> {
     let min_side = (w.min(h) as f32).max(1.0);
     let max_side = (w.max(h) as f32).max(1.0);
-    // 小图放大提升小字召回（≤3x）；大图等比缩小钳制最长边控制 DBNet 耗时。
-    // rec 的裁剪始终取自原图，因此缩小 det 输入只影响定位速度、不伤识别精度。
-    let mut ratio = (DET_LIMIT_SIDE_LEN / min_side).clamp(1.0, 3.0);
-    if max_side * ratio > DET_MAX_SIDE_LEN {
+    // PaddleOCR 官方尺度自适应策略：
+    // 1. 钳制大图最长边 (≤960)，控制 DBNet 卷积二次方增长的计算量；
+    // 2. 仅在极窄极小截区（短边 < 48px）时平滑微调放大（≤2.0x），保证小字召回；
+    // 3. 正常尺寸截区（如 640x160 等）保持 1:1 分辨率，绝不无脑按 300% 顶格放大 9 倍面积；
+    // 4. rec 识别裁剪始终来自高清原图，因此该策略在获得极致提速的同时完全不伤识别精度。
+    let mut ratio = 1.0f32;
+    if max_side > DET_MAX_SIDE_LEN {
         ratio = DET_MAX_SIDE_LEN / max_side;
+    } else if min_side < 48.0 {
+        ratio = (48.0 / min_side).clamp(1.0, 2.0);
     }
-    let rw = (((w as f32 * ratio).round() as u32 / 32).max(1)) * 32;
-    let rh = (((h as f32 * ratio).round() as u32 / 32).max(1)) * 32;
+    let rw = (((w as f32 * ratio) / 32.0).round() as u32).max(1) * 32;
+    let rh = (((h as f32 * ratio) / 32.0).round() as u32).max(1) * 32;
     let resized = resize_bgr_bilinear(bgr, w, h, rw, rh);
 
-    let use_he = std::env::var("ONNX_PREPROCESS_HE")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(true);
-    let det_img = if use_he {
+    let det_img = if use_hist_equalize() {
         hist_equalize_bgr(&resized, rw as usize, rh as usize)
     } else {
         resized
     };
 
-    // Normalize (hwc): (x/255 - mean) / std, then transpose to CHW.
-    let mut input = vec![0f32; 3 * rw as usize * rh as usize];
-    for y in 0..rh {
-        for x in 0..rw {
-            let px = (y * rw + x) as usize;
-            for c in 0..3 {
-                let val = det_img[px * 3 + c] as f32 / 255.0;
-                input[c * (rh as usize * rw as usize) + px] = (val - DET_MEAN[c]) / DET_STD[c];
-            }
-        }
+    // Normalize (hwc): (x/255 - mean) / std, then transpose to CHW。
+    // 直接写会话共享的 scratch 缓冲 + 零拷贝视图输入，避免每帧新建张量。
+    // 采用 split_at_mut 使三通道指针完全解耦，利于 LLVM 自动向量化。
+    let hw = rw as usize * rh as usize;
+    let scratch = &mut sessions.scratch;
+    scratch.resize(3 * hw, 0.0);
+    let (c0, rest) = scratch.split_at_mut(hw);
+    let (c1, c2) = rest.split_at_mut(hw);
+    let inv_255 = 1.0f32 / 255.0;
+    let m0 = DET_MEAN[0];
+    let m1 = DET_MEAN[1];
+    let m2 = DET_MEAN[2];
+    let s0 = DET_STD[0];
+    let s1 = DET_STD[1];
+    let s2 = DET_STD[2];
+    for (px, chunk) in det_img.chunks_exact(3).enumerate().take(hw) {
+        c0[px] = (chunk[0] as f32 * inv_255 - m0) / s0;
+        c1[px] = (chunk[1] as f32 * inv_255 - m1) / s1;
+        c2[px] = (chunk[2] as f32 * inv_255 - m2) / s2;
     }
 
-    let arr = ndarray::Array4::from_shape_vec((1, 3, rh as usize, rw as usize), input)
+    let arr = ndarray::ArrayView4::from_shape((1, 3, rh as usize, rw as usize), &scratch[..])
         .map_err(|e| format!("det input shape error: {}", e))?;
-    let input_value = ort::value::TensorRef::from_array_view(&arr)
+    let input_value = ort::value::TensorRef::from_array_view(arr)
         .map_err(|e| format!("det input build failed: {}", e))?;
     let outputs = sessions
         .det
@@ -690,8 +1025,12 @@ fn run_detection(
     let mh = view.shape().get(2).copied().unwrap_or(rh as usize);
     let mw = view.shape().get(3).copied().unwrap_or(rw as usize);
     // The det model already applies sigmoid internally, output is 0..1 prob.
-    let map: Vec<f32> = view.iter().copied().collect();
-    Ok((map, mw, mh))
+    // 输出视图是连续行主序,借用切片直接后处理,不复制整张 score map。
+    let map: std::borrow::Cow<'_, [f32]> = match view.as_slice() {
+        Some(s) => std::borrow::Cow::Borrowed(s),
+        None => std::borrow::Cow::Owned(view.iter().copied().collect()),
+    };
+    Ok(postprocess_db(&map, mw, mh, w, h))
 }
 
 /// DB post-processing (axis-aligned bbox variant, faithful to RapidOCR's
@@ -819,7 +1158,49 @@ fn postprocess_db(
         let ch = sh.clamp(1, src_h as i64 - cy as i64) as u32;
         out.push((cx, cy, cw, ch));
     }
-    out
+
+    // 冗余外壳抑制（Containment & Ghost Row Suppression）：
+    // 当存在一个小框 B 被一个大框 A 几乎完全包含（重叠面积占 B 的 80% 以上），
+    // 且大框 A 的面积显著大于 B（> 2.0 倍），说明大框 A 是由于表格交替浅灰底纹或分割线
+    // 引起的虚假连通外壳，必须剔除大框 A，保留精准贴合文字的单元格独立框。
+    let mut suppressed = vec![false; out.len()];
+    for i in 0..out.len() {
+        if suppressed[i] {
+            continue;
+        }
+        let (ax, ay, aw, ah) = out[i];
+        let a_area = (aw as u64) * (ah as u64);
+
+        for j in 0..out.len() {
+            if i == j || suppressed[j] {
+                continue;
+            }
+            let (bx, by, bw, bh) = out[j];
+            let b_area = (bw as u64) * (bh as u64);
+            if a_area <= (b_area * 2) {
+                continue;
+            }
+
+            let inter_x0 = ax.max(bx);
+            let inter_y0 = ay.max(by);
+            let inter_x1 = (ax + aw).min(bx + bw);
+            let inter_y1 = (ay + ah).min(by + bh);
+
+            if inter_x1 > inter_x0 && inter_y1 > inter_y0 {
+                let inter_area = ((inter_x1 - inter_x0) as u64) * ((inter_y1 - inter_y0) as u64);
+                if (inter_area as f64) / (b_area as f64) >= 0.80 {
+                    suppressed[i] = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    out.into_iter()
+        .enumerate()
+        .filter(|(idx, _)| !suppressed[*idx])
+        .map(|(_, b)| b)
+        .collect()
 }
 
 fn resize_bgr_bilinear(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
@@ -858,6 +1239,79 @@ fn resize_bgr_bilinear(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8
 
 // ---- Angle classifier (CLS) ---------------------------------------------------
 
+/// 整批角度分类：输入为 (裁剪图, 宽, 高)，全部 pad 到 48×192，一次 `run`
+/// 推完所有竖排框。返回与输入等长的旋转标志；batch 维固定为 1 的模型
+/// 会失败，此时逐框回退(与旧行为一致)。
+fn classify_angles_batch(
+    sessions: &mut Sessions,
+    crops: &[(&[u8], u32, u32)],
+) -> Result<Vec<bool>, String> {
+    let n = crops.len();
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let plane = CLS_IMG_H * CLS_IMG_W;
+    let scratch = &mut sessions.scratch;
+    scratch.resize(n * 3 * plane, 0.0);
+    for (b, (crop, cw, ch)) in crops.iter().enumerate() {
+        let ratio = *cw as f32 / *ch as f32;
+        let rw = if (CLS_IMG_H as f32 * ratio) > CLS_IMG_W as f32 {
+            CLS_IMG_W
+        } else {
+            ((CLS_IMG_H as f32 * ratio).ceil() as usize).max(1)
+        };
+        let resized = resize_bgr_bilinear(crop, *cw, *ch, rw as u32, CLS_IMG_H as u32);
+        for c in 0..3 {
+            for y in 0..CLS_IMG_H {
+                for x in 0..CLS_IMG_W {
+                    let v = if x < rw {
+                        resized[(y * rw + x) * 3 + c] as f32 / 255.0
+                    } else {
+                        0.0
+                    };
+                    scratch[b * 3 * plane + c * plane + y * CLS_IMG_W + x] = (v - 0.5) / 0.5;
+                }
+            }
+        }
+    }
+
+    let arr = ndarray::ArrayView4::from_shape((n, 3, CLS_IMG_H, CLS_IMG_W), &scratch[..])
+        .map_err(|e| format!("cls input shape error: {}", e))?;
+    let input_value = ort::value::TensorRef::from_array_view(arr)
+        .map_err(|e| format!("cls input build failed: {}", e))?;
+    // 批处理推理放进闭包块:run 返回的 SessionOutputs 借用会话,块结束即释放,
+    // 这样批处理失败时还能再次借用 sessions 走逐框回退。
+    let flags: Result<Vec<bool>, String> = (|| {
+        let outputs = sessions
+            .cls
+            .run(ort::inputs![input_value])
+            .map_err(|e| format!("cls inference failed: {}", e))?;
+        let view = outputs[0]
+            .try_extract_array::<f32>()
+            .map_err(|e| format!("cls output extract failed: {}", e))?;
+        Ok((0..n)
+            .map(|b| {
+                let prob0 = view[[b, 0]];
+                let prob1 = view[[b, 1]];
+                prob1 > prob0 && prob1 > CLS_THRESH
+            })
+            .collect())
+    })();
+    match flags {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            // batch 维固定为 1 的旧模型:逐框回退,保证功能与旧速度一致。
+            eprintln!("[OCR] cls 批量推理失败，回退逐框推理");
+            let mut out = Vec::with_capacity(n);
+            for (crop, cw, ch) in crops {
+                out.push(classify_angle(sessions, crop, *cw, *ch)?);
+            }
+            Ok(out)
+        }
+    }
+}
+
+/// 单框角度分类(批量失败时的逐框回退路径)。
 fn classify_angle(sessions: &mut Sessions, crop: &[u8], cw: u32, ch: u32) -> Result<bool, String> {
     let ratio = cw as f32 / ch as f32;
     let rw = if (CLS_IMG_H as f32 * ratio) > CLS_IMG_W as f32 {
@@ -867,7 +1321,7 @@ fn classify_angle(sessions: &mut Sessions, crop: &[u8], cw: u32, ch: u32) -> Res
     };
     let resized = resize_bgr_bilinear(crop, cw, ch, rw as u32, CLS_IMG_H as u32);
 
-    let mut input = vec![0f32; 3 * CLS_IMG_H as usize * CLS_IMG_W as usize];
+    let mut input = vec![0f32; 3 * CLS_IMG_H * CLS_IMG_W];
     for c in 0..3 {
         for y in 0..CLS_IMG_H {
             for x in 0..CLS_IMG_W {
@@ -876,14 +1330,14 @@ fn classify_angle(sessions: &mut Sessions, crop: &[u8], cw: u32, ch: u32) -> Res
                 } else {
                     0.0
                 };
-                input[c * CLS_IMG_H as usize * CLS_IMG_W as usize + y * CLS_IMG_W as usize + x] =
+                input[c * CLS_IMG_H * CLS_IMG_W + y * CLS_IMG_W + x] =
                     (v - 0.5) / 0.5;
             }
         }
     }
 
     let arr = ndarray::Array4::from_shape_vec(
-        (1, 3, CLS_IMG_H as usize, CLS_IMG_W as usize),
+        (1, 3, CLS_IMG_H, CLS_IMG_W),
         input,
     )
     .map_err(|e| format!("cls input shape error: {}", e))?;
@@ -906,7 +1360,7 @@ fn classify_angle(sessions: &mut Sessions, crop: &[u8], cw: u32, ch: u32) -> Res
 /// 同批推理的最大条数。rec 的单次输入很小(48×W)，ONNX Runtime 的每次
 /// `run` 固定开销(线程唤醒/内存分配/图调度)与实际算力消耗同量级，因此把
 /// 若干行拼成一个 batch 一次推完，比逐行推理明显快。
-pub const REC_BATCH: usize = 8;
+pub const REC_BATCH: usize = 16;
 
 /// 把 BGR 裁剪预处理成 rec 输入：等比缩放到 H=48，归一化到 [-1,1] 的 CHW。
 /// 返回 (归一化数据, 缩放后宽度)。
@@ -920,28 +1374,63 @@ fn rec_preprocess(crop: &[u8], cw: u32, ch: u32) -> (Vec<f32>, u32) {
     let resized = resize_bgr_bilinear(crop, cw, ch, rw, REC_IMG_H);
     let plane = rw as usize * REC_IMG_H as usize;
     let mut input = vec![0f32; 3 * plane];
-    for y in 0..REC_IMG_H {
-        for x in 0..rw {
-            let px = (y * rw + x) as usize;
-            for c in 0..3 {
-                let v = resized[px * 3 + c] as f32 / 255.0;
-                input[c * plane + px] = (v - 0.5) / 0.5;
-            }
-        }
+    let (c0, rest) = input.split_at_mut(plane);
+    let (c1, c2) = rest.split_at_mut(plane);
+    let inv_255_mul_2 = 2.0f32 / 255.0;
+    for (px, chunk) in resized.chunks_exact(3).enumerate().take(plane) {
+        c0[px] = chunk[0] as f32 * inv_255_mul_2 - 1.0;
+        c1[px] = chunk[1] as f32 * inv_255_mul_2 - 1.0;
+        c2[px] = chunk[2] as f32 * inv_255_mul_2 - 1.0;
     }
     (input, rw)
 }
 
 /// CTC 贪心解码 rec 输出中的第 `b` 条：blank 索引为 0，类别 i 对应 chars[i-1]
 /// (RapidOCR 在字表前置了 blank)。
+/// 优先走底层连续切片扫描 (chunks_exact)，消除 ndarray 动态三维多重索引的数百万次边界检查。
 fn rec_decode(view: &ndarray::ArrayViewD<f32>, b: usize, chars: &[String]) -> (String, f32) {
     let seq_len = view.shape().get(1).copied().unwrap_or(0);
     let vocab = view.shape().get(2).copied().unwrap_or(0);
+    if seq_len == 0 || vocab == 0 {
+        return (String::new(), 0.0);
+    }
     let mut text = String::new();
     let mut conf_sum = 0f32;
     let mut conf_cnt = 0usize;
     let mut prev = 0usize;
 
+    // 快速路径：连续内存切片扫描
+    if let Some(slice) = view.as_slice() {
+        let b_stride = seq_len * vocab;
+        let b_offset = b * b_stride;
+        if b_offset + b_stride <= slice.len() {
+            let b_slice = &slice[b_offset..b_offset + b_stride];
+            for step_slice in b_slice.chunks_exact(vocab) {
+                let mut best = 0usize;
+                let mut best_v = f32::MIN;
+                for (c, &v) in step_slice.iter().enumerate() {
+                    if v > best_v {
+                        best_v = v;
+                        best = c;
+                    }
+                }
+                if best == 0 || best == prev {
+                    prev = best;
+                    continue;
+                }
+                prev = best;
+                if let Some(ch) = chars.get(best - 1) {
+                    text.push_str(ch);
+                    conf_sum += best_v;
+                    conf_cnt += 1;
+                }
+            }
+            let conf = if conf_cnt > 0 { conf_sum / conf_cnt as f32 } else { 0.0 };
+            return (text, conf);
+        }
+    }
+
+    // 兜底路径：非连续视图逐点索引
     for t in 0..seq_len {
         let mut best = 0usize;
         let mut best_v = f32::MIN;
@@ -986,21 +1475,22 @@ fn recognize_prepared_batch(
     let max_w = items.iter().map(|(_, w)| *w).max().unwrap_or(1).max(1) as usize;
     let h = REC_IMG_H as usize;
     let plane = h * max_w;
-    let mut input = vec![0.0f32; batch * 3 * plane];
+    let scratch = &mut sessions.scratch;
+    scratch.resize(batch * 3 * plane, 0.0);
     for (b, (data, w)) in items.iter().enumerate() {
         let w = *w as usize;
         for c in 0..3 {
             for y in 0..h {
                 let src = c * (h * w) + y * w;
                 let dst = b * (3 * plane) + c * plane + y * max_w;
-                input[dst..dst + w].copy_from_slice(&data[src..src + w]);
+                scratch[dst..dst + w].copy_from_slice(&data[src..src + w]);
             }
         }
     }
 
-    let arr = ndarray::Array4::from_shape_vec((batch, 3, h, max_w), input)
+    let arr = ndarray::ArrayView4::from_shape((batch, 3, h, max_w), &scratch[..])
         .map_err(|e| format!("rec batch shape error: {}", e))?;
-    let input_value = ort::value::TensorRef::from_array_view(&arr)
+    let input_value = ort::value::TensorRef::from_array_view(arr)
         .map_err(|e| format!("rec batch input build failed: {}", e))?;
     let outputs = sessions
         .rec
@@ -1118,6 +1608,20 @@ mod tests {
         // A row hugging both edges must not produce an out-of-image crop rect.
         let rows = union_boxes_into_rows(vec![(0, 10, 200, 40)], 200);
         assert_eq!(rows, vec![(0, 10, 200, 40)]);
+    }
+
+    #[test]
+    fn test_union_boxes_into_rows_preserves_table_columns() {
+        // 表格同一行的 4 个独立单元格（间距 25px~40px，大于 14px 词缝合上限）
+        // 必须严格保持为 4 个独立的识别框，绝不跨列合并成一条！
+        let table_cells = vec![
+            (50, 100, 100, 24),   // 列1: x:50..150
+            (180, 100, 80, 24),   // 列2: x:180..260 (gap=30px)
+            (300, 100, 90, 24),   // 列3: x:300..390 (gap=40px)
+            (425, 100, 70, 24),   // 列4: x:425..495 (gap=35px)
+        ];
+        let rows = union_boxes_into_rows(table_cells, 800);
+        assert_eq!(rows.len(), 4, "表格各列必须保持独立");
     }
 
     #[test]
@@ -1439,7 +1943,12 @@ pub fn sort_boxes_reading_order(mut boxes: Vec<(u32, u32, u32, u32)>) -> Vec<(u3
 /// the erase patch leaves it on screen as a ghost stroke beside the card. The
 /// pad is deliberately small — under a typical icon/text gap, so it recovers
 /// glyph stems without pulling a neighbouring logo into the crop. Vertical
-/// padding stays 0: adjacent lines are far closer than adjacent glyphs.
+/// 行内细粒度文本切片拼接（微距缝合，坚决阻断跨列合并）：
+///
+/// DBNet 偶尔在低对比度或浅色文字处把单个词断成 2 个微小碎片（如 "generation model" 断成两截）。
+/// 仅当同一行内相邻框水平间隙极小（gap <= 14px 且在字高合理比例内）时，才视为同一个词的切片碎片予以缝合；
+/// 表格单元格之间、独立按钮之间、多栏文本之间的列间距（通常 >= 16px 或 > 0.5×字高）必须严格保持为独立识别框，
+/// 从而保证每个单元格拥有精准的原位坐标，杜绝将整行所有列粗暴融合成一条巨型长句。
 pub fn union_boxes_into_rows(
     boxes: Vec<(u32, u32, u32, u32)>,
     img_w: u32,
@@ -1460,23 +1969,58 @@ pub fn union_boxes_into_rows(
             },
         })
         .collect();
-    crate::reconstruction::LineClusterer::cluster_into_lines(blocks, 8.0)
-        .into_iter()
-        .filter_map(|row| {
-            let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-            for b in &row {
-                x0 = x0.min(b.box_rect.x);
-                y0 = y0.min(b.box_rect.y);
-                x1 = x1.max(b.box_rect.x + b.box_rect.width as i32);
-                y1 = y1.max(b.box_rect.y + b.box_rect.height as i32);
+    let rows = crate::reconstruction::LineClusterer::cluster_into_lines(blocks, 8.0);
+    let mut out = Vec::new();
+
+    for mut row in rows {
+        if row.is_empty() {
+            continue;
+        }
+        // 同一行内按 X 升序排序
+        row.sort_by_key(|b| b.box_rect.x);
+
+        // 在行内进行细粒度词切片拼接：
+        let mut current_group: Vec<&TextBlock> = vec![&row[0]];
+        for b in row.iter().skip(1) {
+            let last = current_group.last().unwrap();
+            let last_right = last.box_rect.x + last.box_rect.width as i32;
+            let gap = b.box_rect.x - last_right;
+            let min_h = last.box_rect.height.min(b.box_rect.height) as f32;
+            // 缝合阈值：必须在正常字间距以内 (≤14px 且 ≤ min_h * 0.70)，超出即为独立单元格/按钮/词组
+            let max_gap_threshold = (min_h * 0.70).clamp(8.0, 14.0);
+
+            if (gap as f32) <= max_gap_threshold {
+                current_group.push(b);
+            } else {
+                if let Some(rect) = merge_group_rect(&current_group, img_w) {
+                    out.push(rect);
+                }
+                current_group = vec![b];
             }
-            if row.is_empty() || x1 <= x0 || y1 <= y0 {
-                return None;
-            }
-            let pad = (((y1 - y0) as f32 * 0.15).round() as i32).clamp(2, 6);
-            x0 = (x0 - pad).max(0);
-            x1 = (x1 + pad).min(img_w as i32);
-            Some((x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32))
-        })
-        .collect()
+        }
+        if let Some(rect) = merge_group_rect(&current_group, img_w) {
+            out.push(rect);
+        }
+    }
+    out
+}
+
+fn merge_group_rect(group: &[&TextBlock], img_w: u32) -> Option<(u32, u32, u32, u32)> {
+    if group.is_empty() {
+        return None;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for b in group {
+        x0 = x0.min(b.box_rect.x);
+        y0 = y0.min(b.box_rect.y);
+        x1 = x1.max(b.box_rect.x + b.box_rect.width as i32);
+        y1 = y1.max(b.box_rect.y + b.box_rect.height as i32);
+    }
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let pad = (((y1 - y0) as f32 * 0.15).round() as i32).clamp(2, 6);
+    x0 = (x0 - pad).max(0);
+    x1 = (x1 + pad).min(img_w as i32);
+    Some((x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32))
 }

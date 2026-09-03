@@ -11,8 +11,12 @@ use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 use tauri::ipc::Channel;
 
-const ECDICT_URL: &str =
-    "https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv";
+const ECDICT_URLS: &[&str] = &[
+    "https://fastly.jsdelivr.net/gh/skywind3000/ECDICT@master/ecdict.csv",
+    "https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv",
+    "https://cdn.jsdelivr.net/gh/skywind3000/ECDICT@master/ecdict.csv",
+    "https://ghproxy.net/https://raw.githubusercontent.com/skywind3000/ECDICT/master/ecdict.csv",
+];
 const MAX_KEEP_ENTRIES: usize = 200_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -57,10 +61,12 @@ fn meta_path(app: &tauri::AppHandle) -> PathBuf {
     crate::commands::get_app_config_dir(app).join("general_dict_meta.json")
 }
 
-/// 内存词典：None = 未安装或未加载；首次查询时惰性加载
-static DICT: OnceLock<RwLock<Option<HashMap<String, (String, Vec<String>)>>>> = OnceLock::new();
+type DictMap = HashMap<String, (String, Vec<String>)>;
 
-fn dict_cell() -> &'static RwLock<Option<HashMap<String, (String, Vec<String>)>>> {
+/// 内存词典：None = 未安装或未加载；首次查询时惰性加载
+static DICT: OnceLock<RwLock<Option<DictMap>>> = OnceLock::new();
+
+fn dict_cell() -> &'static RwLock<Option<DictMap>> {
     DICT.get_or_init(|| RwLock::new(None))
 }
 
@@ -165,42 +171,89 @@ pub async fn cmd_general_dict_install(
 
     let temp_csv = std::env::temp_dir().join(format!("ecdict_{}.csv", std::process::id()));
 
-    // ── 阶段 1：流式下载完整 CSV（63MB，进度实时上报） ─────────────────────
+    // ── 阶段 1：流式下载完整 CSV（63MB，进度实时上报，支持国内镜像故障转移） ──
     let client = crate::translator::create_http_client(600_000);
-    let resp = client
-        .get(ECDICT_URL)
-        .timeout(std::time::Duration::from_secs(600))
-        .send()
-        .await
-        .map_err(|e| format!("下载 ECDICT 失败: {}", e))?;
-    if !resp.status().is_success() {
-        return Err(format!("ECDICT 源返回 HTTP {}", resp.status().as_u16()));
-    }
-    let total = resp.content_length().unwrap_or(65_933_428);
-    let mut file = std::fs::File::create(&temp_csv).map_err(|e| format!("创建临时文件失败: {}", e))?;
-    let mut stream = resp.bytes_stream();
-    let mut downloaded: u64 = 0;
-    let mut last_report = 0u64;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("下载中断: {}", e))?;
-        file.write_all(&chunk).map_err(|e| format!("写入临时文件失败: {}", e))?;
-        downloaded += chunk.len() as u64;
-        // 每 2MB 上报一次，避免 IPC 洪泛
-        if downloaded - last_report >= 2 * 1024 * 1024 || downloaded >= total {
-            last_report = downloaded;
-            let _ = on_progress.send(DictProgress {
-                downloaded,
-                total,
-                phase: "download".into(),
-                detail: format!("{:.1} / {:.1} MB", downloaded as f64 / 1048576.0, total as f64 / 1048576.0),
-            });
+    let mut last_err = String::new();
+    let mut downloaded_ok = false;
+    let mut final_total = 65_933_428u64;
+
+    for &url in ECDICT_URLS {
+        let resp = match client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(600))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                last_err = format!("{} 返回 HTTP {}", url, r.status().as_u16());
+                continue;
+            }
+            Err(e) => {
+                last_err = format!("{} 请求失败: {}", url, e);
+                continue;
+            }
+        };
+
+        let total = resp.content_length().unwrap_or(65_933_428);
+        final_total = total;
+        let mut file = match std::fs::File::create(&temp_csv) {
+            Ok(f) => f,
+            Err(e) => return Err(format!("创建临时文件失败: {}", e)),
+        };
+
+        let mut stream = resp.bytes_stream();
+        let mut downloaded: u64 = 0;
+        let mut last_report = 0u64;
+        let mut stream_failed = false;
+
+        while let Some(chunk_res) = stream.next().await {
+            match chunk_res {
+                Ok(chunk) => {
+                    if let Err(e) = file.write_all(&chunk) {
+                        last_err = format!("写入临时文件失败: {}", e);
+                        stream_failed = true;
+                        break;
+                    }
+                    downloaded += chunk.len() as u64;
+                    if downloaded - last_report >= 2 * 1024 * 1024 || downloaded >= total {
+                        last_report = downloaded;
+                        let _ = on_progress.send(DictProgress {
+                            downloaded,
+                            total,
+                            phase: "download".into(),
+                            detail: format!(
+                                "{:.1} / {:.1} MB",
+                                downloaded as f64 / 1048576.0,
+                                total as f64 / 1048576.0
+                            ),
+                        });
+                    }
+                }
+                Err(e) => {
+                    last_err = format!("{} 流中断: {}", url, e);
+                    stream_failed = true;
+                    break;
+                }
+            }
+        }
+        drop(file);
+
+        if !stream_failed && downloaded > 1024 * 1024 {
+            downloaded_ok = true;
+            break;
+        } else {
+            let _ = std::fs::remove_file(&temp_csv);
         }
     }
-    drop(file);
+
+    if !downloaded_ok {
+        return Err(format!("所有词典镜像源下载均失败，最后错误: {}", last_err));
+    }
 
     let _ = on_progress.send(DictProgress {
-        downloaded: total,
-        total,
+        downloaded: final_total,
+        total: final_total,
         phase: "parse".into(),
         detail: "解析并筛选高频词条…".into(),
     });
@@ -262,8 +315,8 @@ pub async fn cmd_general_dict_install(
     );
 
     let _ = on_progress.send(DictProgress {
-        downloaded: total,
-        total,
+        downloaded: final_total,
+        total: final_total,
         phase: "done".into(),
         detail: format!("已收录 {} 条高频词条", count),
     });

@@ -28,6 +28,7 @@ async fn test_challenger_invalid_endpoint_connection_refused() {
         api_key: "sk-test-key".to_string(),
         model: "deepseek-chat".to_string(),
         endpoint: "http://127.0.0.1:59999".to_string(), // Unused port
+        enabled: Some(true),
     };
 
     let phrases = vec!["Unmatched Test Term Refused".to_string()];
@@ -69,6 +70,7 @@ async fn test_challenger_invalid_endpoint_http_404_500_errors() {
         api_key: "sk-proj-test".to_string(),
         model: "gpt-4o".to_string(),
         endpoint: format!("http://{}", addr),
+        enabled: Some(true),
     };
 
     let phrases = vec!["Unmatched 500 Phrase".to_string()];
@@ -112,6 +114,7 @@ async fn test_challenger_malformed_llm_json_response() {
         api_key: "sk-mock-key".to_string(),
         model: "deepseek-chat".to_string(),
         endpoint: format!("http://{}", addr),
+        enabled: Some(true),
     };
 
     let phrases = vec!["Unmatched Malformed Phrase".to_string()];
@@ -154,6 +157,7 @@ async fn test_challenger_missing_api_key_401_unauthorized() {
         api_key: "".to_string(), // Empty key
         model: "deepseek-chat".to_string(),
         endpoint: format!("http://{}", addr),
+        enabled: Some(true),
     };
 
     let phrases = vec!["Unmatched 401 Phrase".to_string()];
@@ -192,6 +196,7 @@ async fn test_challenger_http_timeout_4s_limit() {
         api_key: "".to_string(),
         model: "llama3".to_string(),
         endpoint: format!("http://{}", addr),
+        enabled: Some(true),
     };
 
     let start = Instant::now();

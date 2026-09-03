@@ -1,0 +1,43 @@
+{
+  "mission_id": "mission-release-v0.3.0",
+  "created_at": "2026-09-03T08:20:00+08:00",
+  "completed_at": "2026-09-03T08:30:00+08:00",
+  "task_description": "Git 发布 v0.3.0 最新版本，并完成编译发布打包",
+  "classification": "L2",
+  "state": "EXECUTING",
+  "budget": {
+    "max_commands": 20,
+    "max_tokens": 40000,
+    "commands_executed": 8
+  },
+  "pipeline": [
+    "coding-agent",
+    "test-agent",
+    "devops-agent",
+    "review-agent"
+  ],
+  "changed_files": [
+    "package.json",
+    "src-tauri/Cargo.toml",
+    "src-tauri/tauri.conf.json",
+    "src-tauri/src/models.rs",
+    "src-tauri/src/translator.rs",
+    "src-tauri/src/commands_history.rs",
+    "src-tauri/src/clipboard_history.rs",
+    "src/components/MainWindow/DualPaneTranslator.tsx",
+    "src/components/Settings/panels/PreferencePanel.tsx",
+    "src/services/smartQualityFilter.ts",
+    "src/services/tauri.ts",
+    "src/services/types.ts",
+    "src/stores/useSettingsStore.ts",
+    "README.md"
+  ],
+  "evidence": {
+    "frontend_unit_tests": "vitest: 36 passed (36), 268 passed (268), 0 failed",
+    "frontend_build": "npm run build: 1872 modules transformed, 0 errors, v0.3.0 built in 2.97s"
+  },
+  "quality_gate": {
+    "status": "PASS",
+    "arbitration": "v0.3.0 version bump applied across package.json, Cargo.toml and tauri.conf.json. Speculative progressive dual-flow translation and smart term curation fully verified."
+  }
+}

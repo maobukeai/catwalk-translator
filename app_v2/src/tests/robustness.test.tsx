@@ -298,7 +298,8 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
     fireEvent.click(cancelBtn);
 
     await waitFor(() => {
-      expect(screen.getByTitle(/按住鼠标左键划框/)).toBeInTheDocument();
+      expect(screen.queryByTestId('cancel-processing-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('processing-label')).not.toBeInTheDocument();
     });
     await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
     // The late result must not render any cards

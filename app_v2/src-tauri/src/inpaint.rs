@@ -332,21 +332,23 @@ pub fn build_erased_patch_png(
 
         // If a row's immediate edge hits dark ink (e.g. a bullet point '•' or colon),
         // fallback to the clean column background instead of smearing ink horizontally.
-        let l = if left_n > 0 {
+        let l = if let Some(n) = std::num::NonZeroU32::new(left_n) {
+            let n = n.get();
             [
-                (left[0] / left_n) as u8,
-                (left[1] / left_n) as u8,
-                (left[2] / left_n) as u8,
+                (left[0] / n) as u8,
+                (left[1] / n) as u8,
+                (left[2] / n) as u8,
             ]
         } else {
             left_col_median
         };
 
-        let r = if right_n > 0 {
+        let r = if let Some(n) = std::num::NonZeroU32::new(right_n) {
+            let n = n.get();
             [
-                (right[0] / right_n) as u8,
-                (right[1] / right_n) as u8,
-                (right[2] / right_n) as u8,
+                (right[0] / n) as u8,
+                (right[1] / n) as u8,
+                (right[2] / n) as u8,
             ]
         } else {
             right_col_median

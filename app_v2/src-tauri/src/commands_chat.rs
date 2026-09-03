@@ -38,19 +38,30 @@ pub async fn cmd_fetch_llm_models(
 
     if clean_base.ends_with("/models") {
         candidate_urls.push(clean_base.clone());
-    } else if is_google_gemini {
-        if clean_base.ends_with("/v1beta") || clean_base.ends_with("/v1") {
-            candidate_urls.push(format!("{}/models", clean_base));
-        } else {
-            // For Cloudflare AI Gateway / Google AI Studio base URLs, /v1beta/models MUST be tried first!
-            candidate_urls.push(format!("{}/v1beta/models", clean_base));
-            candidate_urls.push(format!("{}/v1/models", clean_base));
+    } else {
+        // Cloudflare AI Gateway /openai 兼容层适配：支持 /v1beta/models 与 /v1beta/openai/models 自动探测
+        if clean_base.ends_with("/openai") {
+            let stripped = clean_base.strip_suffix("/openai").unwrap_or(&clean_base);
+            candidate_urls.push(format!("{}/models", stripped));
             candidate_urls.push(format!("{}/models", clean_base));
         }
-    } else {
-        candidate_urls.push(format!("{}/models", clean_base));
-        if !clean_base.ends_with("/v1") {
-            candidate_urls.push(format!("{}/v1/models", clean_base));
+
+        if is_google_gemini {
+            if clean_base.ends_with("/v1beta") || clean_base.ends_with("/v1") {
+                candidate_urls.push(format!("{}/models", clean_base));
+            } else {
+                candidate_urls.push(format!("{}/v1beta/models", clean_base));
+                candidate_urls.push(format!("{}/v1/models", clean_base));
+                candidate_urls.push(format!("{}/models", clean_base));
+            }
+            if api_key.starts_with("AIza") {
+                candidate_urls.push("https://generativelanguage.googleapis.com/v1beta/models".to_string());
+            }
+        } else {
+            candidate_urls.push(format!("{}/models", clean_base));
+            if !clean_base.ends_with("/v1") {
+                candidate_urls.push(format!("{}/v1/models", clean_base));
+            }
         }
     }
 
@@ -88,17 +99,16 @@ pub async fn cmd_fetch_llm_models(
 
         let mut req = client.get(&final_url);
 
-        // IMPORTANT CRITICAL FIX:
-        // DO NOT send Authorization: Bearer header for Gemini/Google API keys (starting with AIza)!
-        // Google AI Studio treats Bearer headers as OAuth 2 tokens and returns 401 Unauthorized!
+        // 注入鉴权请求头：原生 Google API 使用 x-goog-api-key；Cloudflare / OpenAI 代理同时附带 Bearer
         if !api_key.is_empty() {
-            if is_google_gemini {
+            if is_google_gemini && !clean_base.contains("openai") && !clean_base.contains("cloudflare") {
                 req = req
                     .header("x-goog-api-key", &api_key)
                     .header("api-key", &api_key);
             } else {
                 req = req
                     .header("Authorization", format!("Bearer {}", api_key))
+                    .header("x-goog-api-key", &api_key)
                     .header("api-key", &api_key);
             }
         }
@@ -212,10 +222,11 @@ pub struct ChatMessagePayload {
     pub content: String,
 }
 
-/// 流式增量事件：done=false 携带一段增量文本；done=true 表示流结束（delta 为空）。
+/// 流式增量事件：done=false 携带一段增量文本与思考思路增量；done=true 表示流结束。
 #[derive(Clone, Serialize)]
 pub struct ChatStreamDelta {
     pub delta: String,
+    pub reasoning: Option<String>,
     pub done: bool,
 }
 
@@ -417,47 +428,52 @@ fn build_chat_body(
             })
             .collect();
         serde_json::json!({ "contents": contents })
-    } else if stream {
-        serde_json::json!({
-            "model": plan.model_name,
-            "messages": messages,
-            "temperature": 0.5,
-            "max_tokens": 2000,
-            "stream": true,
-        })
     } else {
-        serde_json::json!({
+        let mut b = serde_json::json!({
             "model": plan.model_name,
             "messages": messages,
             "temperature": 0.5,
-            "max_tokens": 2000,
-        })
+            "max_tokens": 4096,
+        });
+        if stream {
+            b["stream"] = serde_json::json!(true);
+        }
+        b
     }
 }
 
 /// 从完整 JSON 响应中提取回复文本（OpenAI / Gemini / Ollama 三种格式）
 fn extract_chat_reply(json: &serde_json::Value) -> Option<String> {
-    if let Some(content) = json
+    let first_choice = json
         .get("choices")
         .and_then(|c| c.as_array())
-        .and_then(|arr| arr.get(0))
-        .and_then(|first| first.get("message"))
-        .and_then(|msg| msg.get("content"))
-        .and_then(|val| val.as_str())
-    {
-        if !content.trim().is_empty() {
+        .and_then(|arr| arr.first());
+
+    if let Some(msg) = first_choice.and_then(|first| first.get("message")) {
+        let content = msg.get("content").and_then(|val| val.as_str()).unwrap_or("").trim();
+        let reasoning = msg.get("reasoning_content")
+            .or_else(|| msg.get("reasoning"))
+            .and_then(|val| val.as_str())
+            .unwrap_or("")
+            .trim();
+
+        if !reasoning.is_empty() && !content.is_empty() {
+            return Some(format!("<think>\n{}\n</think>\n\n{}", reasoning, content));
+        } else if !content.is_empty() {
             return Some(content.to_string());
+        } else if !reasoning.is_empty() {
+            return Some(format!("<think>\n{}\n</think>", reasoning));
         }
     }
 
     if let Some(text) = json
         .get("candidates")
         .and_then(|c| c.as_array())
-        .and_then(|arr| arr.get(0))
+        .and_then(|arr| arr.first())
         .and_then(|first| first.get("content"))
         .and_then(|cnt| cnt.get("parts"))
         .and_then(|parts| parts.as_array())
-        .and_then(|arr| arr.get(0))
+        .and_then(|arr| arr.first())
         .and_then(|part| part.get("text"))
         .and_then(|val| val.as_str())
     {
@@ -484,7 +500,7 @@ pub async fn cmd_chat_llm(
 ) -> Result<String, String> {
     let plan = plan_chat_endpoints(&config)?;
 
-    let client = crate::translator::create_http_client(35000);
+    let client = crate::translator::create_http_client(65000);
 
     let mut last_err = String::new();
 
@@ -562,7 +578,7 @@ pub async fn cmd_chat_llm_stream(
 
     let plan = plan_chat_endpoints(&config)?;
 
-    let client = crate::translator::create_http_client(35000);
+    let client = crate::translator::create_http_client(65000);
 
     let mut last_err = String::new();
 
@@ -611,6 +627,7 @@ pub async fn cmd_chat_llm_stream(
             let mut stream = res.bytes_stream();
             let mut buf = String::new();
             let mut full = String::new();
+            let mut full_reasoning = String::new();
             let mut stream_err: Option<String> = None;
 
             while let Some(chunk) = stream.next().await {
@@ -624,48 +641,65 @@ pub async fn cmd_chat_llm_stream(
                 buf.push_str(&String::from_utf8_lossy(&chunk));
 
                 // 逐行解析 SSE：`data: {json}`，`data: [DONE]` 结束
-                loop {
-                    match buf.find('\n') {
-                        Some(pos) => {
-                            let line: String = buf.drain(..=pos).collect();
-                            let line = line.trim_end();
-                            let Some(data) = line.strip_prefix("data:") else {
-                                continue;
-                            };
-                            let data = data.trim();
-                            if data.is_empty() || data == "[DONE]" {
-                                continue;
-                            }
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(d) = v
-                                    .get("choices")
-                                    .and_then(|c| c.as_array())
-                                    .and_then(|arr| arr.get(0))
-                                    .and_then(|first| first.get("delta"))
-                                    .and_then(|delta| delta.get("content"))
+                while let Some(pos) = buf.find('\n') {
+                    let line: String = buf.drain(..=pos).collect();
+                    let line = line.trim_end();
+                    let Some(data) = line.strip_prefix("data:") else {
+                        continue;
+                    };
+                    let data = data.trim();
+                    if data.is_empty() || data == "[DONE]" {
+                        continue;
+                    }
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                        let delta_obj = v
+                            .get("choices")
+                            .and_then(|c| c.as_array())
+                            .and_then(|arr| arr.first())
+                            .and_then(|first| first.get("delta"));
+
+                        let content_opt = delta_obj
+                            .and_then(|delta| delta.get("content").and_then(|c| c.as_str()))
+                            .filter(|s| !s.is_empty());
+
+                        let reasoning_opt = delta_obj
+                            .and_then(|delta| {
+                                delta.get("reasoning_content")
+                                    .or_else(|| delta.get("reasoning"))
                                     .and_then(|c| c.as_str())
-                                {
-                                    if !d.is_empty() {
-                                        let _ = on_delta.send(ChatStreamDelta {
-                                            delta: d.to_string(),
-                                            done: false,
-                                        });
-                                        full.push_str(d);
-                                    }
-                                }
+                            })
+                            .filter(|s| !s.is_empty());
+
+                        if content_opt.is_some() || reasoning_opt.is_some() {
+                            let _ = on_delta.send(ChatStreamDelta {
+                                delta: content_opt.unwrap_or("").to_string(),
+                                reasoning: reasoning_opt.map(|s| s.to_string()),
+                                done: false,
+                            });
+                            if let Some(c) = content_opt {
+                                full.push_str(c);
+                            }
+                            if let Some(r) = reasoning_opt {
+                                full_reasoning.push_str(r);
                             }
                         }
-                        None => break,
                     }
                 }
             }
 
-            if !full.trim().is_empty() {
+            if !full.trim().is_empty() || !full_reasoning.trim().is_empty() {
                 let _ = on_delta.send(ChatStreamDelta {
                     delta: String::new(),
+                    reasoning: None,
                     done: true,
                 });
-                return Ok(full);
+                if !full_reasoning.trim().is_empty() && !full.trim().is_empty() {
+                    return Ok(format!("<think>\n{}\n</think>\n\n{}", full_reasoning.trim(), full));
+                } else if !full.trim().is_empty() {
+                    return Ok(full);
+                } else {
+                    return Ok(format!("<think>\n{}\n</think>", full_reasoning.trim()));
+                }
             }
             last_err = stream_err
                 .unwrap_or_else(|| "流式响应结束但未产出文本".to_string());
@@ -688,10 +722,12 @@ pub async fn cmd_chat_llm_stream(
         if let Some(content) = extract_chat_reply(&json) {
             let _ = on_delta.send(ChatStreamDelta {
                 delta: content.clone(),
+                reasoning: None,
                 done: false,
             });
             let _ = on_delta.send(ChatStreamDelta {
                 delta: String::new(),
+                reasoning: None,
                 done: true,
             });
             return Ok(content);

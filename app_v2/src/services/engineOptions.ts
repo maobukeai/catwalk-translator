@@ -27,6 +27,7 @@ export interface CaptureEngineChoices {
 
 /** LLM 通道是否已可直接调用：填写了 API Key，或指向本机服务（Ollama 等免 Key）。 */
 export function isLlmChannelReady(cfg: LlmConfig): boolean {
+  if (cfg.enabled === false) return false;
   return (
     !!cfg.apiKey?.trim() ||
     !!cfg.endpoint?.includes('localhost') ||
@@ -48,10 +49,9 @@ const ONLINE_ENGINE_META: Array<{ key: keyof OnlineEngines; label: string; defau
   { key: 'baidu', label: '🐯 百度通用翻译', defaultOn: false },
   { key: 'tencent', label: '🐧 腾讯交互翻译', defaultOn: false },
   { key: 'caiyun', label: '🌈 彩云小译 (地道文学意译)', defaultOn: false },
-  { key: 'papago', label: '🦜 Naver Papago (日韩顶流)', defaultOn: false },
   { key: 'urban', label: '🧢 Urban 俚语黑话 (欧美流行梗)', defaultOn: false },
-  { key: 'volcengine', label: '🌋 字节跳动火山翻译 (抖音同款)', defaultOn: false },
-  { key: 'yandex', label: '🇷🇺 Yandex Translate (俄语东欧)', defaultOn: false },
+  { key: 'volcengine', label: '🌋 字节跳动火山翻译 (官方 API)', defaultOn: false },
+  { key: 'yandex', label: '🇷🇺 Yandex Translate (官方 API)', defaultOn: false },
   { key: 'lingva', label: '🕊️ Lingva (免翻 Google 镜像)', defaultOn: false },
   { key: 'myMemory', label: '📚 MyMemory 记忆库', defaultOn: false },
 ];
@@ -69,19 +69,27 @@ const PRESET_DICT_META: Array<{ key: keyof PresetDicts; label: string }> = [
  * 从设置动态构建全部可选通道：
  * - AI 组：严格仅展示用户已填写 Key 或已配置就绪的可用模型，杜绝未配置假条目；
  * - 在线引擎组：严格仅展示用户在「在线引擎」设置中开启的引擎；
- * - 词库组：严格仅展示用户在「专业词库」设置中开启的 3D 词库。
+ * - 词库组：专业词库在智能并发流程中自动优先匹配，默认不作为单独翻译通道罗列；
+ *   仅当显式指定 includeDicts: true 时才展示。
  */
-export function buildCaptureEngineChoices(settings: AppSettings | undefined): CaptureEngineChoices {
+export function buildCaptureEngineChoices(
+  settings: AppSettings | undefined,
+  options?: { includeDicts?: boolean }
+): CaptureEngineChoices {
   const groups: EngineOptionGroup[] = [];
 
-  // 1. AI 大模型组（只展示用户真正配置就绪的模型）
-  const readyLlmConfigs = (settings?.llmConfigs || []).filter(isLlmChannelReady);
+  // 1. AI 大模型组（严格展示用户真正配置就绪的模型，多模型池与单模型配置自动合并）
+  const pool = (settings?.llmConfigs && settings.llmConfigs.length > 0)
+    ? settings.llmConfigs
+    : (settings?.llmConfig ? [settings.llmConfig] : []);
+  const readyLlmConfigs = pool.filter(isLlmChannelReady);
   if (readyLlmConfigs.length > 0) {
     const llmOptions: EngineOption[] = readyLlmConfigs.map((cfg) => {
       const id = cfg.id || cfg.model || cfg.provider;
+      const modelName = cfg.model && cfg.model !== 'custom-model' ? cfg.model : (cfg.provider || '默认模型');
       return {
         value: `llm:${id}`,
-        label: `🤖 ${cfg.provider} (${cfg.model || '默认模型'})`,
+        label: `🤖 ${cfg.provider} (${modelName})`,
       };
     });
     groups.push({ key: 'llm', label: 'AI 大语言模型 (已配置可用)', options: llmOptions });
@@ -99,7 +107,36 @@ export function buildCaptureEngineChoices(settings: AppSettings | undefined): Ca
     groups.push({ key: 'online', label: '通用在线翻译通道 (已开启)', options: onlineOptions });
   }
 
+  // 3. 3D/CG 专业词库与离线词典（专业词库已在智能队列默认命中，仅在明确开启 includeDicts 时展示）
+  if (options?.includeDicts) {
+    const dictOptions: EngineOption[] = PRESET_DICT_META.filter((m) => {
+      if (settings?.presetDicts && typeof settings.presetDicts[m.key] === 'boolean') {
+        return settings.presetDicts[m.key];
+      }
+      return true;
+    }).map((m) => ({ value: m.key as string, label: m.label }));
+
+    dictOptions.push({ value: 'general', label: '📖 ECDICT 通用离线词典' });
+
+    if (dictOptions.length > 0) {
+      groups.push({ key: 'dict', label: '3D/CG 专业词库与离线词典', options: dictOptions });
+    }
+  }
+
   return { auto: AUTO_OPTION, groups };
+}
+
+/**
+ * 图片翻译专用通道列表：
+ * 严格仅展示用户已就绪的 AI 大模型池与已开启的在线翻译引擎，
+ * 绝不包含 3D 词库与离线词典（词库适用于单词查词，不适用于整句整段图片翻译）。
+ */
+export function buildImageTranslateEngineChoices(settings: AppSettings | undefined): CaptureEngineChoices {
+  const choices = buildCaptureEngineChoices(settings, { includeDicts: false });
+  return {
+    ...choices,
+    groups: choices.groups.filter((g) => g.key !== 'dict'),
+  };
 }
 
 /** 展开为扁平列表：Tab / Shift+Tab 轮播顺序与下拉展示保持一致。 */

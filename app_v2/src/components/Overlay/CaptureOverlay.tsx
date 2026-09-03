@@ -21,6 +21,7 @@ import {
   cmdSaveRegionImage,
   cmdHoverLookup,
   cmdTranslatePhrasesStyled,
+  cmdLlmBatchRefine,
   cmdUniversalTranslate,
   cmdSnapRegion,
   cmdSaveCaptureSession,
@@ -29,7 +30,7 @@ import {
   isTauri,
 } from '../../services/tauri';
 import { matchesHotkey } from '../../services/hotkeys';
-import { speakText } from "../../services/tts";
+import { speakText, stopSpeech } from "../../services/tts";
 import { resolveAABBCollisions } from '../../services/overlayLayout';
 import { detectSpeechLang } from '../../services/langDetect';
 import { buildCaptureEngineChoices, flattenCaptureEngineChoices } from '../../services/engineOptions';
@@ -208,6 +209,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   // ── OCR 提取文本浮窗状态 ────────────────────────────────────────────────
   const [ocrModalText, setOcrModalText] = useState<string | null>(null);
 
+  // ── 快慢双流渐进精翻状态 (Stage-3 AI 异步润色中) ──────────────────────────
+  const [isAiRefining, setIsAiRefining] = useState(false);
+
   // ── Shift+drag multi-select: additional rects queued up, Enter processes all.
   const [pendingRects, setPendingRects] = useState<SelRect[]>([]);
 
@@ -373,6 +377,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           llmConfig: ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k))
             ? settings.llmConfig
             : null,
+          llmConfigs: settings.llmConfigs,
           presetDicts: settings.presetDicts,
           onlineEngines: settings.onlineEngines,
           translationTiers: settings.translationTiers,
@@ -494,6 +499,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     init();
 
     return () => {
+      stopSpeech();
       if (isTauri()) cmdCloseOverlay().catch(console.warn);
     };
   }, [isOpen, openInHoverMode]);
@@ -672,6 +678,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
       if (e.key === 'Escape') {
         e.preventDefault();
+        stopSpeech();
         // Adjust mode: the first Esc only discards the frozen rect
         if (phase === 'adjusting') {
           setAdjustRect(null);
@@ -1133,10 +1140,16 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       if (misses.length === 0) {
         translations = phrases.map((_, i) => memoHits.get(i)!);
       } else {
+        // 快通道（Stage-2）：渐进精翻模式或自动模式下绝不阻塞等待大模型，传 null 确保只走本地词库 + 在线引擎并发大竞速（150ms 秒级上屏！）
+        const isProgressive =
+          settings.enableLlmProgressiveRefine !== false &&
+          (selectedEngine === 'auto' || !selectedEngine.startsWith('llm'));
+        const fastLlmConfig = isProgressive ? null : llmConfig;
+
         const fetched = await cmdTranslatePhrasesStyled(
           misses.map((i) => phrases[i]),
           preset,
-          llmConfig,
+          fastLlmConfig,
           style,
         );
         if (stale()) return;
@@ -1168,8 +1181,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : prev));
       setTranslatingProgress({ done: translatedCount, total: layout.blocks.length });
 
-      // Non-Chinese target or selected specific engine: progressively re-translate each card in place
-      if ((targetLang !== 'zh-CN' || (selectedEngine && selectedEngine !== 'auto')) && translations.length > 0) {
+      // Non-Chinese target (e.g. ja/en/ko): progressively re-translate each card in place
+      if (targetLang !== 'zh-CN' && translations.length > 0) {
         let done = 0;
         await Promise.all(
           updatedBlocks.map(async (block, i) => {
@@ -1231,6 +1244,132 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           engine: selectedEngine,
           blocks: updatedBlocks,
         }).catch((e) => console.warn('Capture session save failed:', e));
+      }
+
+      // ── Stage-3: 快慢双流渐进增强 (Speculative Progressive Translation) ──
+      // 在线引擎并发大竞速首版译文已 150ms 秒级上屏呈现。
+      // 若用户配置了可用的大模型，且开启了渐进精翻开关，后台异步发起大模型深度精翻，
+      // 推导完成后平滑无缝替换对应卡片，并标记 [Model AI 精翻 ✨]。
+      const candidateLlms: typeof settings.llmConfigs = [];
+      if (
+        llmConfig &&
+        llmConfig.endpoint &&
+        (llmConfig.apiKey || llmConfig.endpoint.includes('localhost') || llmConfig.endpoint.includes('127.0.0.1')) &&
+        llmConfig.enabled !== false
+      ) {
+        candidateLlms.push(llmConfig);
+      }
+      (settings.llmConfigs || []).forEach((cfg) => {
+        if (
+          cfg.endpoint &&
+          (cfg.apiKey || cfg.endpoint.includes('localhost') || cfg.endpoint.includes('127.0.0.1')) &&
+          cfg.enabled !== false &&
+          !candidateLlms.some((c) => c.id === cfg.id || (c.endpoint === cfg.endpoint && c.model === cfg.model))
+        ) {
+          candidateLlms.push(cfg);
+        }
+      });
+
+      const enableProgressive = settings.enableLlmProgressiveRefine !== false;
+      const isAutoOrOnline = selectedEngine === 'auto' || !selectedEngine.startsWith('llm');
+
+      if (enableProgressive && candidateLlms.length > 0 && isAutoOrOnline && !isWatch && targetLang === 'zh-CN') {
+        const refineCandidates: { index: number; phrase: string }[] = [];
+        updatedBlocks.forEach((block, idx) => {
+          const orig = block.original.trim();
+          const tier = block.sourceTier || '';
+          if (
+            orig.length >= 2 &&
+            !tier.includes('custom_dict') &&
+            !tier.includes('标识符透传') &&
+            !tier.includes('LLM') &&
+            !tier.includes('离线词库') &&
+            !/^\d+([.,]\d+)?%?$/.test(orig)
+          ) {
+            refineCandidates.push({ index: idx, phrase: orig });
+          }
+        });
+
+        if (refineCandidates.length > 0) {
+          (async () => {
+            try {
+              setIsAiRefining(true);
+              const phrasesToRefine = refineCandidates.map((c) => c.phrase);
+              let resultMap: Record<string, string> = {};
+              let usedLlm: (typeof candidateLlms)[0] | null = null;
+              let lastErr: any = null;
+
+              // 逐个尝试候选模型，首选失败自动轮转备用模型（如商汤欠费自动无缝切到 Gemini）
+              for (const currentLlm of candidateLlms) {
+                try {
+                  const map = await cmdLlmBatchRefine(phrasesToRefine, currentLlm, style);
+                  if (map && Object.keys(map).length > 0) {
+                    resultMap = map;
+                    usedLlm = currentLlm;
+                    break;
+                  }
+                } catch (e) {
+                  lastErr = e;
+                  console.warn(`[CaptureOverlay] LLM ${currentLlm.model || currentLlm.provider} failed:`, e);
+                }
+              }
+
+              if (stale()) return;
+
+              if (!usedLlm) {
+                if (lastErr) {
+                  const errMsg = String(lastErr);
+                  if (errMsg.includes('429') || errMsg.includes('quota')) {
+                    showFeedback('⚠️ AI 精翻跳过：大模型额度已用尽 (429)');
+                  }
+                }
+                return;
+              }
+
+              let refinedAny = false;
+              let latestBlocks: OverlayBlock[] = [];
+              setOverlayResult((prev) => {
+                if (!prev) return prev;
+                const nextBlocks = [...prev.blocks];
+                refineCandidates.forEach(({ index, phrase }) => {
+                  const aiText = resultMap[phrase] || resultMap[phrase.toLowerCase()];
+                  if (aiText && aiText.trim() && aiText.trim() !== nextBlocks[index].original) {
+                    refinedAny = true;
+                    const modelName = usedLlm!.model || usedLlm!.provider || 'AI';
+                    nextBlocks[index] = {
+                      ...nextBlocks[index],
+                      translated: aiText.trim(),
+                      sourceTier: `${modelName} AI 精翻 ✨`,
+                    };
+                  }
+                });
+                latestBlocks = nextBlocks;
+                return refinedAny ? { ...prev, blocks: nextBlocks } : prev;
+              });
+
+              if (refinedAny && !stale()) {
+                showFeedback(`✨ ${usedLlm.model || usedLlm.provider || 'AI'} 深度精翻已就绪`);
+                // 异步更新持久化的历史记录与回放会话
+                latestBlocks.forEach((b) => {
+                  if (b.sourceTier && b.sourceTier.includes('✨')) {
+                    saveTranslationHistory(b.original, b.translated, b.sourceTier).catch(console.warn);
+                  }
+                });
+                cmdSaveCaptureSession({
+                  id: `sess_${Date.now()}`,
+                  timestamp: new Date().toLocaleString(),
+                  targetLang,
+                  engine: `${usedLlm.model || usedLlm.provider || 'AI'} (Progressive Refined)`,
+                  blocks: latestBlocks,
+                }).catch(console.warn);
+              }
+            } catch (refineErr) {
+              console.warn('[CaptureOverlay] Progressive LLM refinement error:', refineErr);
+            } finally {
+              if (!stale()) setIsAiRefining(false);
+            }
+          })();
+        }
       }
     } catch (err) {
       console.warn('[CaptureOverlay] Stage-2 translation failed, keeping OCR text:', err);
@@ -1361,14 +1500,40 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
   const handleSpeechActive = useCallback(() => {
     if (!overlayResult || overlayResult.blocks.length === 0) return;
-    const activeIdx = activeBlockIdx !== null && activeBlockIdx < overlayResult.blocks.length ? activeBlockIdx : 0;
-    const targetBlock = overlayResult.blocks[activeIdx];
-    if (!targetBlock) return;
-    speakText(targetBlock.original, { lang: detectSpeechLang(targetBlock.original) });
-    showFeedback(`🔊 正在朗读第 ${activeIdx + 1} 段原文...`);
+
+    // 若当前通过鼠标或键盘显式激活了某张卡片，优先朗读该卡片原文
+    if (activeBlockIdx !== null && activeBlockIdx < overlayResult.blocks.length) {
+      const targetBlock = overlayResult.blocks[activeBlockIdx];
+      if (targetBlock && targetBlock.original) {
+        const text = targetBlock.original.trim();
+        if (text) {
+          speakText(text, { lang: detectSpeechLang(text) });
+          showFeedback(`🔊 正在朗读第 ${activeBlockIdx + 1} 段原文...`);
+          return;
+        }
+      }
+    }
+
+    // 若无特定激活卡片，默认全文连续朗读整个选区内所有段落原文
+    const textPieces = overlayResult.blocks
+      .map((b) => b.original.trim())
+      .filter(Boolean);
+
+    if (textPieces.length === 0) return;
+
+    const fullText = textPieces.join('\n');
+    const firstPiece = textPieces[0];
+    speakText(fullText, { lang: detectSpeechLang(firstPiece) });
+
+    if (textPieces.length > 1) {
+      showFeedback(`🔊 正在全文连续朗读 (共 ${textPieces.length} 段)...`);
+    } else {
+      showFeedback(`🔊 正在朗读原文...`);
+    }
   }, [overlayResult, activeBlockIdx]);
 
   const processSelection = useCallback(async (selection: { x: number; y: number; width: number; height: number }) => {
+    stopSpeech();
     // 记忆本次选区，供 R 键快速重划、监控模式复用与跨重启持久化
     rememberLastSelection(selection);
     // Cancel guard: bumping the epoch invalidates any in-flight recognition
@@ -1752,6 +1917,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   }, [isPinned]);
 
   const handleClose = async (force: boolean = false) => {
+    stopSpeech();
     if (isPinned && !force) {
       return;
     }
@@ -1871,7 +2037,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   return (
     <div
       ref={containerRef}
-      className="fixed inset-0 z-[100] overflow-hidden select-none"
+      className="fixed inset-0 z-[100] overflow-hidden select-none border-none outline-none"
       style={{
         cursor: adjustHandle
           ? HANDLE_CURSOR[adjustHandle] || 'move'
@@ -1890,12 +2056,14 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
     >
+      {/* 屏幕朗读器无障碍引导 / DOM就绪标识 */}
+      <span className="sr-only">猫步划词</span>
       {/* ── 选区阶段全屏遮罩（聚光灯模式：选框内部完全透亮，全屏遮罩 100% 均匀无十字阴影重叠） ── */}
       {(phase === 'selecting' || phase === 'adjusting' || phase === 'processing' || isDragging) && (
         <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-hidden z-[101]">
           <defs>
             <mask id="spotlight-selection-mask">
-              <rect x="0" y="0" width="100%" height="100%" fill="white" />
+              <rect x="-20" y="-20" width="120%" height="120%" fill="white" />
               {activeBox && activeBox.w > 4 && (
                 <rect
                   x={activeBox.x}
@@ -1911,10 +2079,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             </mask>
           </defs>
           <rect
-            x="0"
-            y="0"
-            width="100%"
-            height="100%"
+            x="-20"
+            y="-20"
+            width="120%"
+            height="120%"
             fill={maskOpacity}
             mask="url(#spotlight-selection-mask)"
           />
@@ -2127,10 +2295,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         </svg>
       )}
 
-      {/* ── 统一现代白底微阴影悬浮工具条 (SnippingToolbar: selecting/hovering/adjusting/overlay 全流程统一承载) ── */}
-      {(phase === 'selecting' || phase === 'hovering' || phase === 'adjusting' || phase === 'overlay') && (
+      {/* ── 现代选区悬浮工具条 (SnippingToolbar: 仅在已划定选区 adjusting/overlay 时在选区下方贴附展示，不再常驻屏幕顶部) ── */}
+      {(phase === 'adjusting' || phase === 'overlay') && effectiveRect && (
         <SnippingToolbar
-          testId={phase === 'selecting' || phase === 'hovering' ? 'snipping-top-bar' : 'adjust-confirm-bar'}
+          testId="adjust-confirm-bar"
           activeTool={activeTool}
           onSelectTool={setActiveTool}
           selectedColor={annotationColor}
@@ -2209,25 +2377,21 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           fontScale={globalFontScale}
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
-          style={
-            (phase === 'adjusting' || phase === 'overlay') && effectiveRect
-              ? {
-                  position: 'absolute',
-                  zIndex: 220,
-                  left: Math.max(10, Math.min(effectiveRect.x + effectiveRect.width / 2 - 250, Math.max(10, vw - 520))),
-                  top:
-                    effectiveRect.y + effectiveRect.height + 10 + 46 > vh - 10
-                      ? Math.max(10, effectiveRect.y - 52)
-                      : effectiveRect.y + effectiveRect.height + 10,
-                }
-              : {
-                  position: 'fixed',
-                  zIndex: 230,
-                  top: '20px',
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                }
-          }
+          style={{
+            position: 'absolute',
+            zIndex: 220,
+            left: Math.max(
+              12,
+              Math.min(
+                effectiveRect.x + (effectiveRect.width - 1040) / 2,
+                Math.max(12, vw - 1040 - 16)
+              )
+            ),
+            top:
+              effectiveRect.y + effectiveRect.height + 10 + 46 > vh - 10
+                ? Math.max(10, effectiveRect.y - 52)
+                : effectiveRect.y + effectiveRect.height + 10,
+          }}
         />
       )}
 
@@ -2510,6 +2674,25 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         </div>
       )}
 
+      {/* ── Stage-3 progressive AI refinement chip ────────────────────────────── */}
+      {phase === 'overlay' && isAiRefining && !translatingProgress && (
+        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[240] pointer-events-none animate-fade-in">
+          <div className={`flex items-center gap-2 rounded-full border px-4 py-1.5 shadow-xl backdrop-blur-xl ${
+            isLight
+              ? 'border-indigo-400/40 bg-white/80 text-indigo-700 shadow-indigo-500/10 ring-1 ring-black/5'
+              : 'border-indigo-400/30 bg-slate-900/80 text-indigo-200 shadow-black/40 ring-1 ring-white/10'
+          }`}>
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-400" />
+            </span>
+            <span className="text-xs font-bold font-mono">
+              ⚡ 极速机翻已就绪 · AI 正在深度润色精翻...
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* ── Feedback Toast (Copy / Pin / Voice actions) ────────────────────────── */}
       {feedbackToast && (
         <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[250] pointer-events-none animate-fade-in">
@@ -2550,9 +2733,12 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       {/* ── Card context menu（卡片右键：复制/朗读/收藏/隐藏，不再误关整场） ────── */}
       {cardMenu && overlayResult && overlayResult.blocks[cardMenu.blockIndex] && (
         <div
-          className="overlay-card-menu absolute z-[260] rounded-xl border border-white/15 bg-slate-900/95 backdrop-blur-xl shadow-2xl py-1 min-w-[150px] pointer-events-auto"
+          className="overlay-card-menu absolute z-[260] rounded-xl border border-white/15 bg-slate-900/95 backdrop-blur-xl shadow-2xl py-1.5 w-48 min-w-[180px] max-w-[200px] pointer-events-auto overflow-hidden animate-fade-in"
           data-testid="card-context-menu"
-          style={{ left: Math.min(cardMenu.x, vw - 175), top: Math.min(cardMenu.y, vh - 210) }}
+          style={{
+            left: Math.max(10, Math.min(cardMenu.x, vw - 200)),
+            top: Math.max(10, Math.min(cardMenu.y, vh - 320)),
+          }}
           onMouseDown={(e) => e.stopPropagation()}
           onDoubleClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
@@ -2618,7 +2804,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                   item.run();
                   setCardMenu(null);
                 }}
-                className="w-full text-left px-3.5 py-1.5 text-xs font-medium text-zinc-200 hover:bg-sky-500/20 hover:text-white transition cursor-pointer"
+                className="w-full text-left px-3.5 py-1.5 text-xs font-medium text-zinc-200 hover:bg-sky-500/20 hover:text-white transition cursor-pointer flex items-center gap-2 whitespace-nowrap"
               >
                 {item.label}
               </button>
@@ -2659,6 +2845,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           onScaleChange={(s) => setCardScales((prev) => ({ ...prev, [block.__i]: s }))}
           onViewCycle={cycleCardView}
           onActive={() => setActiveBlockIdx(block.__i)}
+          onInactive={() => setActiveBlockIdx((prev) => (prev === block.__i ? null : prev))}
           isActive={activeBlockIdx === block.__i}
           onRenderedSize={handleRenderedSize}
         />

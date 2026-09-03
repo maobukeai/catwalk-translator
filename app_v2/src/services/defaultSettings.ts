@@ -112,7 +112,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     tencent: false,
     lingva: false,
     caiyun: false,
-    papago: false,
     urban: false,
     volcengine: false,
     yandex: false,
@@ -138,4 +137,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ocrVersion: 'v6t' as 'v3' | 'v4' | 'v5' | 'v6' | 'v6t',
   closeAction: 'ask',
   miniWindowCloseAction: 'hide',
+  enableLlmProgressiveRefine: true,
+  autoFavoriteQualityTerms: true,
 };

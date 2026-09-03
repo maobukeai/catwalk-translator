@@ -236,6 +236,30 @@ pub async fn cmd_translate_phrases_styled(
     Ok(results)
 }
 
+/// 专属大模型批量精翻接口（供截图翻译渐进增强快慢双流使用）
+#[tauri::command]
+pub async fn cmd_llm_batch_refine(
+    state: State<'_, AppState>,
+    phrases: Vec<String>,
+    config: LlmConfig,
+    style: Option<String>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    if phrases.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let pipeline = crate::translator::shared_pipeline();
+    let glossary = state
+        .settings
+        .lock()
+        .ok()
+        .map(|s| crate::translator::glossary_from_settings(&s.custom_dict_items))
+        .unwrap_or_default();
+
+    pipeline
+        .translate_via_llm_with_style(&phrases, &config, style.as_deref(), &glossary)
+        .await
+}
+
 
 /// Decide whether native DWM Acrylic should be ON for the main window.
 /// The user's frosted-glass toggle is the single source of truth — any theme
@@ -475,5 +499,103 @@ pub fn cmd_hide_main_window(app: tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
     }
+}
+
+#[tauri::command]
+pub async fn cmd_fetch_tts_audio(
+    text: String,
+    lang: Option<String>,
+    rate: Option<f32>,
+) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("Empty text".to_string());
+    }
+
+    let raw_lang = lang.unwrap_or_else(|| "en-US".to_string()).to_lowercase();
+    let baidu_lang = if raw_lang.starts_with("zh") {
+        "zh"
+    } else if raw_lang.starts_with("ja") || raw_lang.starts_with("jp") {
+        "jp"
+    } else if raw_lang.starts_with("ko") {
+        "kor"
+    } else if raw_lang.starts_with("fr") {
+        "fra"
+    } else if raw_lang.starts_with("de") {
+        "de"
+    } else if raw_lang.starts_with("ru") {
+        "ru"
+    } else if raw_lang.starts_with("es") {
+        "spa"
+    } else {
+        "en"
+    };
+
+    let spd = match rate {
+        Some(r) if r <= 0.7 => "3",
+        Some(r) if r >= 1.5 => "7",
+        Some(r) if r >= 1.2 => "6",
+        _ => "5",
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let encoded_text = crate::translator::urlencoding_encode(trimmed);
+
+    // 优先 1：官方高保真真人发音通道 (毫秒级直连，播音级自然人声)
+    let url = format!(
+        "https://fanyi.baidu.com/gettts?lan={}&text={}&spd={}&source=web",
+        baidu_lang,
+        encoded_text,
+        spd
+    );
+
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+        .header("Referer", "https://fanyi.baidu.com/")
+        .send()
+        .await;
+
+    if let Ok(r) = resp {
+        if r.status().is_success() {
+            if let Ok(bytes) = r.bytes().await {
+                if bytes.len() > 100 {
+                    use base64::Engine;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    return Ok(format!("data:audio/mp3;base64,{}", b64));
+                }
+            }
+        }
+    }
+
+    // 优先 2：如果是英语，回退到有道词典高保真真人原声
+    if baidu_lang == "en" {
+        let yd_url = format!(
+            "https://dict.youdao.com/dictvoice?audio={}&type=2",
+            encoded_text
+        );
+        if let Ok(r) = client
+            .get(&yd_url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .send()
+            .await
+        {
+            if r.status().is_success() {
+                if let Ok(bytes) = r.bytes().await {
+                    if bytes.len() > 100 {
+                        use base64::Engine;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        return Ok(format!("data:audio/mp3;base64,{}", b64));
+                    }
+                }
+            }
+        }
+    }
+
+    Err("TTS service unavailable".to_string())
 }
 

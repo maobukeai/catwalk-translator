@@ -101,8 +101,8 @@ impl ColorSampler {
         let pixels = &full_bmp[HEADER..];
         let px = bbox.x.max(0) as u32;
         let py = bbox.y.max(0) as u32;
-        let pw = (bbox.width as u32).min(full_w.saturating_sub(px)).max(1);
-        let ph = (bbox.height as u32).min(full_h.saturating_sub(py)).max(1);
+        let pw = bbox.width.min(full_w.saturating_sub(px)).max(1);
+        let ph = bbox.height.min(full_h.saturating_sub(py)).max(1);
         let border = border_px.min(pw / 2).min(ph / 2).max(1);
 
         let mut r_vals: Vec<u8> = Vec::new();

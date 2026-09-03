@@ -59,6 +59,7 @@ fn test_serde_camel_case_llm_config() {
         api_key: "sk-123456".to_string(),
         model: "deepseek-chat".to_string(),
         endpoint: "https://api.deepseek.com/v1".to_string(),
+        enabled: Some(true),
     };
 
     let json = serde_json::to_string(&config).unwrap();

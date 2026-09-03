@@ -332,6 +332,7 @@ mod category_3_network_api_failure_fallbacks {
                 api_key: "sk-fake-key".to_string(),
                 model: "deepseek-chat".to_string(),
                 endpoint: "http://10.255.255.1:81/v1".to_string(),
+                enabled: Some(true),
             };
 
             let phrases = vec!["Principled BSDF".to_string()];
@@ -359,6 +360,7 @@ mod category_3_network_api_failure_fallbacks {
                 api_key: "sk-fake".to_string(),
                 model: "test-model".to_string(),
                 endpoint: "http://127.0.0.1:9999/v1".to_string(),
+                enabled: Some(true),
             };
 
             let err = pipeline
@@ -425,6 +427,7 @@ mod category_3_network_api_failure_fallbacks {
                 api_key: "sk-broken".to_string(),
                 model: "broken".to_string(),
                 endpoint: "http://localhost:1".to_string(),
+                enabled: Some(true),
             };
 
             let phrases = vec![

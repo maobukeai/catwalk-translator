@@ -59,6 +59,12 @@ pub enum SelectionEvent {
     DoubleClick,
 }
 
+impl Default for SelectionTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SelectionTracker {
     pub fn new() -> Self {
         Self {
@@ -104,6 +110,12 @@ pub struct HoverTracker {
     last_pos: (i32, i32),
     stationary_since: Option<Instant>,
     last_fire_pos: Option<(i32, i32)>,
+}
+
+impl Default for HoverTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HoverTracker {
@@ -441,8 +453,7 @@ fn simulate_copy() {}
 /// 镜像 read_clipboard_text 的写实现:CF_UNICODETEXT 写回。
 #[cfg(target_os = "windows")]
 fn write_clipboard_text(text: &str) {
-    use windows::Win32::Foundation::HGLOBAL;
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{GlobalFree, HGLOBAL, HWND};
     use windows::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
     };
@@ -464,17 +475,21 @@ fn write_clipboard_text(text: &str) {
         };
         let dst = GlobalLock(handle);
         if dst.is_null() {
+            let _ = GlobalFree(handle);
             let _ = CloseClipboard();
             return;
         }
         std::ptr::copy_nonoverlapping(wide.as_ptr(), dst as *mut u16, wide.len());
         let _ = GlobalUnlock(handle);
         if EmptyClipboard().is_err() {
+            let _ = GlobalFree(handle);
             let _ = CloseClipboard();
             return;
         }
-        // 所有权转移给剪贴板;失败时忽略(内容保持新复制文本,尽力而为)
-        let _ = SetClipboardData(CF_UNICODETEXT, HANDLE_FROM(handle));
+        // 所有权转移给剪贴板；失败时主动释放全局内存并关闭剪贴板
+        if SetClipboardData(CF_UNICODETEXT, HANDLE_FROM(handle)).is_err() {
+            let _ = GlobalFree(handle);
+        }
         let _ = CloseClipboard();
     }
 

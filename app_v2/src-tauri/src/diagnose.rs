@@ -16,28 +16,25 @@ pub struct DiagItem {
     pub detail: String,
 }
 
-fn probe(client: reqwest::Client, name: String, kind: String, url: String) -> impl std::future::Future<Output = DiagItem> + Send + 'static {
-    // 任意 HTTP 响应（含 4xx/5xx）都证明链路可达；超时/连接错误才算故障
-    async move {
-        let start = Instant::now();
-        match client.get(&url).send().await {
-            Ok(resp) => DiagItem {
-                name,
-                kind,
-                ok: true,
-                skipped: false,
-                latency_ms: start.elapsed().as_millis() as u64,
-                detail: format!("HTTP {}", resp.status().as_u16()),
-            },
-            Err(e) => DiagItem {
-                name,
-                kind,
-                ok: false,
-                skipped: false,
-                latency_ms: start.elapsed().as_millis() as u64,
-                detail: format!("{}", e).chars().take(90).collect(),
-            },
-        }
+async fn probe(client: reqwest::Client, name: String, kind: String, url: String) -> DiagItem {
+    let start = Instant::now();
+    match client.get(&url).send().await {
+        Ok(resp) => DiagItem {
+            name,
+            kind,
+            ok: true,
+            skipped: false,
+            latency_ms: start.elapsed().as_millis() as u64,
+            detail: format!("HTTP {}", resp.status().as_u16()),
+        },
+        Err(e) => DiagItem {
+            name,
+            kind,
+            ok: false,
+            skipped: false,
+            latency_ms: start.elapsed().as_millis() as u64,
+            detail: format!("{}", e).chars().take(90).collect(),
+        },
     }
 }
 
@@ -75,7 +72,7 @@ pub async fn cmd_network_diagnose(
         "engine".into(),
         "https://fanyi.baidu.com/".into(),
     )));
-    if settings.deepl_api_key.as_deref().map_or(false, |k| !k.is_empty()) {
+    if settings.deepl_api_key.as_deref().is_some_and(|k| !k.is_empty()) {
         probes.push(Box::pin(probe(
             client.clone(),
             "DeepL".into(),
@@ -104,12 +101,12 @@ pub async fn cmd_network_diagnose(
         "https://api.github.com/".into(),
     )));
 
-    // 离线词典数据源
+    // 离线词典数据源 (jsDelivr 高速镜像)
     probes.push(Box::pin(probe(
         client.clone(),
-        "ECDICT 词典源".into(),
+        "ECDICT 词典源 (jsDelivr)".into(),
         "update".into(),
-        "https://raw.githubusercontent.com/skywind3000/ECDICT/master/README.md".into(),
+        "https://fastly.jsdelivr.net/gh/skywind3000/ECDICT@master/README.md".into(),
     )));
 
     let mut items = futures_util::future::join_all(probes).await;

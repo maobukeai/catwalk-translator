@@ -54,6 +54,8 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
     setProxyEnabled,
     setProxyUrl,
     setTtsRate,
+    setEnableLlmProgressiveRefine,
+    setAutoFavoriteQualityTerms,
   } = useSettingsStore();
 
   const appearance = settings.appearance || {
@@ -192,6 +194,76 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                 </div>
               );
             })}
+            </div>
+
+            {/* ── 快慢双流渐进翻译开关 ── */}
+            <div className={`rounded-xl border p-3.5 text-xs transition-all ${
+              isLight ? 'bg-indigo-50/60 border-indigo-200 shadow-xs' : 'bg-indigo-950/20 border-indigo-500/20'
+            }`}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-sky-500 text-white shadow-sm text-sm shrink-0">
+                    ⚡
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 font-bold">
+                      <span className={isLight ? 'text-slate-900' : 'text-zinc-100'}>
+                        快慢双流渐进翻译 (Speculative Progressive)
+                      </span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">
+                        体验升级
+                      </span>
+                    </div>
+                    <p className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                      截图划词后在线引擎并发竞速秒出首版译文，大模型在后台异步深度精翻，推导完成后自动平滑替换卡片
+                    </p>
+                  </div>
+                </div>
+                <label className="relative inline-flex cursor-pointer items-center shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={settings.enableLlmProgressiveRefine !== false}
+                    onChange={(e) => setEnableLlmProgressiveRefine(e.target.checked)}
+                    className="peer sr-only"
+                  />
+                  <div className="peer h-5 w-9 rounded-full bg-zinc-600 after:absolute after:top-[2px] after:left-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-indigo-600 peer-checked:after:translate-x-full peer-focus:outline-none" />
+                </label>
+              </div>
+            </div>
+
+            {/* ── 优质生词智能甄选收藏开关 ── */}
+            <div className={`rounded-xl border p-3.5 text-xs transition-all ${
+              isLight ? 'bg-amber-50/60 border-amber-200 shadow-xs' : 'bg-amber-950/20 border-amber-500/20'
+            }`}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 text-white shadow-sm text-sm shrink-0">
+                    ⭐
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 font-bold">
+                      <span className={isLight ? 'text-slate-900' : 'text-zinc-100'}>
+                        优质生词智能甄选收藏 (Smart Auto-Favorite)
+                      </span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-amber-500/15 text-amber-500 border border-amber-500/30">
+                        智能学习
+                      </span>
+                    </div>
+                    <p className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                      划词或查词时自动识别 3D/CG 专业术语与 AI 精翻优质短语并标星加入生词本，自动过滤纯数字与操作杂词
+                    </p>
+                  </div>
+                </div>
+                <label className="relative inline-flex cursor-pointer items-center shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={settings.autoFavoriteQualityTerms !== false}
+                    onChange={(e) => setAutoFavoriteQualityTerms(e.target.checked)}
+                    className="peer sr-only"
+                  />
+                  <div className="peer h-5 w-9 rounded-full bg-zinc-600 after:absolute after:top-[2px] after:left-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-amber-500 peer-checked:after:translate-x-full peer-focus:outline-none" />
+                </label>
+              </div>
             </div>
 
             {/* 软件常规偏好信息 */}

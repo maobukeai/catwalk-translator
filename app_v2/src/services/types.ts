@@ -77,6 +77,7 @@ export interface LlmConfig {
   apiKey: string;
   model: string;
   endpoint: string;
+  enabled?: boolean;
   availableModels?: string[];
 }
 
@@ -84,6 +85,8 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  reasoning?: string;
+  isReasoningCollapsed?: boolean;
   timestamp: string;
   model?: string;
   mode?: string;
@@ -150,7 +153,6 @@ export interface OnlineEngines {
   tencent?: boolean;
   lingva?: boolean;
   caiyun?: boolean;
-  papago?: boolean;
   urban?: boolean;
   volcengine?: boolean;
   yandex?: boolean;
@@ -199,6 +201,8 @@ export interface BackupSettings {
   maxLocalBackups?: number;
   /** 最近一次备份时间（epoch 毫秒） */
   lastBackupAtMs?: number;
+  /** 备份包含的内容项清单（'settings' | 'api_keys' | 'custom_dict' | 'history' | 'capture_sessions'） */
+  includedItems?: string[];
 }
 
 /** WebDAV 云同步配置（如坚果云 https://dav.jiangguoyun.com/dav/） */
@@ -223,6 +227,8 @@ export interface BackupEntry {
   createdAtMs: number;
   /** 'auto' | 'manual' */
   source: string;
+  /** 备份包中包含的数据项清单 */
+  includedItems?: string[];
 }
 
 /** WebDAV 远端备份条目 */
@@ -239,12 +245,13 @@ export interface RestoreSummary {
   createdAt: string;
   historyCount: number;
   captureSessionCount: number;
+  /** 本次实际恢复的数据项清单 */
+  restoredItems?: string[];
 }
 
 export interface AppSettings {
   theme: string;
   hotkey: string;
-  hotkeyEnabled?: boolean;
   spotlightHotkey?: string;
   clipboardHotkey?: string;
   toggleWindowHotkey?: string;
@@ -289,6 +296,14 @@ export interface AppSettings {
   deeplApiKey?: string;
   /** 自定义 DeepLX 自建服务地址，如 http://localhost:1188/translate */
   deeplCustomUrl?: string;
+  /** 字节跳动火山翻译 AccessKey ID */
+  volcengineAccessKey?: string;
+  /** 字节跳动火山翻译 Secret Access Key */
+  volcengineSecretKey?: string;
+  /** Yandex Translate API Key */
+  yandexApiKey?: string;
+  /** Yandex Folder ID */
+  yandexFolderId?: string;
   /** 关闭主窗口时的行为：'ask' (每次询问) | 'minimize' (最小化到系统托盘) | 'exit' (直接退出程序) */
   closeAction?: 'ask' | 'minimize' | 'exit';
   /** Spotlight 查词小窗口关闭行为：'hide' (自动隐藏) | 'minimize' (最小化) */
@@ -313,6 +328,10 @@ export interface AppSettings {
   ttsRate?: number;
   /** 截图划词时自动识别前台 3D/CG 软件并切换对应专业词库（默认开启） */
   autoDetectPreset?: boolean;
+  /** 快慢双流渐进翻译：在线引擎并发大竞速秒出结果，大模型异步精翻无缝升级替换（默认开启） */
+  enableLlmProgressiveRefine?: boolean;
+  /** 优质生词智能甄选收藏：自动识别专业 3D/CG 术语与 AI 精翻高价值表达并加入收藏（默认开启） */
+  autoFavoriteQualityTerms?: boolean;
   /** 本地备份设置（自动备份 / 保留策略） */
   backupSettings?: BackupSettings;
   /** WebDAV 云同步配置 */
@@ -406,6 +425,11 @@ export interface UniversalTranslationRequest {
   baiduSecret?: string;
   deeplApiKey?: string;
   deeplCustomUrl?: string;
+  volcengineAccessKey?: string;
+  volcengineSecretKey?: string;
+  yandexApiKey?: string;
+  yandexFolderId?: string;
+  skipLlm?: boolean;
 }
 
 export type UniversalTranslateParams = UniversalTranslationRequest;

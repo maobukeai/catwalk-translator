@@ -75,9 +75,9 @@ fn parse_code_string(s: &str) -> Option<Code> {
     }
 
     // 3. Function keys F1-F24
-    if s_upper.starts_with('F') {
-        if let Ok(num) = s_upper[1..].parse::<u8>() {
-            if num >= 1 && num <= 24 {
+    if let Some(rest) = s_upper.strip_prefix('F') {
+        if let Ok(num) = rest.parse::<u8>() {
+            if (1..=24).contains(&num) {
                 if let Ok(c) = Code::from_str(&format!("F{}", num)) {
                     return Some(c);
                 }
@@ -98,10 +98,10 @@ fn parse_code_string(s: &str) -> Option<Code> {
     // 6. Single character fallbacks
     if s_upper.len() == 1 {
         let ch = s_upper.chars().next().unwrap();
-        if ch >= 'A' && ch <= 'Z' {
+        if ch.is_ascii_uppercase() {
             return Code::from_str(&format!("Key{}", ch)).ok();
         }
-        if ch >= '0' && ch <= '9' {
+        if ch.is_ascii_digit() {
             return Code::from_str(&format!("Digit{}", ch)).ok();
         }
     }
@@ -424,7 +424,6 @@ pub fn run() {
                             if let Ok(s) = parse_hotkey("Ctrl+Alt+H") {
                                 if s == *shortcut {
                                     dispatch_overlay_event(app.clone(), "trigger-hover");
-                                    return;
                                 }
                             }
                         }
@@ -607,7 +606,9 @@ pub fn run() {
                     match engine.ensure_loaded() {
                         Ok(()) => {
                             let ver = crate::onnx_ocr::get_active_version().to_uppercase();
-                            eprintln!("[OCR] Rust 原生 ONNX 引擎已就绪 (PP-OCR{}, 无需 Python)", ver);
+                            let tiny_bmp = crate::ocr::make_warmup_bmp();
+                            let _ = engine.recognize_bmp(&tiny_bmp);
+                            eprintln!("[OCR] Rust 原生 ONNX 引擎已就绪并完成图预热 (PP-OCR{}, 无需 Python)", ver);
                             crate::ocr::mark_onnx_ready();
                         }
                         Err(e) => {
@@ -646,6 +647,7 @@ pub fn run() {
             offline_models::cmd_get_active_ocr_version,
             offline_models::cmd_switch_ocr_version,
             commands::cmd_translate_phrases_styled,
+            commands::cmd_llm_batch_refine,
             commands::cmd_snap_region,
             commands::cmd_save_capture_session,
             commands::cmd_get_capture_sessions,
@@ -673,6 +675,7 @@ pub fn run() {
             commands::cmd_image_ocr_translate,
             commands::cmd_exit_app,
             commands::cmd_hide_main_window,
+            commands::cmd_fetch_tts_audio,
             lookup_monitor::cmd_get_lookup_payload,
             lookup_monitor::cmd_hide_lookup_popup,
             pin::cmd_open_pin,
@@ -745,6 +748,7 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
                 }
 
                 #[repr(C)]
+                #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
                 struct WINDOWCOMPOSITIONATTRIBDATA {
                     attribute: u32,
                     data: *mut std::ffi::c_void,
@@ -853,6 +857,7 @@ mod tests {
                 my_memory: Some(false),
                 baidu: Some(false),
                 tencent: Some(false),
+                ..Default::default()
             }),
             translation_tiers: None,
             style: None,
@@ -861,6 +866,11 @@ mod tests {
             baidu_secret: None,
             deepl_api_key: None,
             deepl_custom_url: None,
+            volcengine_access_key: None,
+            volcengine_secret_key: None,
+            yandex_api_key: None,
+            yandex_folder_id: None,
+            ..Default::default()
         };
         let res = translator::execute_universal_translate(req, &[]).await;
         assert!(res.is_ok());

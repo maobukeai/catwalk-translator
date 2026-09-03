@@ -3,7 +3,13 @@ use crate::commands::{save_capture_sessions_file, save_history_file, AppState};
 use crate::models::{CaptureSession, HistoryItem};
 use tauri::State;
 
-/// Persist a capture-translation session (id-deduped, newest first, capped at 50)
+/// 划词回放会话最大上限（从 50 场扩容至 200 场）
+pub const MAX_CAPTURE_SESSIONS: usize = 200;
+
+/// 生词本与查词历史最大上限（从 200 条大幅解封扩容至 2000 条）
+pub const MAX_HISTORY_CAPACITY: usize = 2000;
+
+/// Persist a capture-translation session (id-deduped, newest first, capped at 200)
 /// so it can be replayed later from the vocabulary/history view.
 #[tauri::command]
 pub async fn cmd_save_capture_session(
@@ -20,7 +26,7 @@ pub async fn cmd_save_capture_session(
         .map_err(|e| format!("Failed to lock capture sessions: {}", e))?;
     lock.retain(|s| s.id != session.id);
     lock.insert(0, session);
-    lock.truncate(50);
+    lock.truncate(MAX_CAPTURE_SESSIONS);
     save_capture_sessions_file(&app_handle, &lock);
     Ok(())
 }
@@ -69,9 +75,25 @@ pub async fn cmd_add_history(
         .history
         .lock()
         .map_err(|e| format!("Failed to lock history: {}", e))?;
+    lock.retain(|i| i.id != item.id);
     lock.insert(0, item);
-    if lock.len() > 200 {
-        lock.truncate(200);
+
+    // 智能淘汰保护算法：当总数超过 2000 条时，优先从后往前剔除「未收藏」的最旧记录
+    // 用户收藏过星标 ⭐ 的生词终身保全，绝不误删！
+    if lock.len() > MAX_HISTORY_CAPACITY {
+        let mut to_remove = lock.len() - MAX_HISTORY_CAPACITY;
+        let mut idx = lock.len();
+        while idx > 0 && to_remove > 0 {
+            idx -= 1;
+            if !lock[idx].is_favorite {
+                lock.remove(idx);
+                to_remove -= 1;
+            }
+        }
+        // 如果未收藏项已全部剔除（全库收藏数仍大于 2000），才做硬截断兜底
+        if lock.len() > MAX_HISTORY_CAPACITY {
+            lock.truncate(MAX_HISTORY_CAPACITY);
+        }
     }
     save_history_file(&app_handle, &lock);
     Ok(())

@@ -136,20 +136,23 @@ describe('Multi-Engine Card Retention & Inline Retry Test Suite', () => {
       ],
     };
 
-    const spy = vi.spyOn(tauriService, 'cmdUniversalTranslate')
-      .mockResolvedValueOnce(initialRes)
-      .mockResolvedValueOnce({
-        original: 'Subsurface Scattering',
-        detectedLang: 'en',
-        mainTranslation: '次表面散射 (DeepL 恢复)',
-        engines: [
-          {
-            engineName: 'DeepL 极速通道',
-            translated: '次表面散射 (DeepL 恢复)',
-            sourceTier: 'Online Fallback',
-          },
-        ],
-      });
+    const spy = vi.spyOn(tauriService, 'cmdUniversalTranslate').mockImplementation(async (params: any) => {
+      if (params.forcedEngine === 'DeepL 极速通道') {
+        return {
+          original: 'Subsurface Scattering',
+          detectedLang: 'en',
+          mainTranslation: '次表面散射 (DeepL 恢复)',
+          engines: [
+            {
+              engineName: 'DeepL 极速通道',
+              translated: '次表面散射 (DeepL 恢复)',
+              sourceTier: 'Online Fallback',
+            },
+          ],
+        };
+      }
+      return initialRes;
+    });
 
     render(<DualPaneTranslator settings={TEST_SETTINGS} initialText="" />);
 

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useRef, useCallback } from 'react';
 import {
   Square,
   MoveUpRight,
@@ -15,6 +15,7 @@ import {
   X,
   Check,
   Volume2,
+  GripVertical,
 } from 'lucide-react';
 import type { LanguageCode, AppSettings } from '../../services/types';
 import { useSettingsStore } from '../../stores/useSettingsStore';
@@ -140,23 +141,106 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
   // 与设置页下拉 / Tab 轮播同源：按当前配置动态生成 LLM 模型池 + 已开启在线引擎/词库
   const engineChoices = useMemo(() => buildCaptureEngineChoices(effectiveSettings), [effectiveSettings]);
 
+  // ── 拖拽移动状态与逻辑 ──
+  const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef<{ startX: number; startY: number; initialOffsetX: number; initialOffsetY: number } | null>(null);
+
+  const handlePointerDownDrag = useCallback((e: React.PointerEvent | React.MouseEvent) => {
+    // 仅响应鼠标主键 (左键)
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    setIsDragging(true);
+    dragStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      initialOffsetX: dragOffset.x,
+      initialOffsetY: dragOffset.y,
+    };
+
+    const handleMove = (ev: MouseEvent | PointerEvent) => {
+      if (!dragStartRef.current) return;
+      const dx = ev.clientX - dragStartRef.current.startX;
+      const dy = ev.clientY - dragStartRef.current.startY;
+      setDragOffset({
+        x: dragStartRef.current.initialOffsetX + dx,
+        y: dragStartRef.current.initialOffsetY + dy,
+      });
+    };
+
+    const handleUp = () => {
+      setIsDragging(false);
+      dragStartRef.current = null;
+      window.removeEventListener('pointermove', handleMove as EventListener);
+      window.removeEventListener('pointerup', handleUp as EventListener);
+      window.removeEventListener('pointercancel', handleUp as EventListener);
+      window.removeEventListener('mousemove', handleMove as EventListener);
+      window.removeEventListener('mouseup', handleUp as EventListener);
+    };
+
+    window.addEventListener('pointermove', handleMove as EventListener, { passive: true });
+    window.addEventListener('pointerup', handleUp as EventListener, { passive: true });
+    window.addEventListener('pointercancel', handleUp as EventListener, { passive: true });
+    window.addEventListener('mousemove', handleMove as EventListener, { passive: true });
+    window.addEventListener('mouseup', handleUp as EventListener, { passive: true });
+  }, [dragOffset]);
+
+  const handleResetPosition = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDragOffset({ x: 0, y: 0 });
+  }, []);
+
+  // 计算合并后的 style 与 transform
+  const mergedStyle = useMemo<React.CSSProperties>(() => {
+    const baseStyle = style || {};
+    const hasOffset = dragOffset.x !== 0 || dragOffset.y !== 0;
+    if (!hasOffset) {
+      return baseStyle;
+    }
+    const baseTransform = baseStyle.transform ? `${baseStyle.transform} ` : '';
+    return {
+      ...baseStyle,
+      transform: `${baseTransform}translate3d(${dragOffset.x}px, ${dragOffset.y}px, 0)`,
+      transition: isDragging ? 'none' : 'transform 0.12s cubic-bezier(0.2, 0.8, 0.2, 1)',
+    };
+  }, [style, dragOffset, isDragging]);
+
   return (
     <div
       data-testid={testId}
       className={`snipping-toolbar-container flex flex-col items-center gap-1.5 pointer-events-auto select-none ${className}`}
-      style={style}
+      style={mergedStyle}
       onMouseDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      {/* ── 主工具条 (白底微阴影紧凑悬浮长条，6大功能分区) ──────────────────────── */}
-      <div className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-xl backdrop-blur-md rounded-xl p-1 flex items-center gap-1 max-w-[98vw] flex-wrap md:flex-nowrap">
-        {/* ── 分区 1: [品牌标签与操作指引] ── */}
+      {/* ── 主工具条 (白底微阴影紧凑悬浮长条，6大功能分区，w-max 自适应包裹绝不溢出) ──────────────────────── */}
+      <div
+        className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-xl backdrop-blur-md rounded-2xl py-1.5 pl-2 pr-3 flex items-center gap-1 w-max min-w-max flex-nowrap"
+        onPointerDown={(e) => {
+          // 如果点击的是工具条的空白 padding / 边框区域（非按钮或输入控件），也支持直接拖动
+          if (e.target === e.currentTarget) {
+            handlePointerDownDrag(e);
+          }
+        }}
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) {
+            handlePointerDownDrag(e);
+          }
+        }}
+      >
+        {/* ── 分区 1: [品牌标签与拖拽把手] ── */}
         <div
-          className="flex items-center gap-1.5 px-2 py-0.5 select-none font-bold text-xs shrink-0 cursor-default"
-          title="按住鼠标左键划框 · 双击自动吸附段落"
+          className="flex items-center gap-1 px-2 py-1 select-none font-bold text-xs shrink-0 cursor-grab active:cursor-grabbing hover:bg-slate-100/90 dark:hover:bg-slate-800/90 rounded-lg transition-colors group"
+          title="按住拖拽移动工具栏 · 按住鼠标左键划框 · 双击恢复默认位置"
+          onPointerDown={handlePointerDownDrag}
+          onMouseDown={handlePointerDownDrag}
+          onDoubleClick={handleResetPosition}
         >
-          <span className="text-sm">🐾</span>
-          <span className="font-extrabold bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 bg-clip-text text-transparent tracking-tight">
+          <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-sky-500 transition-colors shrink-0" />
+          <span className="text-sm shrink-0">🐾</span>
+          <span className="font-extrabold bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 bg-clip-text text-transparent tracking-tight whitespace-nowrap">
             猫步划词
           </span>
         </div>
@@ -381,7 +465,7 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
           <select
             value={selectedEngine}
             onChange={(e) => onSelectEngine?.(e.target.value)}
-            className="bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/60 dark:border-slate-700/60 rounded-lg text-[11px] px-2 py-1 font-medium text-slate-700 dark:text-slate-200 outline-none cursor-pointer hover:border-sky-400 transition shrink-0 max-w-[155px]"
+            className="bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/60 dark:border-slate-700/60 rounded-lg text-[11px] px-2 py-1 font-medium text-slate-700 dark:text-slate-200 outline-none cursor-pointer hover:border-sky-400 transition shrink-0 max-w-[135px]"
             title="切换翻译引擎 (Tab)"
           >
             <option value={engineChoices.auto.value}>{engineChoices.auto.label}</option>
@@ -434,7 +518,7 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
         <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
 
         {/* ── 分区 6: [操作与退出] ── */}
-        <div className="flex items-center gap-0.5 shrink-0">
+        <div className="flex items-center gap-1 shrink-0 pr-1">
           {/* 撤销 (Undo) */}
           <button
             type="button"
@@ -504,7 +588,7 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             type="button"
             data-testid="btn-done"
             onClick={onConfirm}
-            className="p-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center shadow-sm"
+            className="p-1.5 px-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center shadow-sm shrink-0 ring-1 ring-emerald-400/30"
             title="完成并复制 (Enter)"
           >
             <Check className="w-3.5 h-3.5 stroke-[2.5]" />

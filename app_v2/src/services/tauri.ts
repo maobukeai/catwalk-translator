@@ -13,6 +13,7 @@ import type {
   RemoteBackupEntry,
   RestoreSummary,
 } from './types';
+import { evaluateTranslationQuality } from './smartQualityFilter';
 
 export const isTauri = (): boolean => {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -38,6 +39,10 @@ export const cmdStartScreenCapture = cmdBeginCapture;
 
 /// Show the window in full-screen overlay mode (called after capture payload arrives)
 export async function cmdExitApp(): Promise<void> {
+  try {
+    const { stopSpeech } = await import('./tts');
+    stopSpeech();
+  } catch (_) {}
   if (isTauri()) {
     await invoke('cmd_exit_app');
   } else {
@@ -45,7 +50,22 @@ export async function cmdExitApp(): Promise<void> {
   }
 }
 
+export async function cmdFetchTtsAudio(
+  text: string,
+  lang?: string,
+  rate?: number
+): Promise<string> {
+  if (isTauri()) {
+    return await invoke<string>('cmd_fetch_tts_audio', { text, lang, rate });
+  }
+  throw new Error('TTS IPC only available in native desktop app');
+}
+
 export async function cmdHideMainWindow(): Promise<void> {
+  try {
+    const { stopSpeech } = await import('./tts');
+    stopSpeech();
+  } catch (_) {}
   if (isTauri()) {
     try {
       await invoke('cmd_hide_main_window');
@@ -70,6 +90,10 @@ export async function cmdShowOverlay(): Promise<void> {
 
 /// Restore the window to normal main-window size (called when overlay is closed)
 export async function cmdCloseOverlay(restoreMain?: boolean): Promise<void> {
+  try {
+    const { stopSpeech } = await import('./tts');
+    stopSpeech();
+  } catch (_) {}
   if (isTauri()) {
     await invoke('cmd_close_overlay', { restoreMain: restoreMain ?? null });
   }
@@ -234,6 +258,22 @@ export async function cmdTranslatePhrasesStyled(
     });
   }
   return cmdTranslatePhrases(phrases, preset, llmConfig);
+}
+
+/// 专属大模型批量异步精翻接口（供截图翻译快慢双流架构渐进增强使用）
+export async function cmdLlmBatchRefine(
+  phrases: string[],
+  config: LlmConfig,
+  style?: 'literal' | 'free' | 'terminology'
+): Promise<Record<string, string>> {
+  if (isTauri()) {
+    return await invoke<Record<string, string>>('cmd_llm_batch_refine', {
+      phrases,
+      config,
+      style: style ?? null,
+    });
+  }
+  return {};
 }
 
 /// Double-click smart snap: OCR around a logical click point and return the
@@ -567,6 +607,11 @@ export interface ImageTranslateBlock {
   height: number;
   bgCss: string;
   fgCss: string;
+  patchPng?: string;
+  patchX?: number;
+  patchY?: number;
+  patchW?: number;
+  patchH?: number;
 }
 
 export interface ImageTranslateResponse {
@@ -1241,20 +1286,35 @@ export async function cmdUniversalTranslate(
     );
   }
 
-  // LLM API
-  const isLlmConfigured = !!req.llmConfig && (
-    !req.llmConfig.endpoint?.trim() ? false :
-    (req.llmConfig.endpoint.includes('localhost') || req.llmConfig.endpoint.includes('127.0.0.1')) ||
-    !!req.llmConfig.apiKey?.trim()
-  );
-  const runLlm = (forced && (forced.includes('llm') || forced.includes('ai') || forced.includes('openai') || forced.includes('deepseek') || forced.includes('ollama') || forced.includes('glm') || forced.includes('custom'))) || (!isForced && isLlmConfigured);
-  if (runLlm && req.llmConfig) {
-    const provider = req.llmConfig.provider || 'AI';
-    tasks.push(
-      fetchLlmTranslate(trimmed, actualTarget, req.llmConfig, req.style)
-        .then((res) => ({ name: `🤖 AI 深度翻译 (${provider})`, trans: res.trans, tier: res.tier }))
-        .catch(() => ({ name: `🤖 AI 深度翻译 (${provider})`, trans: '[网络连接超时 / 点击重试]', tier: 'Online (Retry)' }))
-    );
+  // LLM API (支持多模型配置池并发查询)
+  const pool = (req.llmConfigs && req.llmConfigs.length > 0)
+    ? req.llmConfigs
+    : (req.llmConfig ? [req.llmConfig] : []);
+
+  const readyConfigs = pool.filter((cfg) => {
+    if (cfg.enabled === false) return false;
+    const ep = cfg.endpoint || '';
+    const isLocal = ep.includes('localhost') || ep.includes('127.0.0.1');
+    return !ep.trim() ? false : (!!cfg.apiKey?.trim() || isLocal);
+  });
+
+  const runLlm = (forced && (forced.includes('llm') || forced.includes('ai') || forced.includes('openai') || forced.includes('deepseek') || forced.includes('ollama') || forced.includes('glm') || forced.includes('custom'))) || (!isForced && readyConfigs.length > 0);
+
+  if (runLlm) {
+    const targetClean = forced ? forced.replace(/^llm:/i, '').toLowerCase() : '';
+    const configsToRun = isForced && targetClean
+      ? readyConfigs.filter((c) => (c.id && c.id.toLowerCase() === targetClean) || c.model.toLowerCase().includes(targetClean) || c.provider.toLowerCase().includes(targetClean))
+      : readyConfigs;
+
+    const finalConfigs = configsToRun.length > 0 ? configsToRun : (req.llmConfig ? [req.llmConfig] : []);
+    for (const cfg of finalConfigs) {
+      const label = cfg.model && cfg.model !== 'custom-model' ? cfg.model : (cfg.provider || 'AI');
+      tasks.push(
+        fetchLlmTranslate(trimmed, actualTarget, cfg, req.style)
+          .then((res) => ({ name: `🤖 AI 深度翻译 (${label})`, trans: res.trans, tier: res.tier }))
+          .catch(() => ({ name: `🤖 AI 深度翻译 (${label})`, trans: '[网络连接超时 / 点击重试]', tier: 'Online (Retry)' }))
+      );
+    }
   }
 
   // 并发等待所有开启的在线引擎完成（绝不丢弃任何卡片）
@@ -1456,21 +1516,39 @@ export async function cmdClearHistory(): Promise<void> {
 export async function saveTranslationHistory(
   original: string,
   translated: string,
-  sourceTier: string
+  sourceTier: string,
+  forceFavorite?: boolean
 ): Promise<void> {
   const text = original.trim();
   if (!text || !translated.trim()) return;
   const current = await cmdGetHistory();
   const historyList = Array.isArray(current) ? current : [];
   const existing = historyList.find((i) => i.original === text);
-  if (existing) return;
+
+  // 智能甄选判定是否自动加星标收藏（支持显式指定，或自动评估优质专业词汇）
+  let isFavorite = false;
+  if (typeof forceFavorite === 'boolean') {
+    isFavorite = forceFavorite;
+  } else {
+    const evaluation = evaluateTranslationQuality(text, translated, sourceTier);
+    isFavorite = evaluation.isQuality;
+  }
+
+  // 若已存在且未收藏，而新传入判定为优质词汇，更新为收藏状态
+  if (existing) {
+    if (!existing.isFavorite && isFavorite) {
+      await cmdToggleFavorite(existing.id);
+    }
+    return;
+  }
+
   await cmdAddHistory({
     id: `hist_${Date.now()}`,
     original: text,
     translated,
     sourceTier: sourceTier || 'Online Fallback',
     timestamp: new Date().toLocaleTimeString(),
-    isFavorite: false,
+    isFavorite,
   });
 }
 
@@ -1544,24 +1622,27 @@ export async function cmdChatLlm(
 /** Rust cmd_chat_llm_stream 推送的流式增量事件 */
 export interface ChatStreamDelta {
   delta: string;
+  reasoning?: string | null;
   done: boolean;
 }
 
 /**
- * 流式 LLM 对话：每收到一段增量文本就回调 onDelta；返回完整回复。
+ * 流式 LLM 对话：每收到一段增量文本就回调 onDelta(text, reasoning)；返回完整回复。
  * 非流式端点（Gemini 原生等）由 Rust 侧合并为单次 onDelta。
  * 浏览器/JSDOM mock 模式下模拟打字机分块推送。
  */
 export async function cmdChatLlmStream(
   messages: { role: string; content: string }[],
   config: import('./types').LlmConfig,
-  onDelta: (text: string) => void
+  onDelta: (text: string, reasoning?: string) => void
 ): Promise<string> {
   if (isTauri()) {
     const { Channel } = await import('@tauri-apps/api/core');
     const channel = new Channel<ChatStreamDelta>();
     channel.onmessage = (msg) => {
-      if (msg && !msg.done && msg.delta) onDelta(msg.delta);
+      if (msg && !msg.done) {
+        onDelta(msg.delta || '', msg.reasoning || undefined);
+      }
     };
     return await invoke<string>('cmd_chat_llm_stream', {
       messages,

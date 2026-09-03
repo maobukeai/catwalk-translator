@@ -282,8 +282,10 @@ describe('selection adjust mode (release → resize/move/nudge → confirm)', ()
     });
     expect(await screen.findByText(/猫步划词/)).toBeInTheDocument();
 
-    // The toolbar button works too
-    fireEvent.click(screen.getByTestId('cheatsheet-btn'));
+    // Draw selection to invoke the toolbar button
+    await dragSelection({ x: 100, y: 100 }, { x: 300, y: 200 });
+    const csBtn = await screen.findByTestId('cheatsheet-btn');
+    fireEvent.click(csBtn);
     await screen.findByText('快捷键速查面板');
   });
 
@@ -372,6 +374,34 @@ describe('selection adjust mode (release → resize/move/nudge → confirm)', ()
     const pinBtn = screen.getByTitle('置顶贴图 (Pin)');
     fireEvent.click(pinBtn);
     expect(screen.getByTitle('已置顶固定 (Pin)')).toBeInTheDocument();
+  });
+
+  it('SnippingToolbar can be dragged via pointer events and double-clicking resets position', async () => {
+    createMockIpcHarness();
+    wireHarness();
+    (window as any).__TAURI_INTERNALS__ = {};
+
+    render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
+    await screen.findByText(/猫步划词/);
+
+    // Draw a selection first to invoke the adjust toolbar
+    await dragSelection({ x: 100, y: 100 }, { x: 400, y: 200 });
+    const brandHandle = await screen.findByTitle(/按住拖拽移动工具栏/);
+    expect(brandHandle).toBeInTheDocument();
+
+    const toolbar = screen.getByTestId('adjust-confirm-bar');
+
+    // Simulate drag start on the handle
+    fireEvent.mouseDown(brandHandle, { clientX: 100, clientY: 50, button: 0 });
+    // Move 80px right and 120px down
+    fireEvent.mouseMove(window, { clientX: 180, clientY: 170 });
+    fireEvent.mouseUp(window, { clientX: 180, clientY: 170 });
+
+    expect(toolbar.style.transform).toContain('translate3d(80px, 120px, 0)');
+
+    // Double click the handle resets position
+    fireEvent.doubleClick(brandHandle);
+    expect(toolbar.style.transform).not.toContain('translate3d(80px, 120px, 0)');
   });
 });
 

@@ -82,6 +82,8 @@ export const HistoryPanel: React.FC = () => {
   }, []);
   const [replay, setReplay] = useState<CaptureSession | null>(null);
   const [replayCopied, setReplayCopied] = useState(false);
+  // ── 历史记录三大子模块切换（生词本 / 剪贴板 / 划词回放 / 全部平铺）───────────
+  const [activeSubTab, setActiveSubTab] = useState<'all' | 'vocabulary' | 'clipboard' | 'replay'>('all');
 
   // ── 复习模式状态 ──────────────────────────────────────────────────────────
   const [reviewProgress, setReviewProgress] = useState<Record<string, ReviewProgress>>({});
@@ -302,18 +304,26 @@ export const HistoryPanel: React.FC = () => {
   /* ── 渲染 ─────────────────────────────────────────────────────────────── */
 
   return (
-    <div className="space-y-5 max-w-4xl mx-auto">
-      {/* 统计卡横排 */}
+    <div className="space-y-5 max-w-4xl mx-auto pb-28">
+      {/* 统计卡横排：支持一键点击直达对应功能模块 */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
         {[
-          { icon: Library, label: "总记录", value: history.length, color: "var(--accent-text)" },
-          { icon: Star, label: "收藏生词", value: favoriteCount, color: "var(--warn)" },
-          { icon: Camera, label: "截图场次", value: sessions.length, color: "var(--accent-text)" },
-          { icon: GraduationCap, label: "待复习", value: dueCount, color: dueCount > 0 ? "var(--danger)" : "var(--ok)" },
+          { tab: "vocabulary" as const, icon: Library, label: "总记录", value: history.length, color: "var(--accent-text)" },
+          { tab: "vocabulary" as const, icon: Star, label: "收藏生词", value: favoriteCount, color: "var(--warn)" },
+          { tab: "replay" as const, icon: Camera, label: "截图场次", value: sessions.length, color: "var(--accent-text)" },
+          { tab: "vocabulary" as const, icon: GraduationCap, label: "待复习", value: dueCount, color: dueCount > 0 ? "var(--danger)" : "var(--ok)" },
         ].map((stat) => {
           const Icon = stat.icon;
+          const isActive = activeSubTab === stat.tab;
           return (
-            <div key={stat.label} className="lg-panel flex items-center gap-3 p-3">
+            <div
+              key={stat.label}
+              onClick={() => setActiveSubTab(stat.tab)}
+              className={`lg-panel flex items-center gap-3 p-3 cursor-pointer transition-all hover:scale-[1.01] hover:border-[var(--g-border-strong)] ${
+                isActive ? "ring-1 ring-[var(--accent)]/40 shadow-sm" : ""
+              }`}
+              title={`点击切换到「${stat.tab === "replay" ? "划词回放" : "生词本"}」`}
+            >
               <div className="lg-inset !p-2 rounded-xl shrink-0">
                 <Icon className="h-4 w-4" style={{ color: stat.color }} />
               </div>
@@ -326,8 +336,87 @@ export const HistoryPanel: React.FC = () => {
         })}
       </div>
 
+      {/* 模块分类导航栏：解决剪贴板历史与划词回放挤在最底部难翻找难展示的问题 */}
+      <div className="flex items-center justify-between gap-3 p-1.5 rounded-2xl lg-panel flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab("all")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              activeSubTab === "all"
+                ? "bg-[var(--accent)] text-white shadow-sm"
+                : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
+            }`}
+          >
+            <span>📑 全部平铺</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab("vocabulary")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              activeSubTab === "vocabulary"
+                ? "bg-[var(--accent)] text-white shadow-sm"
+                : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
+            }`}
+          >
+            <BookMarked className="h-3.5 w-3.5" />
+            <span>查词与生词本</span>
+            <span
+              className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
+                activeSubTab === "vocabulary" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
+              }`}
+            >
+              {history.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab("clipboard")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              activeSubTab === "clipboard"
+                ? "bg-[var(--accent)] text-white shadow-sm"
+                : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
+            }`}
+          >
+            <ClipboardList className="h-3.5 w-3.5" />
+            <span>剪贴板翻译历史</span>
+            <span
+              className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
+                activeSubTab === "clipboard" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
+              }`}
+            >
+              {clipHistory.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab("replay")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              activeSubTab === "replay"
+                ? "bg-[var(--accent)] text-white shadow-sm"
+                : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
+            }`}
+          >
+            <Camera className="h-3.5 w-3.5" />
+            <span>截图划词回放</span>
+            <span
+              className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
+                activeSubTab === "replay" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
+              }`}
+            >
+              {sessions.length}
+            </span>
+          </button>
+        </div>
+      </div>
+
       {/* Header and Controls */}
-      <div className="lg-panel p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {(activeSubTab === "all" || activeSubTab === "vocabulary") && (
+        <>
+          <div className="lg-panel p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center space-x-3">
           <BookMarked className="h-6 w-6" style={{ color: "var(--accent-text)" }} />
           <div>
@@ -599,86 +688,91 @@ export const HistoryPanel: React.FC = () => {
           </>
         )}
       </div>
+        </>
+      )}
 
       {/* ── 剪贴板翻译历史 ─────────────────────────────────────────────────── */}
-      <div className="lg-panel p-5" data-testid="clipboard-history-section">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-bold flex items-center gap-2">
-            <ClipboardList className="h-4 w-4" style={{ color: "var(--accent-text)" }} />
-            剪贴板翻译历史
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full border" style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}>
-              {clipHistory.length}
-            </span>
-          </h3>
-          {clipHistory.length > 0 && (
-            <button
-              type="button"
-              onClick={() => {
-                if (!window.confirm("确定清空全部剪贴板翻译历史吗？")) return;
-                cmdClearClipboardHistory()
-                  .then(() => setClipHistory([]))
-                  .catch(console.warn);
-              }}
-              className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2 py-1 border transition cursor-pointer hover:bg-rose-500/10 hover:text-rose-500"
-              style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}
-            >
-              <Trash className="h-3 w-3" />
-              <span>清空</span>
-            </button>
-          )}
-        </div>
-
-        {clipHistory.length === 0 ? (
-          <p className="text-xs" style={{ color: "var(--g-text-3)" }}>
-            在设置中开启「剪贴板静默翻译」后，复制的外文会自动翻译并记录在这里
-          </p>
-        ) : (
-          <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1 scrollbar-thin">
-            {clipHistory.slice(0, visibleClipCount).map((entry, idx) => (
-              <div
-                key={`${entry.atMs}_${idx}`}
-                className="rounded-lg border px-3 py-2 text-xs"
-                style={{ borderColor: "var(--g-border)" }}
-                data-testid="clipboard-history-item"
+      {(activeSubTab === "all" || activeSubTab === "clipboard") && (
+        <div className="lg-panel p-5 animate-in fade-in" data-testid="clipboard-history-section">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold flex items-center gap-2">
+              <ClipboardList className="h-4 w-4" style={{ color: "var(--accent-text)" }} />
+              剪贴板翻译历史
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full border" style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}>
+                {clipHistory.length}
+              </span>
+            </h3>
+            {clipHistory.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!window.confirm("确定清空全部剪贴板翻译历史吗？")) return;
+                  cmdClearClipboardHistory()
+                    .then(() => setClipHistory([]))
+                    .catch(console.warn);
+                }}
+                className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2 py-1 border transition cursor-pointer hover:bg-rose-500/10 hover:text-rose-500"
+                style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono truncate" style={{ color: "var(--g-text-3)" }}>{entry.original}</span>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    <span className="text-[9px] font-mono px-1 rounded border" style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}>
-                      {entry.sourceTier}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => navigator.clipboard.writeText(entry.translated)}
-                      className="rounded p-0.5 transition cursor-pointer hover:text-sky-500"
-                      style={{ color: "var(--g-text-3)" }}
-                      title="复制译文"
-                    >
-                      <Copy className="h-3 w-3" />
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-0.5 font-bold truncate">{entry.translated}</div>
-              </div>
-            ))}
-            {clipHistory.length > visibleClipCount && (
-              <div className="text-center pt-1">
-                <button
-                  type="button"
-                  onClick={() => setVisibleClipCount((prev) => prev + 20)}
-                  className="text-[11px] font-medium px-3 py-1 rounded hover:bg-[var(--g-surface-2)] transition cursor-pointer"
-                  style={{ color: "var(--g-text-3)" }}
-                >
-                  查看更多剪贴板记录 (还有 {clipHistory.length - visibleClipCount} 条)
-                </button>
-              </div>
+                <Trash className="h-3 w-3" />
+                <span>清空</span>
+              </button>
             )}
           </div>
-        )}
-      </div>
+
+          {clipHistory.length === 0 ? (
+            <p className="text-xs" style={{ color: "var(--g-text-3)" }}>
+              在设置中开启「剪贴板静默翻译」后，复制的外文会自动翻译并记录在这里
+            </p>
+          ) : (
+            <div className={`${activeSubTab === 'clipboard' ? 'max-h-[62vh]' : 'max-h-72'} space-y-1.5 overflow-y-auto pr-1 scrollbar-thin`}>
+              {clipHistory.slice(0, visibleClipCount).map((entry, idx) => (
+                <div
+                  key={`${entry.atMs}_${idx}`}
+                  className="rounded-lg border px-3 py-2 text-xs"
+                  style={{ borderColor: "var(--g-border)" }}
+                  data-testid="clipboard-history-item"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono truncate" style={{ color: "var(--g-text-3)" }}>{entry.original}</span>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="text-[9px] font-mono px-1 rounded border" style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}>
+                        {entry.sourceTier}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => navigator.clipboard.writeText(entry.translated)}
+                        className="rounded p-0.5 transition cursor-pointer hover:text-sky-500"
+                        style={{ color: "var(--g-text-3)" }}
+                        title="复制译文"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-0.5 font-bold truncate">{entry.translated}</div>
+                </div>
+              ))}
+              {clipHistory.length > visibleClipCount && (
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleClipCount((prev) => prev + 20)}
+                    className="text-[11px] font-medium px-3 py-1 rounded hover:bg-[var(--g-surface-2)] transition cursor-pointer"
+                    style={{ color: "var(--g-text-3)" }}
+                  >
+                    查看更多剪贴板记录 (还有 {clipHistory.length - visibleClipCount} 条)
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── 划词回放：整场截图翻译会话时间线 ───────────────────────────────── */}
-      <div className="lg-panel p-5">
+      {(activeSubTab === "all" || activeSubTab === "replay") && (
+        <div className="lg-panel p-5 animate-in fade-in">
         <div className="flex items-center justify-between pb-3 border-b" style={{ borderColor: "var(--g-hairline)" }}>
           <div className="flex items-center space-x-2.5">
             <Camera className="h-5 w-5" style={{ color: "var(--accent-text)" }} />
@@ -747,6 +841,7 @@ export const HistoryPanel: React.FC = () => {
           </div>
         )}
       </div>
+      )}
 
       {/* ── 回放弹窗：原位卡片重演 + 文本对照 ─────────────────────────────── */}
       {replay && typeof document !== "undefined" && createPortal(
@@ -793,43 +888,63 @@ export const HistoryPanel: React.FC = () => {
             </div>
 
             <div className="p-5 space-y-5">
-              {/* 原位卡片微缩重演 */}
+              {/* 原位卡片微缩重演：以真实文本包围盒为基准自适应缩放居中 */}
               {(() => {
+                if (!replay.blocks || replay.blocks.length === 0) return null;
                 const xs = replay.blocks.map((b) => b.logicalX);
                 const ys = replay.blocks.map((b) => b.logicalY);
-                const minX = Math.min(...xs, 0);
-                const minY = Math.min(...ys, 0);
+                const minX = Math.min(...xs);
+                const minY = Math.min(...ys);
                 const maxX = Math.max(...replay.blocks.map((b) => b.logicalX + b.logicalW));
                 const maxY = Math.max(...replay.blocks.map((b) => b.logicalY + b.logicalH));
-                const contentW = Math.max(maxX - minX, 1);
-                const contentH = Math.max(maxY - minY, 1);
-                const scale = Math.min(1, 640 / contentW, 340 / contentH);
+                const pad = 24;
+                const rawW = Math.max(maxX - minX, 1);
+                const rawH = Math.max(maxY - minY, 1);
+                const contentW = rawW + pad * 2;
+                const contentH = rawH + pad * 2;
+                // 限制在最大 680x320 容器内等比缩放，放大上限 1.25，缩小下限 0.35
+                const scale = Math.min(1.25, Math.max(0.35, Math.min(680 / contentW, 320 / contentH)));
+                const boxW = Math.round(contentW * scale);
+                const boxH = Math.round(contentH * scale);
+
                 return (
-                  <div
-                    className="lg-inset relative mx-auto !rounded-xl overflow-hidden"
-                    style={{ width: Math.max(contentW * scale, 120), height: Math.max(contentH * scale, 60) }}
-                  >
-                    {replay.blocks.map((b, i) => (
-                      <div
-                        key={i}
-                        className="absolute flex items-center justify-center rounded-[3px] overflow-hidden whitespace-nowrap text-ellipsis"
-                        style={{
-                          left: (b.logicalX - minX) * scale,
-                          top: (b.logicalY - minY) * scale,
-                          width: Math.max(b.logicalW * scale, 16),
-                          height: Math.max(b.logicalH * scale, 10),
-                          background: b.bgCss,
-                          color: b.fgCss,
-                          fontSize: Math.max(8, Math.min(14, b.logicalH * scale * 0.7)),
-                          fontWeight: 600,
-                          padding: '0 3px',
-                          boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
-                        }}
-                        title={`${b.original} → ${b.translated}`}
-                      >
-                        <span className="truncate">{b.translated || b.original}</span>
-                      </div>
-                    ))}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] px-1" style={{ color: "var(--g-text-3)" }}>
+                      <span>原位划词分布微缩还原 (共 {replay.blocks.length} 处译文)</span>
+                      <span className="font-mono">缩放比例: {Math.round(scale * 100)}%</span>
+                    </div>
+                    <div
+                      className="lg-inset relative mx-auto !rounded-xl overflow-hidden border shadow-inner transition-all flex items-center justify-center"
+                      style={{
+                        width: boxW,
+                        height: boxH,
+                        background: isLight ? 'rgba(0,0,0,0.03)' : 'rgba(0,0,0,0.25)',
+                        borderColor: 'var(--g-hairline)',
+                      }}
+                    >
+                      {replay.blocks.map((b, i) => (
+                        <div
+                          key={i}
+                          className="absolute flex items-center justify-center rounded-[4px] overflow-hidden whitespace-nowrap text-ellipsis border transition-all"
+                          style={{
+                            left: (b.logicalX - minX + pad) * scale,
+                            top: (b.logicalY - minY + pad) * scale,
+                            width: Math.max(b.logicalW * scale, 22),
+                            height: Math.max(b.logicalH * scale, 14),
+                            background: b.bgCss || (isLight ? '#ffffff' : '#1e293b'),
+                            color: b.fgCss || (isLight ? '#0f172a' : '#f8fafc'),
+                            borderColor: 'rgba(0,0,0,0.12)',
+                            fontSize: Math.max(10, Math.min(15, b.logicalH * scale * 0.72)),
+                            fontWeight: 600,
+                            padding: '0 4px',
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.18)',
+                          }}
+                          title={`${b.original} → ${b.translated}`}
+                        >
+                          <span className="truncate">{b.translated || b.original}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 );
               })()}

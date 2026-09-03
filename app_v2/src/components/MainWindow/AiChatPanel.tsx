@@ -14,6 +14,14 @@ import {
   X,
   SquarePen,
   MessageSquare,
+  ChevronDown,
+  BrainCircuit,
+  RotateCcw,
+  History,
+  Download,
+  Pencil,
+  Square,
+  ArrowDown,
 } from 'lucide-react';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { useAppTheme } from '../../hooks/useAppTheme';
@@ -223,8 +231,42 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [waitingSeconds, setWaitingSeconds] = useState(0);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingSessionTitle, setEditingSessionTitle] = useState('');
+  const [enableContext, setEnableContext] = useState(true);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+
+  const abortRef = useRef(false);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const initializedRef = useRef(false);
+
+  // 输入框高度随输入内容轻量自适应（36px ~ 120px）
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      const scrollHeight = textareaRef.current.scrollHeight;
+      textareaRef.current.style.height = `${Math.min(Math.max(scrollHeight, 36), 120)}px`;
+    }
+  }, [input]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    if (loading) {
+      setWaitingSeconds(0);
+      timer = setInterval(() => {
+        setWaitingSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setWaitingSeconds(0);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [loading]);
 
   // 挂载时载入持久化会话
   useEffect(() => {
@@ -248,6 +290,114 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
   useEffect(() => {
     scrollToBottom();
   }, [messages, loading]);
+
+  const handleScroll = () => {
+    if (!messagesContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+    setShowScrollBottom(scrollHeight - scrollTop - clientHeight > 120);
+  };
+
+  const toggleReasoningCollapse = (msgId: string) => {
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id !== activeSessionId
+          ? s
+          : {
+              ...s,
+              messages: s.messages.map((m) => {
+                if (m.id !== msgId) return m;
+                const isMsgStreaming = streamingId === m.id;
+                const defaultCollapsed = !isMsgStreaming || !!m.content;
+                const currentCollapsed = m.isReasoningCollapsed !== undefined
+                  ? m.isReasoningCollapsed
+                  : defaultCollapsed;
+                return { ...m, isReasoningCollapsed: !currentCollapsed };
+              }),
+            }
+      )
+    );
+  };
+
+  const handleStopGeneration = () => {
+    abortRef.current = true;
+    setLoading(false);
+    setStreamingId(null);
+  };
+
+  const handleDeleteMessage = (msgId: string) => {
+    if (!activeSessionId) return;
+    setSessions((prev) => {
+      const next = prev.map((s) =>
+        s.id !== activeSessionId
+          ? s
+          : {
+              ...s,
+              messages: s.messages.filter((m) => m.id !== msgId),
+            }
+      );
+      if (initializedRef.current) persistSessions(next);
+      return next;
+    });
+  };
+
+  const handleEditUserMessage = (text: string) => {
+    setInput(text);
+  };
+
+  const handleExportMarkdown = () => {
+    if (!activeSession || messages.length === 0) return;
+    let md = `# ${activeSession.title || 'AI 对话记录'}\n\n`;
+    md += `> 导出时间: ${new Date().toLocaleString()} | 模型: ${llm.provider} (${llm.model || '默认'})\n\n---\n\n`;
+    for (const m of messages) {
+      if (m.role === 'user') {
+        md += `### 👤 我 (${m.timestamp})\n\n${m.content}\n\n`;
+      } else {
+        md += `### 🤖 ${m.model || llm.provider} (${m.timestamp})\n\n`;
+        if (m.reasoning) {
+          md += `<details><summary>💭 深度思考过程 (点击展开)</summary>\n\n\`\`\`\n${m.reasoning}\n\`\`\`\n\n</details>\n\n`;
+        }
+        md += `${m.content}\n\n`;
+      }
+      md += `---\n\n`;
+    }
+
+    navigator.clipboard.writeText(md).then(() => {
+      alert('已将当前完整对话复制为 Markdown 格式到剪贴板！');
+    });
+  };
+
+  const handleDeleteSession = (sessId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const next = sessions.filter((s) => s.id !== sessId);
+    setSessions(next);
+    if (initializedRef.current) persistSessions(next);
+    if (activeSessionId === sessId) {
+      if (next.length > 0) {
+        setActiveSessionId(next[0].id);
+      } else {
+        handleNewSession();
+      }
+    }
+  };
+
+  const handleStartRenameSession = (sess: ChatSession, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingSessionId(sess.id);
+    setEditingSessionTitle(sess.title);
+  };
+
+  const handleSaveRenameSession = (sessId: string) => {
+    if (!editingSessionTitle.trim()) {
+      setEditingSessionId(null);
+      return;
+    }
+    const next = sessions.map((s) =>
+      s.id === sessId ? { ...s, title: editingSessionTitle.trim() } : s
+    );
+    setSessions(next);
+    persistSessions(next);
+    setEditingSessionId(null);
+  };
 
   /** 更新当前会话（无则创建），并持久化 */
   const upsertSession = useCallback((
@@ -356,10 +506,11 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
 
     const targetSession = nextSessions.find((s) => s.id === activeId);
     const existingMsgs = targetSession?.messages.filter((m) => m.id !== aiMsgId) ?? [userMsg];
+    const effectiveMsgs = enableContext ? existingMsgs : [userMsg];
     
     // 若处于特定预设模式，在后台静默附加指令
-    const apiMessages = existingMsgs.map((m, idx) => {
-      if (idx === existingMsgs.length - 1 && m.role === 'user' && dynamicPromptPrefix && !m.content.startsWith(dynamicPromptPrefix)) {
+    const apiMessages = effectiveMsgs.map((m, idx) => {
+      if (idx === effectiveMsgs.length - 1 && m.role === 'user' && dynamicPromptPrefix && !m.content.startsWith(dynamicPromptPrefix)) {
         return {
           role: m.role,
           content: `${dynamicPromptPrefix}${m.content}`,
@@ -372,20 +523,21 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
     });
 
     try {
-      let replyText: string;
+      let replyText = '';
       try {
-        // 首选：流式增量输出
         setStreamingId(aiMsgId);
-        // delta 缓冲节流：每个 token 都全量 map 重建 sessions 数组会造成
-        // 流式长回复时的明显卡顿，按 80ms 批量刷新一次即可保持流畅观感
+        abortRef.current = false;
         let pendingDelta = '';
+        let pendingReasoning = '';
         let lastFlushTs = 0;
         const flushDelta = (force = false) => {
           const now = Date.now();
-          if (!pendingDelta) return;
+          if (!pendingDelta && !pendingReasoning) return;
           if (!force && now - lastFlushTs < 80) return;
           const chunk = pendingDelta;
+          const reasoningChunk = pendingReasoning;
           pendingDelta = '';
+          pendingReasoning = '';
           lastFlushTs = now;
           setSessions((prev) =>
             prev.map((s) =>
@@ -393,20 +545,40 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                 ? s
                 : {
                     ...s,
-                    messages: s.messages.map((m) => (m.id === aiMsgId ? { ...m, content: m.content + chunk } : m)),
+                    messages: s.messages.map((m) =>
+                      m.id === aiMsgId
+                        ? {
+                            ...m,
+                            content: m.content + chunk,
+                            reasoning: (m.reasoning || '') + reasoningChunk,
+                          }
+                        : m
+                    ),
                   }
             )
           );
         };
-        replyText = await cmdChatLlmStream(apiMessages, llm, (delta) => {
-          pendingDelta += delta;
+        replyText = await cmdChatLlmStream(apiMessages, llm, (delta, reasoning) => {
+          if (abortRef.current) return;
+          if (delta) pendingDelta += delta;
+          if (reasoning) pendingReasoning += reasoning;
           flushDelta();
         });
         flushDelta(true);
       } catch (streamErr) {
-        // 回退：非流式一次性返回（旧后端 / 流式解析失败）
+        if (abortRef.current) return;
         console.warn('Streaming failed, falling back to non-stream chat:', streamErr);
         replyText = await cmdChatLlm(apiMessages, llm);
+      }
+      if (abortRef.current) return;
+
+      // 如果非流式或者包含 <think> 标签，拆分出思路文字
+      let finalContent = replyText;
+      let finalReasoning: string | undefined = undefined;
+      if (replyText.includes('<think>') && replyText.includes('</think>')) {
+        const parts = replyText.split('</think>');
+        finalReasoning = parts[0].replace('<think>', '').trim();
+        finalContent = parts.slice(1).join('</think>').trim();
       }
 
       // 以服务端完整文本兜底校准（防止个别丢包导致的内容缺失）
@@ -414,8 +586,19 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
         const next = prev.map((s) => {
           if (s.id !== activeId) return s;
           const target = s.messages.find((m) => m.id === aiMsgId);
-          if (target && replyText.trim() && target.content !== replyText && target.content.length < replyText.length) {
-            return { ...s, messages: s.messages.map((m) => (m.id === aiMsgId ? { ...m, content: replyText } : m)) };
+          if (target) {
+            const nextContent = finalContent.trim() && target.content !== finalContent && target.content.length < finalContent.length
+              ? finalContent
+              : target.content;
+            const nextReasoning = finalReasoning || target.reasoning;
+            return {
+              ...s,
+              messages: s.messages.map((m) =>
+                m.id === aiMsgId
+                  ? { ...m, content: nextContent, reasoning: nextReasoning }
+                  : m
+              ),
+            };
           }
           return s;
         });
@@ -423,6 +606,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
         return next;
       });
     } catch (err) {
+      if (abortRef.current) return;
       console.error('AI Chat Error:', err);
       const rawErr = typeof err === 'string' ? err : (err as Error)?.message || String(err || '');
       let friendly = rawErr;
@@ -457,6 +641,28 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
     }
   };
 
+  const handleRegenerate = async (aiMsgId: string) => {
+    if (loading || !activeSession) return;
+    const msgIndex = messages.findIndex((m) => m.id === aiMsgId);
+    if (msgIndex < 0) return;
+    const priorMessages = messages.slice(0, msgIndex);
+    const lastUserMsg = [...priorMessages].reverse().find((m) => m.role === 'user');
+    if (!lastUserMsg) return;
+
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id !== activeSessionId
+          ? s
+          : {
+              ...s,
+              messages: priorMessages,
+            }
+      )
+    );
+
+    await handleSend(lastUserMsg.content);
+  };
+
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     return () => {
@@ -478,14 +684,6 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
     setInput('');
   };
 
-  const handleDeleteSession = (id: string) => {
-    setSessions((prev) => {
-      const next = prev.filter((s) => s.id !== id);
-      if (initializedRef.current) persistSessions(next);
-      return next;
-    });
-    if (activeSessionId === id) setActiveSessionId(null);
-  };
 
   const handleClearChat = () => {
     if (activeSessionId) handleDeleteSession(activeSessionId);
@@ -562,19 +760,125 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
       )}
 
       {/* 右侧主聊天区 */}
-      <div className="flex flex-col flex-1 min-w-0 space-y-2.5">
-        {/* 顶部 Header：模型状态 + 快捷操作 */}
-        <div className="lg-panel p-3 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
-          <div className="flex items-center space-x-3">
+      <div className="flex flex-col flex-1 min-w-0 space-y-2.5 relative">
+        {/* 历史会话侧边抽屉 */}
+        {isHistoryOpen && (
+          <div
+            className="absolute inset-y-0 left-0 z-30 w-72 sm:w-80 rounded-2xl border border-[var(--g-border)] bg-[var(--g-surface)]/95 backdrop-blur-2xl shadow-2xl flex flex-col animate-in slide-in-from-left duration-200"
+            style={{ borderColor: 'var(--g-border)' }}
+          >
+            <div className="flex items-center justify-between p-3.5 border-b border-[var(--g-border)]">
+              <div className="flex items-center space-x-2">
+                <History className="h-4 w-4" style={{ color: 'var(--accent-text)' }} />
+                <h3 className="text-xs font-bold">历史对话 ({sessions.length})</h3>
+              </div>
+              <div className="flex items-center space-x-1">
+                <button
+                  type="button"
+                  onClick={handleNewSession}
+                  className="lg-btn !px-2 !py-1 !text-[11px] font-semibold"
+                  title="开启新对话"
+                >
+                  <SquarePen className="h-3 w-3" />
+                  <span>新建</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsHistoryOpen(false)}
+                  className="lg-btn lg-btn-ghost !p-1"
+                  title="关闭抽屉"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* 会话列表 */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1.5 scrollbar-thin">
+              {sessions.length === 0 ? (
+                <div className="p-8 text-center text-xs" style={{ color: 'var(--g-text-3)' }}>
+                  暂无历史对话记录
+                </div>
+              ) : (
+                sessions.map((sess) => {
+                  const isActive = sess.id === activeSessionId;
+                  const isEditing = editingSessionId === sess.id;
+                  return (
+                    <div
+                      key={sess.id}
+                      onClick={() => {
+                        setActiveSessionId(sess.id);
+                        setIsHistoryOpen(false);
+                      }}
+                      className={`group flex items-center justify-between p-2.5 rounded-xl cursor-pointer text-xs transition border ${
+                        isActive
+                          ? 'border-[var(--accent)] bg-[var(--accent-soft)] font-semibold shadow-xs'
+                          : 'border-transparent hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1 pr-2">
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={editingSessionTitle}
+                            onChange={(e) => setEditingSessionTitle(e.target.value)}
+                            onBlur={() => handleSaveRenameSession(sess.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveRenameSession(sess.id);
+                              if (e.key === 'Escape') setEditingSessionId(null);
+                            }}
+                            autoFocus
+                            onClick={(e) => e.stopPropagation()}
+                            className="lg-input !py-0.5 !px-1.5 text-xs w-full"
+                          />
+                        ) : (
+                          <div className="truncate font-medium">{sess.title}</div>
+                        )}
+                        <div className="text-[10px] mt-0.5 text-[var(--g-text-3)] flex items-center space-x-1.5">
+                          <span>{sess.messages.length} 条对话</span>
+                          <span>·</span>
+                          <span>{sessionDisplayTime(sess.updatedAt)}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={(e) => handleStartRenameSession(sess, e)}
+                          className="p-1 rounded hover:bg-[var(--g-surface-3)] text-[var(--g-text-3)] hover:text-[var(--g-text-1)]"
+                          title="重命名会话"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteSession(sess.id, e)}
+                          className="p-1 rounded hover:bg-red-500/10 text-[var(--g-text-3)] hover:text-red-500"
+                          title="删除此会话"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 顶部 Header：模型状态 + 快捷操作（紧凑流线排布） */}
+        <div className="lg-panel px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center space-x-2.5">
             <div
-              className="flex h-9 w-9 items-center justify-center rounded-xl text-white shadow-md"
-              style={{ background: 'var(--accent)', boxShadow: '0 3px 12px color-mix(in srgb, var(--accent) 30%, transparent)' }}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-white shadow-xs shrink-0"
+              style={{ background: 'var(--accent)' }}
             >
-              <Bot className="h-5 w-5" />
+              <Bot className="h-4 w-4" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <h2 className="text-sm font-bold">AI 智能对话</h2>
+                <h2 className="text-xs sm:text-sm font-bold">AI 智能对话</h2>
                 {configuredLlmConfigs.length > 1 ? (
                   <GlassSelect
                     value={llm.id || `${llm.provider}-${llm.model}`}
@@ -599,20 +903,20 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                     })}
                   />
                 ) : configuredLlmConfigs.length === 1 ? (
-                  <span className="lg-pill font-semibold">
+                  <span className="lg-pill font-semibold text-[11px] py-0.5 px-2">
                     {configuredLlmConfigs[0].provider} ({configuredLlmConfigs[0].model || '默认'})
                   </span>
                 ) : (
-                  <span className="lg-pill">{llm.provider}</span>
+                  <span className="lg-pill text-[11px] py-0.5 px-2">{llm.provider}</span>
                 )}
               </div>
-              <p className="text-[11px] font-mono mt-0.5 flex items-center gap-1.5 flex-wrap" style={{ color: 'var(--g-text-3)' }}>
+              <p className="text-[10px] font-mono flex items-center gap-1.5 flex-wrap leading-none mt-0.5" style={{ color: 'var(--g-text-3)' }}>
                 <span>Model: <span className="font-semibold" style={{ color: 'var(--g-text-2)' }}>{llm.model || 'deepseek-chat'}</span></span>
                 {!isModelConfigured(llm) && onOpenSettings && (
                   <button
                     type="button"
                     onClick={onOpenSettings}
-                    className="text-amber-500 hover:underline cursor-pointer font-sans text-[10.5px] font-semibold flex items-center gap-0.5"
+                    className="text-amber-500 hover:underline cursor-pointer font-sans text-[10px] font-semibold flex items-center gap-0.5"
                   >
                     <span>⚠️ 未配置 Key</span>
                     <span>(前往设置)</span>
@@ -622,56 +926,101 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1 flex-wrap gap-y-1">
+            <button
+              type="button"
+              onClick={() => setIsHistoryOpen(!isHistoryOpen)}
+              className={`lg-btn !px-2 !py-1 !text-[11px] font-medium transition ${
+                isHistoryOpen ? 'lg-btn-primary font-semibold' : ''
+              }`}
+              title="查看与管理历史对话记录"
+            >
+              <History className="h-3 w-3" />
+              <span>历史 ({sessions.length})</span>
+            </button>
+
             <button
               type="button"
               onClick={handleNewSession}
-              className="lg-btn !px-3 !py-1.5 !text-xs font-semibold"
+              className="lg-btn !px-2 !py-1 !text-[11px] font-semibold"
               title="开启新的对话会话"
             >
-              <SquarePen className="h-3.5 w-3.5" />
-              新对话
+              <SquarePen className="h-3 w-3" />
+              <span>新对话</span>
             </button>
+
+            <button
+              type="button"
+              onClick={handleExportMarkdown}
+              disabled={messages.length === 0}
+              className="lg-btn !px-2 !py-1 !text-[11px] transition disabled:opacity-40 disabled:cursor-not-allowed"
+              title="将当前完整对话复制为 Markdown 格式"
+            >
+              <Download className="h-3 w-3" />
+              <span>导出</span>
+            </button>
+
             <button
               type="button"
               onClick={handleClearChat}
-              className="lg-btn lg-btn-ghost !px-3 !py-1.5 !text-xs"
+              className="lg-btn lg-btn-ghost !px-1.5 !py-1 !text-[11px]"
               title="清空当前聊天会话"
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <Trash2 className="h-3 w-3" />
               <span>清空</span>
             </button>
           </div>
         </div>
 
-        {/* 快捷 Prompt 模板 Pills */}
-        <div className="flex items-center space-x-2 overflow-x-auto scrollbar-none shrink-0 py-0.5">
-          {PROMPT_PRESETS.map((preset) => {
-            const Icon = preset.icon;
-            const isActive = activePresetLabel === preset.label;
-            const selectedLang = AI_TRANSLATE_LANGUAGES.find((l) => l.code === translateTargetLang);
-            const pillLabel = preset.id === 'ai_translate' && isActive && translateTargetLang !== 'auto'
-              ? `AI 翻译 (${selectedLang?.shortName || translateTargetLang})`
-              : preset.label;
-            return (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => applyPresetPrompt(preset.label)}
-                className={`lg-btn !px-3.5 !py-1.5 !text-xs !rounded-full shrink-0 whitespace-nowrap transition-all ${
-                  isActive ? 'lg-btn-primary font-semibold shadow-sm' : ''
-                }`}
-                title={preset.id === 'ai_translate' ? '点击开启 AI 对话翻译模式，支持 30+ 语种自由互译' : undefined}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                <span>{pillLabel}</span>
-              </button>
-            );
-          })}
+        {/* 快捷 Prompt 模板 Pills 与上下文记忆开关（紧凑排布） */}
+        <div className="flex items-center justify-between gap-1.5 overflow-x-auto scrollbar-none shrink-0 py-0.5">
+          <div className="flex items-center space-x-1.5 shrink-0">
+            {PROMPT_PRESETS.map((preset) => {
+              const Icon = preset.icon;
+              const isActive = activePresetLabel === preset.label;
+              const selectedLang = AI_TRANSLATE_LANGUAGES.find((l) => l.code === translateTargetLang);
+              const pillLabel = preset.id === 'ai_translate' && isActive && translateTargetLang !== 'auto'
+                ? `AI 翻译 (${selectedLang?.shortName || translateTargetLang})`
+                : preset.label;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => applyPresetPrompt(preset.label)}
+                  className={`lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 whitespace-nowrap transition-all ${
+                    isActive ? 'lg-btn-primary font-semibold shadow-xs' : ''
+                  }`}
+                  title={preset.id === 'ai_translate' ? '点击开启 AI 对话翻译模式，支持 30+ 语种自由互译' : undefined}
+                >
+                  <Icon className="h-3 w-3" />
+                  <span>{pillLabel}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 连续上下文记忆开关 */}
+          <button
+            type="button"
+            onClick={() => setEnableContext(!enableContext)}
+            className={`lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 flex items-center space-x-1 transition ${
+              enableContext
+                ? 'border-blue-500/50 bg-blue-500/10 text-blue-500 font-semibold'
+                : 'opacity-70'
+            }`}
+            title={enableContext ? '已开启连续上下文记忆（提问时自动携带上文对话）' : '已关闭上下文记忆（单轮独立提问，更省 Token，速度更快）'}
+          >
+            <BrainCircuit className="h-3 w-3" />
+            <span>{enableContext ? '连续对话' : '单轮问答'}</span>
+          </button>
         </div>
 
         {/* 聊天消息流主视图 */}
-        <div className="lg-panel flex-1 min-h-0 p-4 sm:p-5 overflow-y-auto space-y-4 scrollbar-thin">
+        <div
+          ref={messagesContainerRef}
+          onScroll={handleScroll}
+          className="lg-panel flex-1 min-h-0 p-3 sm:p-4 overflow-y-auto space-y-3 scrollbar-thin relative"
+        >
           {/* Error Alert */}
           {errorMsg && (
             <div
@@ -802,36 +1151,213 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                     >
                       {isUser ? (
                         <p className="whitespace-pre-wrap select-text">{msg.content}</p>
-                      ) : msg.content ? (
-                        <FormattedContent text={msg.content} isLight={isLight} streaming={isStreaming} />
                       ) : (
-                        <span className="inline-flex items-center space-x-2">
-                          <span className="h-2 w-2 rounded-full animate-ping" style={{ background: 'var(--accent)' }} />
-                          <span style={{ color: 'var(--g-text-3)' }}>AI 思考中…</span>
-                        </span>
+                        <div className="space-y-3">
+                          {/* 深度思考过程 / 思路文字折叠卡片：回复完默认闭合，限高紧凑不遮挡上下文 */}
+                          {(msg.reasoning || (isStreaming && !msg.content)) && (() => {
+                            const isCollapsed = msg.isReasoningCollapsed !== undefined
+                              ? msg.isReasoningCollapsed
+                              : (!isStreaming || !!msg.content);
+                            return (
+                              <div
+                                className="rounded-xl border border-dashed overflow-hidden text-xs transition-all animate-in fade-in"
+                                style={{
+                                  background: isLight ? 'rgba(0,0,0,0.02)' : 'rgba(255,255,255,0.02)',
+                                  borderColor: 'color-mix(in srgb, var(--accent) 30%, var(--g-border))',
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => toggleReasoningCollapse(msg.id)}
+                                  className="w-full flex items-center justify-between px-3 py-1.5 text-left font-medium transition cursor-pointer select-none group hover:bg-[var(--g-surface-2)]"
+                                  style={{ color: 'var(--g-text-2)' }}
+                                >
+                                  <div className="flex items-center space-x-2 min-w-0">
+                                    <BrainCircuit
+                                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${
+                                        isStreaming && !msg.content ? 'animate-pulse' : 'opacity-70'
+                                      }`}
+                                      style={{ color: 'var(--accent-text)' }}
+                                    />
+                                    <span className="font-semibold text-xs flex items-center gap-1.5">
+                                      <span>💭 思考过程</span>
+                                      {isStreaming && !msg.content ? (
+                                        <span className="text-[10.5px] font-normal font-mono" style={{ color: 'var(--accent-text)' }}>
+                                          {waitingSeconds < 3
+                                            ? '(正在构建思维链...)'
+                                            : `(正在推导 ${waitingSeconds}s...)`}
+                                        </span>
+                                      ) : msg.reasoning ? (
+                                        <span className="text-[10.5px] font-normal text-emerald-500 font-sans">
+                                          · 思考完毕 {msg.reasoning.length > 0 ? `(${msg.reasoning.length} 字)` : ''}
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center space-x-1.5 text-[11px]" style={{ color: 'var(--g-text-3)' }}>
+                                    <span>{isCollapsed ? '展开思路' : '收起思路'}</span>
+                                    <ChevronDown
+                                      className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                                        isCollapsed ? '-rotate-90' : ''
+                                      }`}
+                                    />
+                                  </div>
+                                </button>
+
+                                {!isCollapsed && (
+                                  <div
+                                    className="px-3 pb-2.5 pt-1 border-t border-[var(--g-border)]/30 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap select-text max-h-36 overflow-y-auto scrollbar-thin"
+                                    style={{ color: isLight ? '#475569' : '#94a3b8' }}
+                                  >
+                                    {msg.reasoning ? (
+                                      <>
+                                        {msg.reasoning}
+                                        {isStreaming && !msg.content && (
+                                          <span
+                                            className="inline-block w-1.5 h-3 ml-1 animate-pulse align-middle rounded-xs"
+                                            style={{ background: 'var(--accent)' }}
+                                          />
+                                        )}
+                                      </>
+                                    ) : (
+                                      <div className="space-y-1 py-1 text-[11px] font-sans" style={{ color: 'var(--g-text-3)' }}>
+                                        <div className="flex items-center space-x-2">
+                                          <span className="h-1.5 w-1.5 rounded-full animate-ping" style={{ background: 'var(--accent)' }} />
+                                          <span className="font-medium">正在建立端到端流式通道，连接推理模型 ({llm.model || 'SenseNova'})...</span>
+                                        </div>
+                                        <div className="text-[10.5px] opacity-75 pl-3.5">
+                                          已耗时 {waitingSeconds}s · 正在接收模型实时思维链，推理细节将逐字跳动上屏
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+
+                          {/* 正式回答内容 */}
+                          {msg.content ? (
+                            <FormattedContent text={msg.content} isLight={isLight} streaming={isStreaming} />
+                          ) : null}
+                        </div>
                       )}
                     </div>
 
                     {/* Actions bar for AI messages */}
-                    {!isUser && !isStreaming && msg.content && (
-                      <div className={`flex items-center space-x-2 pt-1 px-1 text-xs`}>
+                    {!isUser && (
+                      <div className="flex items-center space-x-3 pt-1 px-1 text-xs select-none">
+                        {msg.content && (
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(msg.id, msg.content)}
+                            className="flex items-center space-x-1 transition cursor-pointer hover:opacity-80"
+                            style={{ color: 'var(--g-text-3)' }}
+                          >
+                            {copiedId === msg.id ? (
+                              <>
+                                <Check className="h-3.5 w-3.5" style={{ color: 'var(--ok)' }} />
+                                <span style={{ color: 'var(--ok)' }} className="font-semibold">已复制</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-3.5 w-3.5" />
+                                <span>复制回答</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+
+                        {msg.reasoning && (
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(`${msg.id}_reasoning`, msg.reasoning!)}
+                            className="flex items-center space-x-1 transition cursor-pointer hover:opacity-80"
+                            style={{ color: 'var(--g-text-3)' }}
+                          >
+                            {copiedId === `${msg.id}_reasoning` ? (
+                              <>
+                                <Check className="h-3.5 w-3.5" style={{ color: 'var(--ok)' }} />
+                                <span style={{ color: 'var(--ok)' }} className="font-semibold">思路已复制</span>
+                              </>
+                            ) : (
+                              <>
+                                <BrainCircuit className="h-3.5 w-3.5" />
+                                <span>复制思路</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+
+                        {!isStreaming && (
+                          <button
+                            type="button"
+                            onClick={() => handleRegenerate(msg.id)}
+                            className="flex items-center space-x-1 transition cursor-pointer hover:opacity-80"
+                            style={{ color: 'var(--g-text-3)' }}
+                            title="重新生成此回答"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            <span>重新生成</span>
+                          </button>
+                        )}
+
+                        {!isStreaming && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteMessage(msg.id)}
+                            className="flex items-center space-x-1 transition cursor-pointer hover:text-red-500 opacity-60 hover:opacity-100"
+                            style={{ color: 'var(--g-text-3)' }}
+                            title="删除此条消息"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Actions bar for User messages */}
+                    {isUser && (
+                      <div className="flex items-center space-x-2.5 pt-0.5 px-1 text-xs select-none justify-end">
                         <button
                           type="button"
                           onClick={() => handleCopy(msg.id, msg.content)}
                           className="flex items-center space-x-1 transition cursor-pointer hover:opacity-80"
                           style={{ color: 'var(--g-text-3)' }}
+                          title="复制提问"
                         >
                           {copiedId === msg.id ? (
                             <>
-                              <Check className="h-3.5 w-3.5" style={{ color: 'var(--ok)' }} />
-                              <span style={{ color: 'var(--ok)' }} className="font-semibold">已复制</span>
+                              <Check className="h-3 w-3" style={{ color: 'var(--ok)' }} />
+                              <span style={{ color: 'var(--ok)' }}>已复制</span>
                             </>
                           ) : (
                             <>
-                              <Copy className="h-3.5 w-3.5" />
-                              <span>复制回答</span>
+                              <Copy className="h-3 w-3" />
+                              <span>复制</span>
                             </>
                           )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleEditUserMessage(msg.content)}
+                          className="flex items-center space-x-1 transition cursor-pointer hover:opacity-80"
+                          style={{ color: 'var(--g-text-3)' }}
+                          title="填入输入框重新编辑"
+                        >
+                          <Pencil className="h-3 w-3" />
+                          <span>编辑</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMessage(msg.id)}
+                          className="flex items-center space-x-1 transition cursor-pointer hover:text-red-500 opacity-60 hover:opacity-100"
+                          style={{ color: 'var(--g-text-3)' }}
+                          title="删除此条提问"
+                        >
+                          <Trash2 className="h-3 w-3" />
                         </button>
                       </div>
                     )}
@@ -841,22 +1367,34 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
             })
           )}
 
+          {/* 悬浮滚到底部按钮 */}
+          {showScrollBottom && (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="sticky bottom-3 float-right z-20 lg-pill !p-2.5 shadow-xl hover:scale-110 active:scale-95 transition-all cursor-pointer bg-[var(--g-surface)] border border-[var(--g-border)]"
+              title="滚动到最新消息"
+            >
+              <ArrowDown className="h-4 w-4" style={{ color: 'var(--accent-text)' }} />
+            </button>
+          )}
+
           <div ref={messagesEndRef} />
         </div>
 
-        {/* 底部 Input 表单发送区域 */}
-        <div className="lg-panel p-3.5 space-y-2.5 shrink-0">
+        {/* 底部 Input 表单发送区域（一体化现代自适应输入条，释放超过 100px 垂直视野） */}
+        <div className="lg-panel p-2 sm:p-2.5 space-y-1.5 shrink-0 transition-all focus-within:border-[var(--accent)] shadow-xs">
           {activePresetLabel && (
-            <div className="flex items-center justify-between px-3 py-1.5 text-xs font-medium rounded-xl border border-[var(--g-hairline)]" style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}>
-              <div className="flex items-center space-x-2 min-w-0 flex-wrap gap-y-1">
-                <span className="flex items-center space-x-1.5 shrink-0">
-                  <Sparkles className="h-3.5 w-3.5 shrink-0" />
-                  <span>已开启 <strong>【{activePresetLabel}】</strong> 模式</span>
+            <div className="flex items-center justify-between px-2.5 py-1 text-[11px] font-medium rounded-lg border border-[var(--g-hairline)]" style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}>
+              <div className="flex items-center space-x-1.5 min-w-0 flex-wrap gap-y-0.5">
+                <span className="flex items-center space-x-1 shrink-0">
+                  <Sparkles className="h-3 w-3 shrink-0" />
+                  <span>已激活 <strong>【{activePresetLabel}】</strong></span>
                 </span>
 
                 {activePresetLabel === 'AI 智能翻译' && (
-                  <div className="flex items-center space-x-1.5 shrink-0">
-                    <span className="text-[11px] opacity-80 ml-1">目标语言:</span>
+                  <div className="flex items-center space-x-1 shrink-0">
+                    <span className="text-[10px] opacity-80 ml-1">目标语言:</span>
                     <GlassSelect
                       value={translateTargetLang}
                       onChange={setTranslateTargetLang}
@@ -883,17 +1421,18 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                   }
                   setActivePresetLabel(null);
                 }}
-                className="text-xs cursor-pointer flex items-center space-x-1 hover:opacity-75 font-semibold shrink-0 ml-2"
+                className="text-[11px] cursor-pointer flex items-center space-x-0.5 hover:opacity-75 font-semibold shrink-0 ml-2"
                 style={{ color: 'var(--accent-text)' }}
               >
-                <X className="h-3.5 w-3.5" />
-                <span>退出模式</span>
+                <X className="h-3 w-3" />
+                <span>退出</span>
               </button>
             </div>
           )}
 
-          <div className="flex flex-col space-y-2">
+          <div className="relative flex items-end gap-2">
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -911,26 +1450,44 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                   ? `【已激活 ${activePresetLabel}】输入内容直接发送 (Enter 发送，Shift+Enter 换行)...`
                   : '输入翻译需求、多语种润色或任意问题 (Enter 发送，Shift+Enter 换行)...'
               }
-              rows={3}
-              className="lg-input w-full p-3 text-[14px] leading-relaxed resize-none scrollbar-thin min-h-[78px]"
+              rows={1}
+              className="w-full bg-transparent border-0 focus:outline-none focus:ring-0 px-2 py-1 text-xs sm:text-[13px] leading-relaxed resize-none scrollbar-thin max-h-[120px] min-h-[36px]"
+              style={{ color: 'var(--g-text)' }}
             />
 
-            <div className="flex items-center justify-between pt-0.5">
-              <div className="text-xs flex items-center space-x-2 font-mono" style={{ color: 'var(--g-text-3)' }}>
-                <span>{input.length} 字符</span>
-                <span>·</span>
-                <span>Enter 发送 / Shift+Enter 换行</span>
-              </div>
+            <div className="flex items-center gap-1.5 shrink-0 pb-0.5 pr-0.5 select-none">
+              {input.length > 0 && (
+                <span className="text-[10px] font-mono opacity-50 hidden sm:inline-block" style={{ color: 'var(--g-text-3)' }}>
+                  {input.length} 字
+                </span>
+              )}
 
-              <button
-                type="button"
-                onClick={() => handleSend()}
-                disabled={!input.trim() || loading}
-                className="lg-btn lg-btn-primary !px-6 !py-2 !text-xs font-bold shrink-0 shadow-md shadow-blue-500/20"
-              >
-                <Send className="h-3.5 w-3.5" />
-                <span>发送</span>
-              </button>
+              {loading ? (
+                <button
+                  type="button"
+                  onClick={handleStopGeneration}
+                  className="flex h-7.5 px-2.5 items-center justify-center space-x-1 rounded-lg bg-rose-500 hover:bg-rose-600 text-white shadow-xs transition active:scale-95 cursor-pointer"
+                  title="中断并停止当前回答生成"
+                >
+                  <Square className="h-3 w-3 fill-current" />
+                  <span className="text-xs font-semibold">停止</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleSend()}
+                  disabled={!input.trim()}
+                  className={`flex h-7.5 px-3 items-center justify-center space-x-1 rounded-lg transition-all cursor-pointer ${
+                    input.trim()
+                      ? 'bg-[var(--accent)] text-white shadow-xs hover:opacity-90 active:scale-95'
+                      : 'opacity-30 cursor-not-allowed bg-[var(--g-surface-3)] text-[var(--g-text-3)]'
+                  }`}
+                  title="发送 (Enter 发送，Shift+Enter 换行)"
+                >
+                  <Send className="h-3 w-3" />
+                  <span className="text-xs font-semibold">发送</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -36,7 +36,7 @@ pub static SELF_CAUSED_SEQ: AtomicU32 = AtomicU32::new(0);
 pub fn clipboard_text_worth_translating(text: &str, last_accepted: &str) -> bool {
     let trimmed = text.trim();
     let char_count = trimmed.chars().count();
-    if char_count < 2 || char_count > 500 {
+    if !(2..=500).contains(&char_count) {
         return false;
     }
     // Skip pure numbers / single symbols the OCR-style flows love to copy

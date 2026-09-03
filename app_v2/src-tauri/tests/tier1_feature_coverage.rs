@@ -58,6 +58,7 @@ mod feature_1_container_ui {
                 api_key: "sk-test-key".to_string(),
                 model: "deepseek-chat".to_string(),
                 endpoint: "https://api.deepseek.com/v1".to_string(),
+                enabled: Some(true),
             }),
             translation_tiers: vec![
                 "Preset Dictionary".to_string(),
@@ -384,6 +385,7 @@ mod feature_4_multitier_translation {
             api_key: "sk-test-123".to_string(),
             model: "deepseek-chat".to_string(),
             endpoint: "https://api.deepseek.com/v1/chat/completions".to_string(),
+            enabled: Some(true),
         };
         assert!(config.endpoint.starts_with("https://"));
         assert_eq!(config.provider, "DeepSeek");

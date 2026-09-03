@@ -5,7 +5,7 @@ import {
   Camera, Zap, Bot, BookOpen, Sliders, Sparkles, ShieldCheck, Globe, Palette,
   Sun, Moon, Monitor, Plus, Trash2, Edit3, Search, Download, Upload, X,
   FileSpreadsheet, Copy, Check, Type, Languages, Tag, FileText, WifiOff,
-  HardDriveDownload, CloudUpload,
+  HardDriveDownload, CloudUpload, Power,
 } from 'lucide-react';
 import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
@@ -81,9 +81,10 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
     updateLlmConfig,
     deleteLlmConfig,
     setActiveLlmConfig,
+    toggleLlmConfigEnabled,
   } = useLlmPanelState();
   void _llmSettings; void setShowApiKey; void setShowModelPicker; void setLlmConfig;
-  void addLlmConfig; void updateLlmConfig; void setActiveLlmConfig;
+  void addLlmConfig; void updateLlmConfig; void setActiveLlmConfig; void toggleLlmConfigEnabled;
 
   const [recordingTarget, setRecordingTarget] = useState<'capture' | 'spotlight' | 'clipboard' | 'toggleWindow' | null>(null);
 
@@ -792,6 +793,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
               <div className="flex flex-wrap gap-2">
                 {llmPool.map((m) => {
                   const isActive = llm.id ? m.id === llm.id : m.provider === llm.provider && m.model === llm.model;
+                  const isModelEnabled = m.enabled ?? true;
                   return (
                     <div
                       key={m.id || `${m.provider}-${m.model}-${m.endpoint}`}
@@ -800,27 +802,66 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                       onClick={() => m.id && setActiveLlmConfig(m.id)}
                       onKeyDown={(e) => { if (e.key === 'Enter' && m.id) setActiveLlmConfig(m.id); }}
                       className={`group flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-xl border text-[11px] font-medium transition-all cursor-pointer select-none ${
-                        isActive
-                          ? (isLight
+                        !isModelEnabled
+                          ? isLight
+                            ? 'bg-slate-100/90 text-slate-400 border-slate-200 opacity-60 hover:opacity-100'
+                            : 'bg-zinc-900/40 text-zinc-500 border-white/5 opacity-50 hover:opacity-90'
+                          : isActive
+                            ? isLight
                               ? 'bg-blue-600 text-white border-blue-400 shadow-md ring-2 ring-blue-500/25'
-                              : 'bg-blue-600 text-white border-blue-400/60 shadow-md ring-2 ring-blue-500/30')
-                          : (isLight
+                              : 'bg-blue-600 text-white border-blue-400/60 shadow-md ring-2 ring-blue-500/30'
+                            : isLight
                               ? 'bg-white text-slate-700 border-slate-200 hover:border-blue-300 hover:bg-blue-50/60'
-                              : 'bg-zinc-900/80 text-zinc-300 border-white/10 hover:border-blue-400/40 hover:bg-zinc-800')
+                              : 'bg-zinc-900/80 text-zinc-300 border-white/10 hover:border-blue-400/40 hover:bg-zinc-800'
                       }`}
-                      title="点击切换为激活模型"
+                      title={isModelEnabled ? '点击切换为激活模型（状态：已启用）' : '点击切换为激活模型（状态：已停用）'}
                     >
-                      <span className={`font-bold ${isActive ? 'text-white' : (isLight ? 'text-slate-500' : 'text-zinc-400')}`}>{m.provider}</span>
-                      <span className={`font-mono max-w-[180px] truncate ${isActive ? 'text-white/95' : 'text-blue-600'}`}>{m.model || '(未指定模型)'}</span>
-                      {!!m.apiKey && (
-                        <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-emerald-300' : 'bg-emerald-500'}`} title="已配置 API Key" />
+                      <span className={`font-mono font-medium max-w-[200px] truncate ${
+                        isActive && isModelEnabled ? 'text-white' : isModelEnabled ? (isLight ? 'text-blue-700 font-semibold' : 'text-blue-300 font-semibold') : 'line-through text-zinc-400'
+                      }`}>
+                        {m.model || m.provider || '(未指定模型)'}
+                      </span>
+                      {!isModelEnabled ? (
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-normal ${
+                          isLight ? 'bg-slate-200 text-slate-600' : 'bg-zinc-800 text-zinc-400'
+                        }`}>
+                          已停用
+                        </span>
+                      ) : (
+                        !!m.apiKey && (
+                          <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-emerald-300' : 'bg-emerald-500'}`} title="已配置 API Key" />
+                        )
                       )}
+
+                      {/* 胶囊快速开关 */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (m.id) toggleLlmConfigEnabled(m.id);
+                        }}
+                        className={`p-1 rounded-lg transition cursor-pointer ${
+                          isModelEnabled
+                            ? isActive
+                              ? 'hover:bg-white/20 text-emerald-300 hover:text-white'
+                              : isLight
+                                ? 'hover:bg-emerald-50 text-emerald-600'
+                                : 'hover:bg-emerald-500/20 text-emerald-400'
+                            : isLight
+                              ? 'hover:bg-slate-200 text-slate-400 hover:text-slate-700'
+                              : 'hover:bg-zinc-700 text-zinc-500 hover:text-zinc-200'
+                        }`}
+                        title={isModelEnabled ? '点击停用该模型' : '点击启用该模型'}
+                      >
+                        <Power className="h-3.5 w-3.5" />
+                      </button>
+
                       {llmPool.length > 1 && (
                         <button
                           type="button"
                           onClick={(e) => { e.stopPropagation(); if (m.id) deleteLlmConfig(m.id); }}
                           className={`p-1 rounded-lg transition cursor-pointer opacity-60 hover:opacity-100 ${
-                            isActive ? 'hover:bg-white/20 text-white' : (isLight ? 'hover:bg-rose-50 text-rose-500' : 'hover:bg-rose-500/20 text-rose-400')
+                            isActive && isModelEnabled ? 'hover:bg-white/20 text-white' : (isLight ? 'hover:bg-rose-50 text-rose-500' : 'hover:bg-rose-500/20 text-rose-400')
                           }`}
                           title={isActive ? '删除当前激活模型（自动切换）' : '删除该模型'}
                         >
@@ -838,8 +879,55 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
               </div>
 
               <p className={`text-[10px] leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
-                支持 DeepSeek / OpenAI / 本地私有化 Ollama / 智谱 GLM / 自定义兼容接口。多模型一键保存切换，下方表单实时编辑当前「激活模型」，测试与拉取模型操作均针对激活模型执行。
+                支持 DeepSeek / OpenAI / 本地私有化 Ollama / 智谱 GLM / 自定义兼容接口。每个模型均支持独立开启/关闭，点击电源图标或下方开关可快速启停，关闭后将暂停调用该模型。
               </p>
+            </div>
+
+            {/* 当前激活模型启停控制栏 */}
+            <div className={`flex items-center justify-between p-3.5 rounded-2xl border ${
+              isLight ? 'bg-slate-50/70 border-slate-200' : 'bg-zinc-950/40 border-white/[0.06]'
+            }`}>
+              <div className="min-w-0">
+                <div className="flex items-center space-x-2">
+                  <span className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
+                    启用当前模型
+                  </span>
+                  <span className={`text-[10px] font-medium px-2 py-0.2 rounded-full border ${
+                    (llm.enabled ?? true)
+                      ? isLight
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        : 'bg-emerald-500/15 border-emerald-400/30 text-emerald-300'
+                      : isLight
+                        ? 'bg-slate-100 border-slate-200 text-slate-500'
+                        : 'bg-white/5 border-white/10 text-zinc-400'
+                  }`}>
+                    {(llm.enabled ?? true) ? '已开启' : '已停用'}
+                  </span>
+                </div>
+                <p className={`mt-0.5 text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                  {(llm.enabled ?? true)
+                    ? `当前模型（${llm.provider} - ${llm.model || '默认'}）已开启，将参与 AI 翻译与分层调用`
+                    : `当前模型（${llm.provider} - ${llm.model || '默认'}）已停用，系统将暂停该模型的调用`}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLlmConfig({ enabled: !(llm.enabled ?? true) })}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-3 ${
+                  (llm.enabled ?? true)
+                    ? 'bg-blue-600'
+                    : isLight
+                      ? 'bg-slate-300'
+                      : 'bg-zinc-700'
+                }`}
+                title={(llm.enabled ?? true) ? '停用此模型' : '启用此模型'}
+              >
+                <span
+                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                    (llm.enabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
+                  }`}
+                />
+              </button>
             </div>
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

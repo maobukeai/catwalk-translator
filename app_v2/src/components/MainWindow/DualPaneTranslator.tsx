@@ -26,6 +26,11 @@ import {
   Settings,
   Flame,
   MessageSquare,
+  Loader2,
+  Eye,
+  Type,
+  Maximize2,
+  FileText,
 } from "lucide-react";
 import { cmdUniversalTranslate, detectLanguage, saveTranslationHistory, cmdImageOcrTranslate, cmdOpenPin } from "../../services/tauri";
 import { exportTranslationImage } from "../../services/exportImage";
@@ -33,6 +38,8 @@ import { speakText } from "../../services/tts";
 import type { ImageTranslateResponse } from "../../services/tauri";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppTheme } from "../../hooks/useAppTheme";
+import { buildCaptureEngineChoices, buildImageTranslateEngineChoices, isLlmChannelReady } from "../../services/engineOptions";
+import { toTranslucentBg, toSolidBg, isLightBg, getCardTextColor } from "../Overlay/OverlayBlockCard";
 import type {
   AppSettings,
   LanguageCode,
@@ -42,6 +49,28 @@ import type {
 import { LanguageDropdown } from "./LanguageDropdown";
 import { TranslationStyleDropdown } from "./TranslationStyleDropdown";
 
+/** 汉化与精简来源渠道标签，让用户对当前使用的具体模型一目了然 */
+export function formatSourceTier(tier?: string): { label: string; isLlm: boolean; isDict: boolean } {
+  if (!tier) return { label: '智能通道', isLlm: false, isDict: false };
+  const lower = tier.toLowerCase();
+  if (lower.includes('llm') || lower.includes('ai') || lower.includes('deepseek') || lower.includes('gpt') || lower.includes('claude') || lower.includes('qwen')) {
+    const clean = tier.replace(/LLM API\s*/i, '').replace(/[()]/g, '').trim();
+    return { label: clean ? `AI: ${clean}` : 'AI 大模型', isLlm: true, isDict: false };
+  }
+  if (lower.includes('dict') || lower.includes('词库') || lower.includes('ecdict') || lower.includes('术语') || lower.includes('cg')) {
+    const clean = tier.replace(/Preset\s*/i, '').replace(/[()]/g, '').trim();
+    return { label: clean || '专业词库', isLlm: false, isDict: true };
+  }
+  if (lower.includes('fallback') || lower.includes('online')) {
+    return { label: '在线通道', isLlm: false, isDict: false };
+  }
+  if (lower.includes('google')) return { label: 'Google 翻译', isLlm: false, isDict: false };
+  if (lower.includes('bing')) return { label: '微软 Bing', isLlm: false, isDict: false };
+  if (lower.includes('youdao') || lower.includes('有道')) return { label: '网易有道', isLlm: false, isDict: false };
+  if (lower.includes('deepl')) return { label: 'DeepL 翻译', isLlm: false, isDict: false };
+  return { label: tier, isLlm: false, isDict: false };
+}
+
 /** 批量图片翻译队列中的单张图片条目 */
 interface ImageQueueItem {
   id: string;
@@ -49,6 +78,7 @@ interface ImageQueueItem {
   dataUrl: string;
   result: ImageTranslateResponse | null;
   error: string | null;
+  isTranslating?: boolean;
 }
 
 interface DualPaneTranslatorProps {
@@ -128,8 +158,8 @@ function getShortEngineName(fullName: string): string {
   if (fullName.includes('Yandex')) return 'Yandex';
   if (fullName.includes('AI') || fullName.includes('LLM')) {
     const match = fullName.match(/\((.*?)\)/);
-    const provider = match ? match[1] : 'AI';
-    return `${provider}`;
+    const label = match ? match[1] : 'AI';
+    return `${label} 深度翻译`;
   }
   if (fullName.includes('词库') || fullName.includes('Preset')) return 'CG 词库';
   return fullName.replace(/（.*?）|\(.*?\)/g, '').trim();
@@ -207,6 +237,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
     }
   });
   const [retryingEngines, setRetryingEngines] = useState<Record<string, boolean>>({});
+  const [isAiRefining, setIsAiRefining] = useState(false);
 
   const [copied, setCopied] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -216,9 +247,18 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   // 图片翻译（Ctrl+V 粘贴 / 拖拽图片文件触发，走本地 OCR + 多级翻译管线）
   // ── 批量图片翻译队列：粘贴 / 拖入多张图片，逐张排队识别翻译 ──
   const [imageItems, setImageItems] = useState<ImageQueueItem[]>([]);
+  const [imageTranslateEngine, setImageTranslateEngine] = useState<string>('auto');
+  const [imageViewMode, setImageViewMode] = useState<'overlay' | 'original' | 'bilingual' | 'text'>('overlay');
+  const [copiedBlockIndex, setCopiedBlockIndex] = useState<string | null>(null);
+  const [hoveredBlockKey, setHoveredBlockKey] = useState<string | null>(null);
+  const [zoomModalImage, setZoomModalImage] = useState<{ url: string; name: string } | null>(null);
   const [imageDragOver, setImageDragOver] = useState(false);
   const [imageCopied, setImageCopied] = useState(false);
   const [exportingImage, setExportingImage] = useState(false);
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
+
+  // 图片翻译通道列表：严格仅包含智能并发、已配置AI大模型与已开启在线通道，排除词库与词典
+  const imageEngineChoices = React.useMemo(() => buildImageTranslateEngineChoices(settings), [settings]);
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 翻译请求序号：防止并发触发（切语言/交换/重译）时慢的旧请求覆盖新结果
@@ -266,13 +306,6 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
     };
   }, [updateScrollState]);
 
-  const handleTabsWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (!tabsRef.current) return;
-    if (e.deltaY !== 0) {
-      tabsRef.current.scrollLeft += e.deltaY;
-      updateScrollState();
-    }
-  };
 
   const handleElasticScroll = (amount: number) => {
     if (!tabsRef.current) return;
@@ -334,6 +367,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           targetLang,
           preset: settings.defaultPreset,
           llmConfig: settings.llmConfig,
+          llmConfigs: settings.llmConfigs,
           presetDicts: settings.presetDicts,
           onlineEngines: settings.onlineEngines,
           translationTiers: settings.translationTiers,
@@ -343,6 +377,10 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           baiduSecret: settings.baiduSecret,
           deeplApiKey: settings.deeplApiKey,
           deeplCustomUrl: settings.deeplCustomUrl,
+          volcengineAccessKey: settings.volcengineAccessKey,
+          volcengineSecretKey: settings.volcengineSecretKey,
+          yandexApiKey: settings.yandexApiKey,
+          yandexFolderId: settings.yandexFolderId,
         });
 
         const updatedEngine =
@@ -398,6 +436,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       targetLang,
       settings.defaultPreset,
       settings.llmConfig,
+      settings.llmConfigs,
       settings.presetDicts,
       settings.onlineEngines,
       settings.translationTiers,
@@ -413,27 +452,48 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       if (!trimmed) {
         setResponse(null);
         setLoading(false);
+        setIsAiRefining(false);
         setDetectedLangName("");
         return;
       }
 
       const seq = ++translationSeqRef.current;
       setLoading(true);
+
+      const baseParams = {
+        text: trimmed,
+        sourceLang: src,
+        targetLang: tgt,
+        preset: settings.defaultPreset,
+        llmConfig: settings.llmConfig,
+        llmConfigs: settings.llmConfigs,
+        presetDicts: settings.presetDicts,
+        onlineEngines: settings.onlineEngines,
+        translationTiers: settings.translationTiers,
+        style: settings.translationStyle,
+        baiduAppId: settings.baiduAppId,
+        baiduSecret: settings.baiduSecret,
+        deeplApiKey: settings.deeplApiKey,
+        deeplCustomUrl: settings.deeplCustomUrl,
+        volcengineAccessKey: settings.volcengineAccessKey,
+        volcengineSecretKey: settings.volcengineSecretKey,
+        yandexApiKey: settings.yandexApiKey,
+        yandexFolderId: settings.yandexFolderId,
+      };
+
+      const currentPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine;
+      const isAutoMode = currentPref === 'auto';
+      const hasActiveLlm = !!(
+        (settings.llmConfig?.endpoint && (settings.llmConfig.apiKey || settings.llmConfig.endpoint.includes('localhost') || settings.llmConfig.endpoint.includes('127.0.0.1')) && settings.llmConfig.enabled !== false) ||
+        settings.llmConfigs?.some(c => c.endpoint && (c.apiKey || c.endpoint.includes('localhost') || c.endpoint.includes('127.0.0.1')) && c.enabled !== false)
+      );
+      const isProgressive = isAutoMode && hasActiveLlm && settings.enableLlmProgressiveRefine !== false;
+
       try {
+        // ── Stage-1: 快通道 (在线引擎并发大竞速，150ms 闪电秒出) ──
         const res = await cmdUniversalTranslate({
-          text: trimmed,
-          sourceLang: src,
-          targetLang: tgt,
-          preset: settings.defaultPreset,
-          llmConfig: settings.llmConfig,
-          presetDicts: settings.presetDicts,
-          onlineEngines: settings.onlineEngines,
-          translationTiers: settings.translationTiers,
-          style: settings.translationStyle,
-          baiduAppId: settings.baiduAppId,
-          baiduSecret: settings.baiduSecret,
-          deeplApiKey: settings.deeplApiKey,
-          deeplCustomUrl: settings.deeplCustomUrl,
+          ...baseParams,
+          skipLlm: isProgressive,
         });
 
         // 请求期间用户又触发了新翻译，丢弃本次过期结果
@@ -443,7 +503,6 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
         // 优先将选中 Tab 设定为用户固定的优先渠道（preferredEngine），若未固定或该渠道失败则智能优选首个有效引擎
         let targetIdx = -1;
-        const currentPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine;
         if (currentPref && currentPref !== 'auto') {
           targetIdx = res.engines.findIndex((e) => {
             const short = getShortEngineName(e.engineName).toLowerCase();
@@ -480,15 +539,68 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         } else {
           setDetectedLangName("");
         }
+
+        // 快通道就绪：瞬间移除遮罩，用户 150ms 即可查阅复制
+        setLoading(false);
+
+        // ── Stage-2: 慢通道 (后台异步大模型精翻与平滑无缝升级) ──
+        if (isProgressive) {
+          setIsAiRefining(true);
+          (async () => {
+            try {
+              const aiRes = await cmdUniversalTranslate({
+                ...baseParams,
+                forcedEngine: 'llm',
+              });
+              if (seq !== translationSeqRef.current) return;
+
+              const aiEngine = aiRes.engines.find(
+                (e) => (e.sourceTier === 'LLM API' || e.engineName.includes('AI') || e.engineName.includes('LLM') || e.engineName.includes('深度翻译')) &&
+                  !e.translated.includes('点击重试') && e.translated.trim()
+              );
+
+              if (aiEngine) {
+                const formattedAiEngine = {
+                  ...aiEngine,
+                  engineName: aiEngine.engineName.includes('✨') ? aiEngine.engineName : `✨ ${aiEngine.engineName}`,
+                };
+
+                setResponse((prev) => {
+                  if (!prev || seq !== translationSeqRef.current) return prev;
+                  const filtered = prev.engines.filter(
+                    (e) => !e.engineName.includes('深度翻译') && !e.engineName.includes('LLM') && e.sourceTier !== 'LLM API'
+                  );
+                  return {
+                    ...prev,
+                    mainTranslation: formattedAiEngine.translated,
+                    engines: [formattedAiEngine, ...filtered],
+                  };
+                });
+
+                const curPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine;
+                if (curPref === 'auto') {
+                  setSelectedEngineIndex(0);
+                }
+
+                saveTranslationHistory(trimmed, formattedAiEngine.translated, `${formattedAiEngine.engineName} (AI 精翻 ✨)`, true).catch(console.warn);
+              }
+            } catch (aiErr) {
+              console.warn('[DualPaneTranslator] Progressive AI refine failed:', aiErr);
+            } finally {
+              if (seq === translationSeqRef.current) {
+                setIsAiRefining(false);
+              }
+            }
+          })();
+        }
       } catch (err) {
         if (seq !== translationSeqRef.current) return;
         console.error("Translation error:", err);
       } finally {
-        // 过期请求不得清掉新请求的 loading 状态
         if (seq === translationSeqRef.current) setLoading(false);
       }
     },
-    [settings.defaultPreset, settings.llmConfig, settings.presetDicts, settings.onlineEngines, settings.translationTiers, settings.translationStyle]
+    [settings.defaultPreset, settings.llmConfig, settings.llmConfigs, settings.presetDicts, settings.onlineEngines, settings.translationTiers, settings.translationStyle, settings.enableLlmProgressiveRefine, preferredEngine]
   );
 
   // Live input debounce listener
@@ -505,7 +617,20 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
     setLoading(true);
     debounceTimerRef.current = setTimeout(() => {
-      performTranslation(sourceText, sourceLang, targetLang);
+      let activeTarget = targetLang;
+      // 智能双向互译：当源语言为 "auto"（自动检测）时，如果检测到输入为中文且当前目标语言也是中文，自动将目标语言切换为英文（en）；
+      // 反之，如果检测到英文/其他外文且当前目标语言为英文，自动切换回中文（zh-CN）
+      if (sourceLang === "auto") {
+        const { detected, suggestedTarget } = detectLanguage(sourceText);
+        if (detected === "zh-CN" && (targetLang === "zh-CN" || targetLang === "zh")) {
+          activeTarget = "en";
+          setTargetLang("en");
+        } else if (detected === "en" && targetLang === "en") {
+          activeTarget = "zh-CN";
+          setTargetLang("zh-CN");
+        }
+      }
+      performTranslation(sourceText, sourceLang, activeTarget);
     }, 350);
 
     return () => {
@@ -559,17 +684,51 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
   /** 翻译队列中的单张图片（结果与错误写回队列条目） */
   const translateImageItem = useCallback(
-    async (item: ImageQueueItem) => {
+    async (item: ImageQueueItem, enginePreset?: string) => {
+      setImageItems((prev) =>
+        prev.map((it) => (it.id === item.id ? { ...it, isTranslating: true, error: null } : it))
+      );
       try {
         const base64 = item.dataUrl.split(",")[1] || "";
-        const res = await cmdImageOcrTranslate(base64, settings.defaultPreset, settings.llmConfig);
+        const targetPreset =
+          enginePreset ||
+          (imageTranslateEngine && imageTranslateEngine !== 'auto'
+            ? imageTranslateEngine
+            : settings.defaultPreset || 'auto');
+
+        // 如果选择的是具体某一个 AI 模型（形如 llm:model_id）
+        const pool = settings.llmConfigs && settings.llmConfigs.length > 0
+          ? settings.llmConfigs
+          : (settings.llmConfig ? [settings.llmConfig] : []);
+        let targetLlmConfig = settings.llmConfig;
+        let finalPreset = targetPreset;
+
+        if (targetPreset.startsWith('llm:')) {
+          const modelId = targetPreset.slice(4);
+          const found = pool.find((c) => (c.id || c.model || c.provider) === modelId);
+          if (found) {
+            targetLlmConfig = found;
+          }
+          finalPreset = 'llm';
+        } else if (targetPreset === 'auto') {
+          // auto 模式下：若 settings.llmConfig 未就绪，自动从模型池选用就绪的模型，确保命中 AI 翻译
+          if (!targetLlmConfig || !isLlmChannelReady(targetLlmConfig)) {
+            const readyModel = pool.find(isLlmChannelReady);
+            if (readyModel) {
+              targetLlmConfig = readyModel;
+            }
+          }
+        }
+
+        const res = await cmdImageOcrTranslate(base64, finalPreset, targetLlmConfig);
         setImageItems((prev) =>
           prev.map((it) =>
             it.id === item.id
-              ? {
+               ? {
                   ...it,
                   result: res,
                   error: res.blocks.length ? null : "未在图片中识别到文本，请尝试更清晰的截图",
+                  isTranslating: false,
                 }
               : it
           )
@@ -577,12 +736,12 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       } catch (err) {
         setImageItems((prev) =>
           prev.map((it) =>
-            it.id === item.id ? { ...it, error: err instanceof Error ? err.message : String(err) } : it
+            it.id === item.id ? { ...it, error: err instanceof Error ? err.message : String(err), isTranslating: false } : it
           )
         );
       }
     },
-    [settings.defaultPreset, settings.llmConfig]
+    [imageTranslateEngine, settings.defaultPreset, settings.llmConfig, settings.llmConfigs]
   );
 
   /** 批量入口：多张图片全部入队后逐张顺序翻译（避免并发打爆 OCR / 配额） */
@@ -741,14 +900,32 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
   const enabledPlaceholderTabs = React.useMemo(() => {
     const tabs: { name: string; icon: React.ElementType }[] = [];
-    const isLlmConfigured = !!settings.llmConfig && (
-      (settings.llmConfig.endpoint?.includes('localhost') || settings.llmConfig.endpoint?.includes('127.0.0.1')) ||
-      !!settings.llmConfig.apiKey?.trim()
-    );
-    if (isLlmConfigured) {
-      const provider = settings.llmConfig?.provider || 'AI';
-      tabs.push({ name: `${provider} 深度翻译`, icon: Bot });
+    
+    // 遍历多模型配置池中所有已配置且已启用的模型
+    const pool = settings.llmConfigs && settings.llmConfigs.length > 0
+      ? settings.llmConfigs
+      : settings.llmConfig ? [settings.llmConfig] : [];
+
+    const readyPool = pool.filter((cfg) => {
+      if (cfg.enabled === false) return false;
+      const ep = cfg.endpoint || '';
+      const isLocal = ep.includes('localhost') || ep.includes('127.0.0.1');
+      return !!ep.trim() && (!!cfg.apiKey?.trim() || isLocal);
+    });
+
+    if (readyPool.length > 0) {
+      for (const cfg of readyPool) {
+        const label = cfg.model && cfg.model !== 'custom-model' ? cfg.model : (cfg.provider || 'AI');
+        tabs.push({ name: `${label} 深度翻译`, icon: Bot });
+      }
+    } else if (settings.llmConfig && settings.llmConfig.enabled !== false) {
+      const isLlmConfigured = (settings.llmConfig.endpoint?.includes('localhost') || settings.llmConfig.endpoint?.includes('127.0.0.1')) || !!settings.llmConfig.apiKey?.trim();
+      if (isLlmConfigured) {
+        const label = settings.llmConfig.model && settings.llmConfig.model !== 'custom-model' ? settings.llmConfig.model : (settings.llmConfig.provider || 'AI');
+        tabs.push({ name: `${label} 深度翻译`, icon: Bot });
+      }
     }
+
     const dicts = settings.presetDicts;
     if (dicts && Object.values(dicts).some(Boolean)) {
       tabs.push({ name: 'CG 词库', icon: Snowflake });
@@ -777,6 +954,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
     return tabs;
   }, [
     settings.llmConfig,
+    settings.llmConfigs,
     settings.presetDicts,
     settings.onlineEngines,
     settings.deeplApiKey,
@@ -833,7 +1011,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
   return (
     <div
-      className={`space-y-4 max-w-5xl mx-auto font-sans rounded-3xl transition-shadow ${
+      className={`space-y-4 w-full max-w-[1600px] mx-auto font-sans rounded-3xl transition-shadow ${
         imageDragOver ? "ring-2 ring-sky-400 ring-offset-4 ring-offset-transparent shadow-lg" : ""
       }`}
       onPaste={handleNativePaste}
@@ -891,7 +1069,115 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2 shrink-0">
+              {/* 视图模式切换：覆写 / 原图 / 双语 */}
+              <div className={`flex items-center p-0.5 rounded-lg border text-xs shrink-0 ${
+                isLight ? 'bg-slate-100/90 border-slate-200' : 'bg-white/5 border-white/10'
+              }`}>
+                <button
+                  type="button"
+                  onClick={() => setImageViewMode('overlay')}
+                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                    imageViewMode === 'overlay'
+                      ? 'bg-sky-500 text-white shadow-xs'
+                      : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                  title="原位覆写 (高质感磨砂自适应排版)"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>覆写</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImageViewMode('original')}
+                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                    imageViewMode === 'original'
+                      ? 'bg-sky-500 text-white shadow-xs'
+                      : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                  title="纯净原图 (临时隐藏翻译以对比原图)"
+                >
+                  <Eye className="h-3 w-3" />
+                  <span>原图</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImageViewMode('bilingual')}
+                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                    imageViewMode === 'bilingual'
+                      ? 'bg-sky-500 text-white shadow-xs'
+                      : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                  title="双语对照 (原位展示原文与译文)"
+                >
+                  <Type className="h-3 w-3" />
+                  <span>双语</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImageViewMode('text')}
+                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                    imageViewMode === 'text'
+                      ? 'bg-sky-500 text-white shadow-xs'
+                      : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                  title="纯译文排版 (像文章一样通读完整译文段落)"
+                >
+                  <FileText className="h-3 w-3" />
+                  <span>纯文</span>
+                </button>
+              </div>
+
+              {/* 引擎切换下拉菜单（动态联动所有已配置 AI 模型池、在线渠道与专业词库） */}
+              <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border shrink-0 transition-colors ${
+                isLight ? 'bg-slate-100/90 border-slate-200 text-slate-700' : 'bg-white/5 border-white/10 text-zinc-300'
+              }`}>
+                <Globe className="h-3.5 w-3.5 text-sky-500 shrink-0" />
+                <span className="text-[11px] text-slate-400 font-medium shrink-0 whitespace-nowrap">通道:</span>
+                <select
+                  value={imageTranslateEngine}
+                  onChange={async (e) => {
+                    const newEngine = e.target.value;
+                    setImageTranslateEngine(newEngine);
+                    setImageItems((prev) =>
+                      prev.map((it) => ({
+                        ...it,
+                        isTranslating: true,
+                        error: null,
+                      }))
+                    );
+                    for (const it of imageItems) {
+                      await translateImageItem(it, newEngine);
+                    }
+                  }}
+                  className={`bg-transparent outline-hidden text-xs font-semibold cursor-pointer shrink-0 min-w-[130px] max-w-[240px] truncate ${
+                    isLight ? 'text-slate-800' : 'text-zinc-100'
+                  }`}
+                  title="切换图片翻译通道并立即重译"
+                >
+                  <option value={imageEngineChoices.auto.value} className={isLight ? 'bg-white text-slate-800' : 'bg-zinc-900 text-zinc-100'}>
+                    {imageEngineChoices.auto.label}
+                  </option>
+                  {imageEngineChoices.groups.map((g) => (
+                    <optgroup
+                      key={g.key}
+                      label={g.label}
+                      className={isLight ? 'bg-slate-100 text-slate-900 font-bold' : 'bg-zinc-800 text-zinc-200 font-bold'}
+                    >
+                      {g.options.map((o) => (
+                        <option
+                          key={o.value}
+                          value={o.value}
+                          className={isLight ? 'bg-white text-slate-800 font-normal' : 'bg-zinc-900 text-zinc-100 font-normal'}
+                        >
+                          {o.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+
               {imageItems.some((it) => (it.result?.blocks || []).length > 0) && (
                 <button
                   type="button"
@@ -939,8 +1225,11 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                           {item.result.blocks.length} 行 · {item.result.imageWidth}×{item.result.imageHeight}
                         </span>
                       )}
-                      {itemBusy && (
-                        <span className="text-[9px] font-mono text-amber-500 shrink-0 animate-pulse">识别中…</span>
+                      {(item.isTranslating || itemBusy) && (
+                        <span className="inline-flex items-center gap-1 text-[9px] font-mono text-amber-500 shrink-0">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span>{item.result ? '重译中…' : '识别中…'}</span>
+                        </span>
                       )}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
@@ -974,68 +1263,353 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                    {/* 左：原图 + 识别区块原位叠加译文 */}
-                    <div className={`relative overflow-hidden rounded-xl border ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
-                      <img src={item.dataUrl} alt={item.name} className="w-full h-auto block" draggable={false} />
-                      {(item.result?.blocks || []).map((b, bi) => {
-                        const sx = item.result ? 100 / item.result.imageWidth : 0;
-                        const sy = item.result ? 100 / item.result.imageHeight : 0;
-                        return (
-                          <div
-                            key={bi}
-                            className="absolute overflow-hidden rounded-sm border border-sky-400/60"
-                            style={{
-                              left: `${b.x * sx}%`,
-                              top: `${b.y * sy}%`,
-                              width: `${b.width * sx}%`,
-                              height: `${b.height * sy}%`,
-                              background: b.bgCss,
-                              color: b.fgCss,
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
+                    {/* 左：原图/覆写/纯文本排版 */}
+                    {imageViewMode === 'text' ? (
+                      <div className={`relative p-3.5 rounded-xl border max-h-[380px] overflow-y-auto space-y-3 ${
+                        isLight ? 'bg-slate-50/90 border-slate-200' : 'bg-white/[0.02] border-white/10'
+                      }`}>
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-white/10">
+                          <span className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>
+                            📑 纯译文排版通读 (共 {item.result?.blocks.length || 0} 段)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const full = (item.result?.blocks || []).map((b) => b.translated).join('\n\n');
+                              if (full) {
+                                navigator.clipboard.writeText(full);
+                                setImageCopied(true);
+                                setTimeout(() => setImageCopied(false), 1500);
+                              }
                             }}
-                            title={`${b.original} → ${b.translated}`}
+                            className={`flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-md border transition cursor-pointer ${
+                              isLight ? 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300' : 'bg-white/5 hover:bg-white/10 text-zinc-200 border-white/10'
+                            }`}
                           >
-                            <span className="block px-1 truncate" style={{ fontSize: 'clamp(8px, 1.4vh, 13px)', lineHeight: 1.2 }}>
-                              {b.translated || b.original}
-                            </span>
-                          </div>
-                        );
-                      })}
-                      {itemBusy && (
-                        <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center">
-                          <span className="text-xs text-white font-mono animate-pulse">识别中…</span>
+                            {imageCopied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                            <span>{imageCopied ? '已复制整篇' : '复制整篇译文'}</span>
+                          </button>
                         </div>
-                      )}
-                    </div>
+                        <div className="space-y-2 text-xs leading-relaxed select-text font-normal">
+                          {(item.result?.blocks || []).map((b, bi) => (
+                            <p key={bi} className={`break-words ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>
+                              {b.translated}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={`relative overflow-hidden rounded-xl border group/imgcard self-start ${isLight ? 'border-slate-200 bg-slate-100/50' : 'border-white/10 bg-black/20'}`}>
+                        {/* 内部图片与覆写沙盒容器：高度完全由 img 真实渲染高度驱动，彻底杜绝 Grid 拉伸造成的垂直坐标错位 */}
+                        <div className="relative w-full overflow-hidden block" style={{ containerType: 'inline-size' }}>
+                          <img src={item.dataUrl} alt={item.name} className="w-full h-auto block select-none" draggable={false} />
 
-                    {/* 右：行级对照列表 */}
-                    <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+                          {/* 右上角快捷放大查看原图 */}
+                          <button
+                            type="button"
+                            onClick={() => setZoomModalImage({ url: item.dataUrl, name: item.name })}
+                            className={`absolute top-2 right-2 p-1.5 rounded-lg backdrop-blur-md opacity-0 group-hover/imgcard:opacity-100 transition-opacity cursor-pointer shadow-md z-30 ${
+                              isLight ? 'bg-white/90 text-slate-700 hover:bg-white' : 'bg-black/60 text-zinc-200 hover:bg-black/80'
+                            }`}
+                            title="查看大图"
+                          >
+                            <Maximize2 className="h-3.5 w-3.5" />
+                          </button>
+
+                          {/* 覆写图层：绝对定位贴满图片实际渲染区域 (inset-0) */}
+                          {imageViewMode !== 'original' && (
+                            <div className="absolute inset-0 pointer-events-none">
+                              {(item.result?.blocks || []).map((b, bi) => {
+                                const sx = item.result ? 100 / item.result.imageWidth : 0;
+                                const sy = item.result ? 100 / item.result.imageHeight : 0;
+                                const blockKey = `${item.id}-${bi}`;
+                                const isCopied = copiedBlockIndex === blockKey;
+                                const isHovered = hoveredBlockKey === blockKey;
+                                const hasPatch = !!b.patchPng && (b.patchW ?? 0) > 0;
+                                const isLight = isLightBg(b.bgCss, b.fgCss);
+
+                                // ── 1. 自适应字号缩放计算 (基于原图物理高度并支持容器查询 cqi 等比缩放) ──
+                                const renderText = b.translated || b.original;
+                                const lineCount = (b.original.match(/\n/g) || []).length + 1;
+                                const singleLineLock = lineCount === 1;
+                                const cjkCount = (b.original.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
+                                const emFactor = cjkCount / Math.max(1, b.original.length) > 0.3 ? 1.05 : 0.92;
+                                const baseFontSize = b.height * emFactor;
+
+                                let targetFontSize = baseFontSize;
+                                if (renderText) {
+                                  const dispCjkCount = (renderText.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
+                                  const dispIsCjk = dispCjkCount / Math.max(1, renderText.replace(/\s/g, '').length) > 0.3;
+                                  const charWidthRatio = dispIsCjk ? 1.05 : 0.52;
+                                  const estimatedWidth = renderText.length * charWidthRatio * baseFontSize;
+                                  const allowedWidth = Math.max(b.width * 1.15, 60);
+                                  if (estimatedWidth > allowedWidth) {
+                                    if (singleLineLock) {
+                                      const fitSize = baseFontSize * (allowedWidth / estimatedWidth) * 0.97;
+                                      targetFontSize = Math.max(7, Math.min(baseFontSize, fitSize));
+                                    } else {
+                                      const twoLineFitSize = baseFontSize * ((allowedWidth * 1.6) / estimatedWidth);
+                                      targetFontSize = Math.max(8, Math.min(baseFontSize * 0.88, twoLineFitSize));
+                                    }
+                                  }
+                                }
+
+                                // 采用 cqi 容器查询单位实现绝对像素级等比缩放，下限 8px 保证极小图仍然可辨读
+                                const fontInCqi = item.result ? ((targetFontSize / item.result.imageWidth) * 100).toFixed(3) : '1.5';
+                                const fontSizeStyle = `clamp(8px, ${fontInCqi}cqi, 32px)`;
+
+                                // ── 2. 悬停边框与阴影 ──
+                                const cardBoxShadow = isCopied
+                                  ? '0 0 0 1.5px rgba(16, 185, 129, 0.8), 0 2px 8px rgba(0, 0, 0, 0.15)'
+                                  : isHovered
+                                  ? (isLight ? '0 0 0 1px rgba(0, 0, 0, 0.28)' : '0 0 0 1px rgba(56, 189, 248, 0.6)')
+                                  : 'none';
+
+                                const patchLeft = (hasPatch && typeof b.patchX === 'number' ? b.patchX : b.x) * sx;
+                                const patchTop = (hasPatch && typeof b.patchY === 'number' ? b.patchY : b.y) * sy;
+                                const patchWidth = (hasPatch && typeof b.patchW === 'number' ? b.patchW : b.width) * sx;
+                                const patchHeight = (hasPatch && typeof b.patchH === 'number' ? b.patchH : b.height) * sy;
+
+                                return (
+                                  <React.Fragment key={bi}>
+                                    {/* 保底实色抹除底板：彻底遮蔽原文字迹 */}
+                                    <div
+                                      aria-hidden
+                                      className="pointer-events-none absolute"
+                                      style={{
+                                        left: `${patchLeft}%`,
+                                        top: `${patchTop}%`,
+                                        width: `${patchWidth}%`,
+                                        height: `${patchHeight}%`,
+                                        background: toSolidBg(b.bgCss, b.fgCss),
+                                        borderRadius: hasPatch ? 0 : 2,
+                                        zIndex: 1,
+                                      }}
+                                    />
+
+                                    {/* Inpainting 抹除补丁层：原图文字经插值算法抹除后的 PNG，与背景逐像素贴合 */}
+                                    {hasPatch && b.patchPng && (
+                                      <div
+                                        aria-hidden
+                                        className="pointer-events-none absolute"
+                                        style={{
+                                          left: `${patchLeft}%`,
+                                          top: `${patchTop}%`,
+                                          width: `${patchWidth}%`,
+                                          height: `${patchHeight}%`,
+                                          backgroundImage: `url(data:image/png;base64,${b.patchPng})`,
+                                          backgroundSize: '100% 100%',
+                                          backgroundRepeat: 'no-repeat',
+                                          borderRadius: 0,
+                                          zIndex: 2,
+                                        }}
+                                      />
+                                    )}
+
+                                    {/* 原位文字卡片：与截图翻译 OverlayBlockCard 字体、字重、阴影及双语排版 100% 对齐 */}
+                                    <div
+                                      onMouseEnter={() => setHoveredBlockKey(blockKey)}
+                                      onMouseLeave={() => setHoveredBlockKey((k) => (k === blockKey ? null : k))}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (b.translated) {
+                                          navigator.clipboard.writeText(b.translated);
+                                          setCopiedBlockIndex(blockKey);
+                                          setTimeout(() => setCopiedBlockIndex((k) => (k === blockKey ? null : k)), 1500);
+                                        }
+                                      }}
+                                      className="overlay-block group absolute flex flex-col justify-center transition-all duration-150 cursor-pointer pointer-events-auto"
+                                      style={{
+                                        boxSizing: 'border-box',
+                                        left: `${b.x * sx}%`,
+                                        top: `${b.y * sy}%`,
+                                        width: 'fit-content',
+                                        maxWidth: `${Math.min(100 - b.x * sx - 0.5, Math.max(b.width * sx * 1.18, 12))}%`,
+                                        minHeight: `${b.height * sy}%`,
+                                        height: imageViewMode === 'overlay' ? `${b.height * sy}%` : 'auto',
+                                        color: getCardTextColor(b.bgCss, b.fgCss),
+                                        fontSize: fontSizeStyle,
+                                        fontFamily: 'var(--app-font-family, "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif)',
+                                        fontWeight: 600,
+                                        WebkitFontSmoothing: 'antialiased',
+                                        letterSpacing: '0.015em',
+                                        lineHeight: 1.15,
+                                        zIndex: isHovered || isCopied ? 30 : 10,
+                                        borderRadius: 2,
+                                        border: 'none',
+                                        boxShadow: cardBoxShadow,
+                                        textShadow: isLight
+                                          ? '0 0 1px rgba(0, 0, 0, 0.15)'
+                                          : '0 0 1.5px rgba(0, 0, 0, 0.85), 0 1px 2px rgba(0, 0, 0, 0.6)',
+                                        whiteSpace: singleLineLock ? 'nowrap' : 'pre-wrap',
+                                        wordBreak: 'break-word',
+                                        overflowWrap: 'break-word',
+                                        padding: '0 2px 0 0',
+                                      }}
+                                      title={`${b.original}\n➔ ${b.translated}\n点击复制译文`}
+                                    >
+                                      {/* 双语对照：原文小字灰字在上，译文主体在下 (与截图翻译完全一致) */}
+                                      {imageViewMode === 'bilingual' && (
+                                        <span
+                                          className="relative z-[3] leading-snug"
+                                          style={{ fontSize: '0.72em', opacity: 0.72, userSelect: 'text' }}
+                                        >
+                                          {b.original}
+                                        </span>
+                                      )}
+                                      <span
+                                        className="relative z-[3]"
+                                        style={{ userSelect: 'text', lineHeight: 'inherit' }}
+                                      >
+                                        {isCopied ? (
+                                          <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-0.5 animate-pulse">
+                                            <Check className="h-3 w-3" /> 已复制
+                                          </span>
+                                        ) : (
+                                          renderText
+                                        )}
+                                      </span>
+
+                                      {/* 悬停时展示的高清完整 Tooltip 气泡 */}
+                                      {isHovered && !isCopied && (
+                                        <div
+                                          className={`absolute left-0 bottom-[calc(100%+6px)] z-50 p-2.5 rounded-xl shadow-2xl border text-left min-w-[220px] max-w-[360px] pointer-events-none animate-in fade-in zoom-in-95 duration-150 ${
+                                            isLight ? 'bg-white/95 border-slate-200 text-slate-800' : 'bg-zinc-900/95 border-white/15 text-zinc-100'
+                                          }`}
+                                          style={{ backdropFilter: 'blur(8px)' }}
+                                        >
+                                          <div className="text-[10px] font-mono text-slate-400 dark:text-zinc-500 mb-1 flex items-center justify-between">
+                                            <span>原文</span>
+                                            <span>{formatSourceTier(b.sourceTier).label}</span>
+                                          </div>
+                                          <div className="text-[11px] font-mono opacity-80 break-words mb-1.5 leading-snug">
+                                            {b.original}
+                                          </div>
+                                          <div className="text-[10px] font-mono text-sky-500 mb-0.5">译文 (点击复制)</div>
+                                          <div className="text-xs font-bold break-words leading-relaxed text-sky-600 dark:text-sky-400">
+                                            {b.translated || b.original}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </React.Fragment>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                        {(item.isTranslating || itemBusy) && (
+                          <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center gap-1.5 z-40">
+                            <Loader2 className="h-4 w-4 text-white animate-spin" />
+                            <span className="text-xs text-white font-mono">{item.result ? '通道重译中…' : '识别中…'}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 右：行级对照列表（彻底取消截断，支持自然折行与单行一键复制） */}
+                    <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
                       {itemBusy && (
                         <div className="space-y-1.5">
                           {[0, 1, 2].map((k) => (
-                            <div key={k} className={`h-9 rounded-lg animate-pulse ${isLight ? 'bg-slate-100' : 'bg-white/5'}`} />
+                            <div key={k} className={`h-12 rounded-lg animate-pulse ${isLight ? 'bg-slate-100' : 'bg-white/5'}`} />
                           ))}
                         </div>
                       )}
-                      {(item.result?.blocks || []).map((b, bi) => (
-                        <div
-                          key={bi}
-                          className={`px-2.5 py-1.5 rounded-lg border text-xs ${
-                            isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/[0.03] border-white/[0.06]'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className={`font-mono truncate ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>{b.original}</span>
-                            <span className="text-[9px] font-mono shrink-0 opacity-70">{(b.confidence * 100).toFixed(0)}%</span>
+                      {(item.result?.blocks || []).map((b, bi) => {
+                        const blockKey = `${item.id}-${bi}`;
+                        const isRowCopied = copiedBlockIndex === blockKey;
+                        const isHovered = hoveredBlockKey === blockKey;
+                        const tierInfo = formatSourceTier(b.sourceTier);
+
+                        return (
+                          <div
+                            key={bi}
+                            onMouseEnter={() => setHoveredBlockKey(blockKey)}
+                            onMouseLeave={() => setHoveredBlockKey((k) => (k === blockKey ? null : k))}
+                            className={`p-2.5 rounded-xl border text-xs transition-all duration-150 ${
+                              isHovered
+                                ? isLight
+                                  ? 'bg-sky-50/90 border-sky-300 shadow-sm'
+                                  : 'bg-sky-500/10 border-sky-400/50 shadow-md'
+                                : isLight
+                                ? 'bg-slate-50/90 border-slate-200/80 hover:border-slate-300'
+                                : 'bg-white/[0.03] border-white/[0.06] hover:border-white/15'
+                            }`}
+                          >
+                            {/* 顶部辅助行：行号、置信度、来源标签与单项复制按钮 */}
+                            <div className="flex items-center justify-between gap-2 mb-1.5">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-slate-200/70 dark:bg-white/10 text-slate-600 dark:text-zinc-300">
+                                  #{bi + 1}
+                                </span>
+                                <span className="text-[10px] font-mono opacity-70">
+                                  {(b.confidence * 100).toFixed(0)}%
+                                </span>
+                                <span className={`text-[10px] font-medium px-1.5 py-0.2 rounded border shrink-0 ${
+                                  tierInfo.isLlm
+                                    ? 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-400/30'
+                                    : tierInfo.isDict
+                                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-400/30'
+                                    : 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-400/30'
+                                }`}>
+                                  {tierInfo.label}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (b.translated) {
+                                    navigator.clipboard.writeText(b.translated);
+                                    setCopiedBlockIndex(blockKey);
+                                    setTimeout(() => setCopiedBlockIndex((k) => (k === blockKey ? null : k)), 1500);
+                                  }
+                                }}
+                                className={`flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-md border transition cursor-pointer shrink-0 ${
+                                  isRowCopied
+                                    ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-600 dark:text-emerald-400 font-bold'
+                                    : isLight
+                                    ? 'bg-white hover:bg-slate-100 border-slate-200 text-slate-600 shadow-xs'
+                                    : 'bg-white/5 hover:bg-white/10 border-white/10 text-zinc-300'
+                                }`}
+                                title="复制单行译文"
+                              >
+                                {isRowCopied ? (
+                                  <>
+                                    <Check className="h-3 w-3 text-emerald-500" />
+                                    <span>已复制</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="h-3 w-3" />
+                                    <span>复制</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+
+                            {/* 原文：自然换行 */}
+                            <div className="mb-1">
+                              <p className={`text-[11px] font-mono break-words leading-relaxed select-text ${
+                                isLight ? 'text-slate-500' : 'text-zinc-400'
+                              }`}>
+                                {b.original}
+                              </p>
+                            </div>
+
+                            {/* 译文：彻底取消截断，粗体自然折行呈现完整内容 */}
+                            <div>
+                              <p className={`text-xs font-bold break-words leading-relaxed select-text ${
+                                isLight ? 'text-slate-900' : 'text-zinc-100'
+                              }`}>
+                                {b.translated || b.original}
+                              </p>
+                            </div>
                           </div>
-                          <div className="flex items-center justify-between gap-2 mt-0.5">
-                            <span className={`font-bold truncate ${isLight ? 'text-slate-900' : 'text-white'}`}>{b.translated}</span>
-                            <span className="text-[9px] font-mono shrink-0 px-1.5 rounded bg-sky-500/15 text-sky-400 border border-sky-400/25">
-                              {b.sourceTier}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                       {item.result && !item.result.blocks.length && !item.error && (
                         <p className={`text-xs ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>未识别到文本行</p>
                       )}
@@ -1095,7 +1669,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       {/* Main Dual-Pane Section */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Left Pane: Source Input */}
-        <div className={`flex flex-col h-[clamp(300px,44vh,440px)] p-4 rounded-2xl border transition-all ${
+        <div className={`flex flex-col h-[clamp(320px,46vh,540px)] p-4 rounded-2xl border transition-all ${
           isLight
             ? 'bg-white/70 border-white/80 shadow-md backdrop-blur-md shadow-slate-900/5 focus-within:border-sky-500/50'
             : 'bg-white/[0.04] border-white/10 shadow-lg backdrop-blur-md shadow-black/20 focus-within:border-sky-400/40'
@@ -1108,13 +1682,38 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           }`}>
             <span className={`font-semibold ${isLight ? 'text-slate-800' : 'text-zinc-200'}`}>原文输入 (实时防抖翻译)</span>
             <div className="flex items-center space-x-1.5">
+              <input
+                ref={imageFileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = e.target.files;
+                  if (files && files.length > 0) {
+                    void enqueueImages(Array.from(files));
+                  }
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => imageFileInputRef.current?.click()}
+                className={`flex items-center space-x-1 px-2 py-1 rounded-md transition cursor-pointer ${
+                  isLight ? 'hover:bg-black/5 text-slate-700 hover:text-slate-900' : 'hover:bg-white/10 text-zinc-300 hover:text-zinc-100'
+                }`}
+                title="选择本地图片翻译（亦支持直接 Ctrl+V 粘贴或拖入图片）"
+              >
+                <ImageIcon className="h-3.5 w-3.5 text-sky-500" />
+                <span>图片</span>
+              </button>
               <button
                 type="button"
                 onClick={handlePaste}
-                className={`flex items-center space-x-1 px-2 py-1 rounded-md transition ${
+                className={`flex items-center space-x-1 px-2 py-1 rounded-md transition cursor-pointer ${
                   isLight ? 'hover:bg-black/5 text-slate-700 hover:text-slate-900' : 'hover:bg-white/10 text-zinc-300 hover:text-zinc-100'
                 }`}
-                title="粘贴剪贴板文本"
+                title="粘贴剪贴板文本或图片"
               >
                 <Clipboard className="h-3.5 w-3.5" />
                 <span>粘贴</span>
@@ -1123,7 +1722,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 <button
                   type="button"
                   onClick={() => setSourceText("")}
-                  className={`flex items-center space-x-1 px-2 py-1 rounded-md transition ${
+                  className={`flex items-center space-x-1 px-2 py-1 rounded-md transition cursor-pointer ${
                     isLight ? 'hover:bg-black/5 text-slate-700 hover:text-slate-900' : 'hover:bg-white/10 text-zinc-300 hover:text-zinc-100'
                   }`}
                   title="清空内容"
@@ -1138,7 +1737,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           <textarea
             value={sourceText}
             onChange={(e) => setSourceText(e.target.value)}
-            placeholder="输入或粘贴任意英文、中文段落，或 CG 软件专业名词..."
+            placeholder="输入或粘贴文本，或直接拖入图片、按 Ctrl+V 粘贴图片翻译..."
             className={`flex-1 w-full bg-transparent resize-none py-3 text-base leading-relaxed focus:outline-none scrollbar-thin ${
               isLight
                 ? 'text-slate-900 placeholder:text-slate-400'
@@ -1175,7 +1774,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         </div>
 
         {/* Right Pane: Translation Output */}
-        <div className={`flex flex-col h-[clamp(300px,44vh,440px)] p-4 relative rounded-2xl border transition-all ${
+        <div className={`flex flex-col h-[clamp(320px,46vh,540px)] p-4 relative rounded-2xl border transition-all ${
           isLight
             ? 'bg-white/70 border-white/80 shadow-md backdrop-blur-md shadow-slate-900/5'
             : 'bg-white/[0.04] border-white/10 shadow-lg backdrop-blur-md shadow-black/20'
@@ -1189,7 +1788,6 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
             <div className="relative flex items-center flex-1 min-w-0 pr-2">
               <div
                 ref={tabsRef}
-                onWheel={handleTabsWheel}
                 onScroll={updateScrollState}
                 onMouseDown={handleMouseDown}
                 onMouseLeave={handleMouseLeaveOrUp}
@@ -1223,6 +1821,12 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 >
                   <Sparkles className={`h-3.5 w-3.5 ${preferredEngine === 'auto' ? 'text-white' : 'opacity-70'}`} />
                   <span>智能推荐</span>
+                  {isAiRefining && (
+                    <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.2 rounded-full bg-white/25 text-white font-normal animate-pulse">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-300 animate-ping" />
+                      AI精翻中
+                    </span>
+                  )}
                 </button>
 
                 {response?.engines && response.engines.length > 0 ? (
@@ -1561,7 +2165,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
             <span className={`font-medium text-[11px] ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>点击任意卡片即可直接切换主视图并复制</span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {response.engines.map((engine, idx) => {
               const isSelected = selectedEngineIndex === idx;
               const isCg = isCgTermSource(engine.sourceTier, engine.engineName);
@@ -1760,6 +2364,42 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* 原图全屏/高清放大预览模态框 */}
+      {zoomModalImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setZoomModalImage(null)}
+        >
+          <div
+            className={`relative max-w-4xl max-h-[85vh] overflow-auto p-3 rounded-2xl border shadow-2xl ${
+              isLight ? 'bg-white/95 border-slate-200' : 'bg-zinc-900/95 border-white/10'
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 mb-2 pb-2 border-b border-slate-200 dark:border-white/10">
+              <span className={`text-xs font-semibold truncate ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
+                {zoomModalImage.name} (高清大图)
+              </span>
+              <button
+                type="button"
+                onClick={() => setZoomModalImage(null)}
+                className={`p-1 rounded-lg transition cursor-pointer ${
+                  isLight ? 'text-slate-400 hover:text-slate-700 hover:bg-slate-100' : 'text-zinc-400 hover:text-white hover:bg-white/10'
+                }`}
+                title="关闭大图预览"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <img
+              src={zoomModalImage.url}
+              alt={zoomModalImage.name}
+              className="max-w-full h-auto object-contain rounded-lg block select-none mx-auto"
+            />
           </div>
         </div>
       )}

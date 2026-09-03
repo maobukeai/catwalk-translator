@@ -126,7 +126,7 @@ impl WebdavConn {
             .timeout(Duration::from_secs(30))
             .send()
             .await
-            .map_err(|e| webdav_network_error(e))?;
+            .map_err(webdav_network_error)?;
         let status = resp.status().as_u16();
         if status != 207 && !(200..300).contains(&status) {
             let body = resp.text().await.unwrap_or_default();
@@ -145,7 +145,7 @@ impl WebdavConn {
             .timeout(Duration::from_secs(300))
             .send()
             .await
-            .map_err(|e| webdav_network_error(e))?;
+            .map_err(webdav_network_error)?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
             let body = resp.text().await.unwrap_or_default();
@@ -162,7 +162,7 @@ impl WebdavConn {
             .timeout(Duration::from_secs(300))
             .send()
             .await
-            .map_err(|e| webdav_network_error(e))?;
+            .map_err(webdav_network_error)?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
             let body = resp.text().await.unwrap_or_default();
@@ -182,7 +182,7 @@ impl WebdavConn {
             .timeout(Duration::from_secs(30))
             .send()
             .await
-            .map_err(|e| webdav_network_error(e))?;
+            .map_err(webdav_network_error)?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) && status != 404 {
             let body = resp.text().await.unwrap_or_default();
@@ -445,15 +445,14 @@ pub async fn cmd_webdav_upload(
                     continue;
                 }
                 if let Some(age) = filename_age_days(&entry.name, today) {
-                    if age > retention_days as i64 {
-                        if conn
+                    if age > retention_days as i64
+                        && conn
                             .delete(&conn.remote_file_url(&remote_dir, &entry.name))
                             .await
                             .is_ok()
                         {
                             deleted_old += 1;
                         }
-                    }
                 }
             }
         }

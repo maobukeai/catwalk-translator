@@ -41,6 +41,7 @@ interface SettingsState {
   updateLlmConfig: (id: string, updates: Partial<LlmConfig>) => void;
   deleteLlmConfig: (id: string) => void;
   setActiveLlmConfig: (id: string) => void;
+  toggleLlmConfigEnabled: (id: string) => void;
   setPresetDictToggle: (dict: keyof PresetDicts, enabled: boolean) => void;
   setOnlineEngineToggle: (engine: keyof OnlineEngines, enabled: boolean) => void;
   setAllOnlineEngines: (mode: 'all' | 'recommended' | 'domestic' | 'none') => void;
@@ -78,6 +79,8 @@ interface SettingsState {
   setPrimaryTranslationEngine: (engine: 'auto' | 'dict' | 'llm' | 'online') => void;
   setBaiduConfig: (appId: string, secret: string) => void;
   setDeeplConfig: (apiKey: string, customUrl: string) => void;
+  setVolcengineConfig: (accessKey: string, secretKey: string) => void;
+  setYandexConfig: (apiKey: string, folderId: string) => void;
   setCloseAction: (action: 'ask' | 'minimize' | 'exit') => void;
   setMiniWindowCloseAction: (action: 'hide' | 'minimize') => void;
   setAlwaysOnTop: (enabled: boolean) => void;
@@ -85,6 +88,8 @@ interface SettingsState {
   setProxyUrl: (url: string) => void;
   setTtsRate: (rate: number) => void;
   setAutoDetectPreset: (enabled: boolean) => void;
+  setEnableLlmProgressiveRefine: (enabled: boolean) => void;
+  setAutoFavoriteQualityTerms: (enabled: boolean) => void;
   setBackupSettings: (patch: Partial<BackupSettings>) => void;
   setOcrFilterEnabled: (enabled: boolean) => void;
   setOcrFilterRules: (rules: string[]) => void;
@@ -185,7 +190,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         spotlightHotkey: fetched.spotlightHotkey || 'Alt+Space',
         clipboardHotkey: fetched.clipboardHotkey || 'Ctrl+Shift+C',
         toggleWindowHotkey: fetched.toggleWindowHotkey || 'Alt+Q',
-        captureHotkeyEnabled: fetched.captureHotkeyEnabled ?? (fetched as any).hotkeyEnabled ?? true,
+        captureHotkeyEnabled: fetched.captureHotkeyEnabled ?? true,
         spotlightHotkeyEnabled: fetched.spotlightHotkeyEnabled ?? false,
         clipboardHotkeyEnabled: fetched.clipboardHotkeyEnabled ?? false,
         toggleWindowHotkeyEnabled: fetched.toggleWindowHotkeyEnabled ?? false,
@@ -311,6 +316,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       apiKey: config.apiKey || '',
       model,
       endpoint: config.endpoint || 'https://api.custom-llm.com/v1',
+      enabled: config.enabled ?? true,
       availableModels: config.availableModels,
     };
     const updatedPool = [...pool, newConfig];
@@ -367,6 +373,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     });
   },
 
+  toggleLlmConfigEnabled: (id: string) => {
+    const { settings, initialSettings } = get();
+    const pool = settings.llmConfigs || [];
+    const target = pool.find((c) => c.id === id);
+    if (!target) return;
+    const nextEnabled = !(target.enabled ?? true);
+    const updatedPool = pool.map((c) => (c.id === id ? { ...c, enabled: nextEnabled } : c));
+    let newActive = settings.llmConfig;
+    if (settings.llmConfig?.id === id) {
+      newActive = { ...settings.llmConfig, enabled: nextEnabled };
+    }
+    const updated = { ...settings, llmConfigs: updatedPool, llmConfig: newActive };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+  },
+
   setDefaultPreset: (preset: string) => applyPatch({ defaultPreset: preset }, 'none'),
 
   setCaptureEngine: (engine: string) => applyPatch({ captureEngine: engine }, 'none'),
@@ -413,7 +437,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         tencent: true,
         lingva: true,
         caiyun: true,
-        papago: true,
         urban: true,
         volcengine: true,
         yandex: true,
@@ -429,7 +452,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         tencent: true,
         lingva: true,
         caiyun: true,
-        papago: false,
         urban: false,
         volcengine: true,
         yandex: false,
@@ -445,7 +467,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         tencent: false,
         lingva: false,
         caiyun: false,
-        papago: false,
         urban: false,
         volcengine: false,
         yandex: false,
@@ -469,6 +490,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   setDeeplConfig: (apiKey: string, customUrl: string) => {
     const { settings, initialSettings } = get();
     const updated = { ...settings, deeplApiKey: apiKey, deeplCustomUrl: customUrl };
+    set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
+    debouncedSaveSettings(get, set);
+  },
+
+  setVolcengineConfig: (accessKey: string, secretKey: string) => {
+    const { settings, initialSettings } = get();
+    const updated = { ...settings, volcengineAccessKey: accessKey, volcengineSecretKey: secretKey };
+    set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
+    debouncedSaveSettings(get, set);
+  },
+
+  setYandexConfig: (apiKey: string, folderId: string) => {
+    const { settings, initialSettings } = get();
+    const updated = { ...settings, yandexApiKey: apiKey, yandexFolderId: folderId };
     set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
     debouncedSaveSettings(get, set);
   },
@@ -772,6 +807,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     });
     saveSettings();
   },
+
+  setEnableLlmProgressiveRefine: (enabled) => applyPatch({ enableLlmProgressiveRefine: enabled }),
+  setAutoFavoriteQualityTerms: (enabled) => applyPatch({ autoFavoriteQualityTerms: enabled }),
 
   setTtsRate: (rate) => {
     const clamped = Math.min(2, Math.max(0.5, Math.round(rate * 10) / 10));

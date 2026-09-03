@@ -160,6 +160,7 @@ fn test_challenger_4tier_fallback_transitions() {
             api_key: "test-key".to_string(),
             model: "deepseek-chat".to_string(),
             endpoint: format!("http://{}", addr),
+            enabled: Some(true),
         };
 
         let t3_res = pipeline

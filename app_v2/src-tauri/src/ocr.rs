@@ -43,7 +43,13 @@ pub fn runtime_status() -> crate::models::OcrEngineStatus {
         let rapid_state = OCR_RUNTIME_STATE.load(Ordering::SeqCst);
         let onnx_state = ONNX_RUNTIME_STATE.load(Ordering::SeqCst);
         let onnx_note = match onnx_state {
-            2 => format!("· Rust 原生 PP-OCR{} 引擎已就绪 (纯离线推理)", active_ver),
+            // 状态文案与真实执行提供器一致:DirectML 可能注册失败或基准输给 CPU,
+            // 由 onnx_ocr 的启动基准给出结论,不再无条件宣称"GPU 加速"。
+            2 => format!(
+                "· Rust 原生 PP-OCR{} 引擎已就绪 ({})",
+                active_ver,
+                crate::onnx_ocr::accel_status_text()
+            ),
             3 => "· Rust 原生 ONNX 引擎加载失败".to_string(),
             _ => "· Rust 原生 ONNX 引擎待命".to_string(),
         };
@@ -58,10 +64,10 @@ pub fn runtime_status() -> crate::models::OcrEngineStatus {
                 onnx_note
             )
         };
-        return crate::models::OcrEngineStatus {
+        crate::models::OcrEngineStatus {
             status: "ready".to_string(),
             detail,
-        };
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -87,7 +93,7 @@ pub fn runtime_status() -> crate::models::OcrEngineStatus {
 // ─── Public API ─────────────────────────────────────────────────────────────────
 
 /// Filter OCR results by confidence threshold.
-pub fn filter_high_confidence<'a>(ocr: &'a OcrResult, threshold: f32) -> Vec<&'a TextBlock> {
+pub fn filter_high_confidence(ocr: &OcrResult, threshold: f32) -> Vec<&TextBlock> {
     ocr.blocks
         .iter()
         .filter(|b| b.confidence >= threshold)
@@ -448,15 +454,14 @@ pub(crate) fn clean_ocr_text(raw: &str) -> String {
     let chars: Vec<char> = trimmed.chars().collect();
     let mut cleaned = String::with_capacity(trimmed.len());
     for i in 0..chars.len() {
-        if chars[i] == ' ' {
-            if i > 0 && i + 1 < chars.len() {
+        if chars[i] == ' '
+            && i > 0 && i + 1 < chars.len() {
                 let prev_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&chars[i - 1]);
                 let next_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&chars[i + 1]);
                 if prev_cjk && next_cjk {
                     continue;
                 }
             }
-        }
         cleaned.push(chars[i]);
     }
     cleaned
@@ -471,7 +476,23 @@ pub fn execute_native_ocr(crop_bmp_bytes: &[u8]) -> Result<OcrResult, String> {
 /// daemon 死亡后的重启重试有硬上限（1 次）。无上限的"重启即递归"会在
 /// daemon 持续秒退的环境（无 python / 脚本缺失）里无限递归直到栈溢出。
 fn execute_native_ocr_with_retry(crop_bmp_bytes: &[u8], restart_depth: u32) -> Result<OcrResult, String> {
-    // 0: Rust 原生 ONNX 引擎 (PP-OCRv3) 优先 — 纯离线推理，中文/混合场景精度高
+    // 0: Windows 平台首选 WinRT 原生超高速硬件引擎 (<20ms 毫秒级秒出)
+    #[cfg(target_os = "windows")]
+    {
+        match execute_winrt_ocr(crop_bmp_bytes) {
+            Ok(res) if !res.blocks.is_empty() => {
+                return Ok(res);
+            }
+            Ok(_) => {
+                eprintln!("[OCR] WinRT OCR 返回空结果，尝试 ONNX PP-OCR...");
+            }
+            Err(e) => {
+                eprintln!("[OCR] WinRT OCR 失败: {}，尝试 ONNX PP-OCR...", e);
+            }
+        }
+    }
+
+    // 1: Rust 原生 ONNX 引擎 (PP-OCR, 支持 DirectML GPU 显卡加速)
     if onnx_available() {
         let engine = crate::onnx_ocr::get_engine();
         match engine.recognize_bmp(crop_bmp_bytes) {
@@ -481,27 +502,10 @@ fn execute_native_ocr_with_retry(crop_bmp_bytes: &[u8], restart_depth: u32) -> R
                 return Ok(res);
             }
             Ok(_) => {
-                eprintln!("[OCR] ONNX OCR 返回空结果，尝试降级 WinRT...");
+                eprintln!("[OCR] ONNX OCR 返回空结果，尝试 RapidOCR daemon...");
             }
             Err(e) => {
-                eprintln!("[OCR] ONNX OCR 错误 ({})，降级 WinRT...", e);
-            }
-        }
-    }
-
-    // 1: Windows 平台 WinRT 降级
-    #[cfg(target_os = "windows")]
-    {
-        match execute_winrt_ocr(crop_bmp_bytes) {
-            Ok(res) if !res.blocks.is_empty() => {
-                eprintln!("[OCR] WinRT OCR 降级执行成功");
-                return Ok(res);
-            }
-            Ok(_) => {
-                eprintln!("[OCR] WinRT OCR 返回空结果，尝试 RapidOCR daemon...");
-            }
-            Err(e) => {
-                eprintln!("[OCR] WinRT OCR 失败: {}，降级 RapidOCR daemon...", e);
+                eprintln!("[OCR] ONNX OCR 错误 ({})，降级 RapidOCR daemon...", e);
             }
         }
     }

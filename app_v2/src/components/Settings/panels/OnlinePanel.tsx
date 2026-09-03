@@ -5,7 +5,7 @@ import {
   Camera, Zap, Bot, BookOpen, Sliders, Sparkles, ShieldCheck, Globe, Palette,
   Sun, Moon, Monitor, Plus, Trash2, Edit3, Search, Download, Upload, X,
   FileSpreadsheet, Copy, Check, Type, Languages, Tag, FileText, WifiOff,
-  HardDriveDownload, CloudUpload,
+  HardDriveDownload, CloudUpload, Power,
 } from 'lucide-react';
 import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
@@ -114,16 +114,6 @@ export const ONLINE_ENGINE_DEFS = [
     icon: '🌈',
   },
   {
-    id: 'papago',
-    name: 'Naver Papago (日韩顶流)',
-    tag: '日韩天花板',
-    tagColor: 'text-green-300 bg-green-500/15 border-green-400/30',
-    desc: '韩国 Naver 打造，中日/中韩互译行业公认天花板，敬语与二次元语境极佳',
-    region: 'foreign',
-    note: '免密直连通道：支持中日韩极速互译',
-    icon: '🦜',
-  },
-  {
     id: 'urban',
     name: 'Urban Dictionary (欧美网络俚语/流行梗)',
     tag: '欧美黑话',
@@ -135,22 +125,22 @@ export const ONLINE_ENGINE_DEFS = [
   },
   {
     id: 'volcengine',
-    name: '字节跳动火山翻译 (抖音同款 NMT)',
-    tag: '字节抖音',
+    name: '字节跳动火山翻译',
+    tag: '字节官方',
     tagColor: 'text-orange-300 bg-orange-500/15 border-orange-400/30',
     desc: '字节跳动抖音/TikTok 同款 NMT 机器翻译引擎，现代互联网科技与口语翻译极度地道',
     region: 'domestic',
-    note: '国内引擎：免密直连高速通道，毫秒级极速返回',
+    note: '国内官方通道：需在下方填入火山引擎 AccessKey / SecretKey',
     icon: '🌋',
   },
   {
     id: 'yandex',
-    name: 'Yandex Translate (俄语/东欧顶流)',
+    name: 'Yandex Translate',
     tag: '斯拉夫霸主',
     tagColor: 'text-red-300 bg-red-500/15 border-red-400/30',
     desc: '俄罗斯搜索巨头旗舰引擎，俄语、白俄、乌克兰及东欧斯拉夫语系翻译行业顶流',
     region: 'foreign',
-    note: '免密公共通道：俄语与东欧小语种翻译质量卓越',
+    note: '国外官方通道：需在下方填入 Yandex Translate API Key',
     icon: '🇷🇺',
   },
 ] as const;
@@ -164,6 +154,8 @@ export const OnlinePanel: React.FC = () => {
     setAllOnlineEngines,
     setBaiduConfig,
     setDeeplConfig,
+    setVolcengineConfig,
+    setYandexConfig,
   } = useSettingsStore();
 
   // LLM 模型池 UI 同时出现在本区与「快捷键与 AI 模型」区,共用一份状态逻辑
@@ -190,6 +182,7 @@ export const OnlinePanel: React.FC = () => {
     updateLlmConfig,
     deleteLlmConfig,
     setActiveLlmConfig,
+    toggleLlmConfigEnabled,
   } = useLlmPanelState();
 
   const online = settings.onlineEngines || {
@@ -204,38 +197,33 @@ export const OnlinePanel: React.FC = () => {
 
   return (
     <>
-        <div className="space-y-5 animate-in fade-in duration-150">
-          {/* 在线公共翻译服务通道网格矩阵 */}
-          <div className={`p-5 space-y-4 rounded-2xl border transition-colors ${
+        <div className="space-y-4 animate-in fade-in duration-150">
+          {/* 在线公共翻译服务通道网格矩阵 (紧凑高密度布局) */}
+          <div className={`p-3.5 sm:p-4 space-y-2.5 rounded-2xl border transition-colors ${
             isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
           }`}>
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div className="min-w-0 flex-1">
-                <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
+                <div className={`flex items-center space-x-1.5 text-xs sm:text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
                   <Globe className="h-4 w-4 text-blue-500 shrink-0" />
-                  <span className="truncate">在线公共翻译服务通道 (10 大主流引擎 · 免 Key 极速与专有 API 分区)</span>
+                  <span className="truncate">在线公共翻译服务通道</span>
+                  <span className={`text-[10px] font-normal px-1.5 py-0.5 rounded border ${isLight ? 'bg-blue-50 text-blue-600 border-blue-200/60' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
+                    10 大主流引擎 · 免 Key 极速并发
+                  </span>
                 </div>
-                <p className={`mt-1 text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
-                  支持多引擎免 Key 并发极速查询，开启的引擎将在双栏翻译与多源对照面板中实时呈现
-                </p>
-                <p className={`mt-1 text-[10.5px] ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
-                  <span className="text-emerald-500 font-semibold">🇨🇳 国内直连 (免 Key)</span>
-                  （必应 / 有道 / 腾讯 / Lingva 镜像 / 彩云小译，毫秒级直达） ·
-                  <span className="text-violet-400 font-semibold">🌐 国际/日韩 (免 Key)</span>
-                  （Google 官方 / Naver Papago / MyMemory） ·
-                  <span className="text-blue-500 font-semibold">🔑 需配 Key 专享</span>
-                  （下方百度 / DeepL / AI大模型）
+                <p className={`mt-0.5 text-[11px] ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                  支持多引擎免 Key 极速并发查询，开启的引擎将在双栏翻译与多源对照面板中呈现
                 </p>
               </div>
 
-              {/* 快捷批量操作按钮组：强制单行不折行 */}
-              <div className={`flex items-center space-x-1.5 self-start md:self-auto p-1 rounded-xl border text-xs shrink-0 whitespace-nowrap ${
-                isLight ? 'bg-slate-100 border-slate-200' : 'bg-zinc-950/80 border-white/[0.06]'
+              {/* 快捷批量操作按钮组：单行紧凑 */}
+              <div className={`flex items-center space-x-1 self-start sm:self-auto p-0.5 rounded-lg border text-[11px] shrink-0 whitespace-nowrap ${
+                isLight ? 'bg-slate-100/90 border-slate-200' : 'bg-zinc-950/80 border-white/[0.06]'
               }`}>
                 <button
                   type="button"
                   onClick={() => setAllOnlineEngines('domestic')}
-                  className="px-2.5 py-1 rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition cursor-pointer font-medium whitespace-nowrap shrink-0"
+                  className="px-2 py-0.5 rounded text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition cursor-pointer font-medium whitespace-nowrap shrink-0"
                   title="仅启用国内免代理极速引擎（微软必应 + 网易有道 + 腾讯交互 + Lingva 镜像 + 彩云小译）"
                 >
                   国内直连推荐
@@ -243,15 +231,15 @@ export const OnlinePanel: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setAllOnlineEngines('all')}
-                  className="px-2.5 py-1 rounded-lg text-blue-600 hover:text-blue-700 hover:bg-blue-50 transition cursor-pointer font-semibold whitespace-nowrap shrink-0"
-                  title="启用全部 10 大在线引擎"
+                  className="px-2 py-0.5 rounded text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition cursor-pointer font-semibold whitespace-nowrap shrink-0"
+                  title="启用全部在线引擎"
                 >
                   开启全部
                 </button>
                 <button
                   type="button"
                   onClick={() => setAllOnlineEngines('none')}
-                  className="px-2.5 py-1 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer whitespace-nowrap shrink-0"
+                  className="px-2 py-0.5 rounded text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer whitespace-nowrap shrink-0"
                   title="关闭所有在线公共引擎"
                 >
                   全部关闭
@@ -259,39 +247,35 @@ export const OnlinePanel: React.FC = () => {
               </div>
             </div>
 
-            {/* 7 大在线引擎精简卡片网格 (高密度 Apple/Fluent 精致胶囊矩阵) */}
-            <div className="space-y-3 pt-1">
+            {/* 7 大在线引擎紧凑卡片网格 (单行流式高密度矩阵) */}
+            <div className="space-y-2 pt-0.5">
               {/* 1. 国内免代理直连组 */}
               <div>
-                <div className="flex items-center gap-1.5 mb-2 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                  <span>🇨🇳 国内免代理直连通道 (极速响应)</span>
+                <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                  <span>🇨🇳 国内免代理直连 (极速响应)</span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-1.5 sm:gap-2">
                   {ONLINE_ENGINE_DEFS.filter((e) => e.region === 'domestic' || e.id === 'bing').map((eng) => {
                     const isEnabled = (online as Record<string, boolean | undefined>)[eng.id] ?? false;
                     return (
                       <div
                         key={eng.id}
                         title={(eng.desc + '\n\n' + (eng.note ?? '')).trim()}
-                        className={`flex items-center justify-between rounded-xl px-3 py-2 border transition-all duration-200 cursor-pointer select-none ${
+                        className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 border transition-all duration-150 cursor-pointer select-none ${
                           isEnabled
-                            ? (isLight ? 'bg-emerald-50/80 border-emerald-300 shadow-2xs ring-1 ring-emerald-400/20' : 'bg-emerald-950/30 border-emerald-500/40 shadow-xs ring-1 ring-emerald-500/20')
-                            : (isLight ? 'bg-slate-50/80 border-slate-200 opacity-70 hover:opacity-100 hover:bg-slate-100' : 'bg-zinc-950/40 border-white/[0.06] opacity-60 hover:opacity-100 hover:bg-zinc-900/60')
+                            ? (isLight ? 'bg-emerald-50/90 border-emerald-300 shadow-2xs' : 'bg-emerald-950/35 border-emerald-500/40')
+                            : (isLight ? 'bg-slate-50/70 border-slate-200/80 opacity-65 hover:opacity-100 hover:bg-slate-100/80' : 'bg-zinc-950/30 border-white/[0.05] opacity-55 hover:opacity-100 hover:bg-zinc-900/50')
                         }`}
                         onClick={() => setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled)}
                       >
-                        <div className="flex items-center space-x-2 min-w-0 pr-2">
-                          <span className="text-sm shrink-0">{eng.icon}</span>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1">
-                              <span className={`text-xs font-bold truncate ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
-                                {eng.name.replace(/（.*?）|\(.*?\)/g, '')}
-                              </span>
-                            </div>
-                            <span className={`text-[9px] font-mono font-medium px-1.5 py-0.2 rounded border shrink-0 ${eng.tagColor}`}>
-                              {eng.tag}
-                            </span>
-                          </div>
+                        <div className="flex items-center space-x-1.5 min-w-0 pr-1.5">
+                          <span className="text-xs shrink-0">{eng.icon}</span>
+                          <span className={`text-[11.5px] font-semibold truncate ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
+                            {eng.name.replace(/（.*?）|\(.*?\)/g, '')}
+                          </span>
+                          <span className={`text-[8.5px] font-mono font-medium px-1 py-0 rounded border shrink-0 ${eng.tagColor}`}>
+                            {eng.tag}
+                          </span>
                         </div>
 
                         <button
@@ -300,13 +284,13 @@ export const OnlinePanel: React.FC = () => {
                             e.stopPropagation();
                             setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled);
                           }}
-                          className={`relative inline-flex h-4.5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
+                          className={`relative inline-flex h-3.5 w-7 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
                             isEnabled ? 'bg-emerald-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                           }`}
                         >
                           <span
-                            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                              isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                            className={`inline-block h-2.5 w-2.5 transform rounded-full bg-white transition-transform ${
+                              isEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
                             }`}
                           />
                         </button>
@@ -318,35 +302,31 @@ export const OnlinePanel: React.FC = () => {
 
               {/* 2. 国际 / 海外网络通道组 */}
               <div>
-                <div className="flex items-center gap-1.5 mb-2 text-[11px] font-semibold text-violet-600 dark:text-violet-400">
+                <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-bold text-violet-600 dark:text-violet-400">
                   <span>🌐 国际/海外通道 (需代理或海外网络)</span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-1.5 sm:gap-2">
                   {ONLINE_ENGINE_DEFS.filter((e) => e.region === 'foreign' && e.id !== 'bing').map((eng) => {
                     const isEnabled = (online as Record<string, boolean | undefined>)[eng.id] ?? false;
                     return (
                       <div
                         key={eng.id}
                         title={(eng.desc + '\n\n' + (eng.note ?? '')).trim()}
-                        className={`flex items-center justify-between rounded-xl px-3 py-2 border transition-all duration-200 cursor-pointer select-none ${
+                        className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 border transition-all duration-150 cursor-pointer select-none ${
                           isEnabled
-                            ? (isLight ? 'bg-violet-50/80 border-violet-300 shadow-2xs ring-1 ring-violet-400/20' : 'bg-violet-950/30 border-violet-500/40 shadow-xs ring-1 ring-violet-500/20')
-                            : (isLight ? 'bg-slate-50/80 border-slate-200 opacity-70 hover:opacity-100 hover:bg-slate-100' : 'bg-zinc-950/40 border-white/[0.06] opacity-60 hover:opacity-100 hover:bg-zinc-900/60')
+                            ? (isLight ? 'bg-violet-50/90 border-violet-300 shadow-2xs' : 'bg-violet-950/35 border-violet-500/40')
+                            : (isLight ? 'bg-slate-50/70 border-slate-200/80 opacity-65 hover:opacity-100 hover:bg-slate-100/80' : 'bg-zinc-950/30 border-white/[0.05] opacity-55 hover:opacity-100 hover:bg-zinc-900/50')
                         }`}
                         onClick={() => setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled)}
                       >
-                        <div className="flex items-center space-x-2 min-w-0 pr-2">
-                          <span className="text-sm shrink-0">{eng.icon}</span>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1">
-                              <span className={`text-xs font-bold truncate ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
-                                {eng.name.replace(/（.*?）|\(.*?\)/g, '')}
-                              </span>
-                            </div>
-                            <span className={`text-[9px] font-mono font-medium px-1.5 py-0.2 rounded border shrink-0 ${eng.tagColor}`}>
-                              {eng.tag}
-                            </span>
-                          </div>
+                        <div className="flex items-center space-x-1.5 min-w-0 pr-1.5">
+                          <span className="text-xs shrink-0">{eng.icon}</span>
+                          <span className={`text-[11.5px] font-semibold truncate ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
+                            {eng.name.replace(/（.*?）|\(.*?\)/g, '')}
+                          </span>
+                          <span className={`text-[8.5px] font-mono font-medium px-1 py-0 rounded border shrink-0 ${eng.tagColor}`}>
+                            {eng.tag}
+                          </span>
                         </div>
 
                         <button
@@ -355,13 +335,13 @@ export const OnlinePanel: React.FC = () => {
                             e.stopPropagation();
                             setOnlineEngineToggle(eng.id as keyof typeof online, !isEnabled);
                           }}
-                          className={`relative inline-flex h-4.5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
+                          className={`relative inline-flex h-3.5 w-7 items-center rounded-full transition-colors cursor-pointer shrink-0 ${
                             isEnabled ? 'bg-violet-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                           }`}
                         >
                           <span
-                            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                              isEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                            className={`inline-block h-2.5 w-2.5 transform rounded-full bg-white transition-transform ${
+                              isEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
                             }`}
                           />
                         </button>
@@ -467,6 +447,102 @@ export const OnlinePanel: React.FC = () => {
               </div>
               <p className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
                 填写官方 API Key 直连 DeepL 免费通道；或填写自建 DeepLX 地址（两者都填时优先使用自建地址）。
+              </p>
+            </div>
+          )}
+
+          {/* 火山翻译 (字节跳动) API 凭据配置（仅当火山引擎开启时显示）*/}
+          {online.volcengine && (
+            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
+              isLight ? 'bg-orange-50/60 border-orange-200/80' : 'bg-orange-950/20 border-orange-500/25'
+            }`}>
+              <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-orange-900' : 'text-orange-300'}`}>
+                <span>🌋</span>
+                <span>火山翻译 (字节跳动) API 配置</span>
+                <span className={`text-[9px] font-normal px-1.5 py-0.5 rounded border ml-1 ${isLight ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-orange-500/20 text-orange-400 border-orange-500/30'}`}>
+                  官方 OpenAPI 凭据
+                </span>
+                <a href="https://console.volcengine.com/translate" target="_blank" rel="noreferrer"
+                  className={`ml-auto text-[10px] underline underline-offset-2 ${isLight ? 'text-orange-600' : 'text-orange-400'}`}>
+                  前往火山引擎控制台 →
+                </a>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>AccessKey ID（访问密钥 ID）</label>
+                  <input
+                    type="text"
+                    value={settings.volcengineAccessKey || ''}
+                    onChange={(e) => setVolcengineConfig(e.target.value, settings.volcengineSecretKey || '')}
+                    placeholder="AKLTxxxxxxxxxxxxxxxx"
+                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-orange-500/40 ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>Secret Access Key（访问密钥）</label>
+                  <input
+                    type="password"
+                    value={settings.volcengineSecretKey || ''}
+                    onChange={(e) => setVolcengineConfig(settings.volcengineAccessKey || '', e.target.value)}
+                    placeholder="例如：TVdaWxxxxxxxxxxxxxxxx"
+                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-orange-500/40 ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                    }`}
+                  />
+                </div>
+              </div>
+              <p className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                前往 <a href="https://console.volcengine.com/translate" target="_blank" rel="noreferrer" className="underline underline-offset-2">volcengine.com</a> 开通机器翻译服务并在访问控制获取 AccessKey / SecretKey。
+              </p>
+            </div>
+          )}
+
+          {/* Yandex Translate API 凭据配置（仅当 Yandex 引擎开启时显示）*/}
+          {online.yandex && (
+            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
+              isLight ? 'bg-red-50/60 border-red-200/80' : 'bg-red-950/20 border-red-500/25'
+            }`}>
+              <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-red-900' : 'text-red-300'}`}>
+                <span>🇷🇺</span>
+                <span>Yandex Translate API 配置</span>
+                <span className={`text-[9px] font-normal px-1.5 py-0.5 rounded border ml-1 ${isLight ? 'bg-red-100 text-red-700 border-red-200' : 'bg-red-500/20 text-red-400 border-red-500/30'}`}>
+                  官方 Cloud 凭据
+                </span>
+                <a href="https://cloud.yandex.com/services/translate" target="_blank" rel="noreferrer"
+                  className={`ml-auto text-[10px] underline underline-offset-2 ${isLight ? 'text-red-600' : 'text-red-400'}`}>
+                  Yandex.Cloud 注册 →
+                </a>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>API Key（或 IAM Token）</label>
+                  <input
+                    type="password"
+                    value={settings.yandexApiKey || ''}
+                    onChange={(e) => setYandexConfig(e.target.value, settings.yandexFolderId || '')}
+                    placeholder="AQVNxxxxxxxxxxxxxxxx"
+                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-red-500/40 ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>Folder ID（可选，Yandex.Cloud 目录 ID）</label>
+                  <input
+                    type="text"
+                    value={settings.yandexFolderId || ''}
+                    onChange={(e) => setYandexConfig(settings.yandexApiKey || '', e.target.value)}
+                    placeholder="b1gxxxxxxxxxxxxxxxx"
+                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-red-500/40 ${
+                      isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                    }`}
+                  />
+                </div>
+              </div>
+              <p className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                前往 <a href="https://cloud.yandex.com/services/translate" target="_blank" rel="noreferrer" className="underline underline-offset-2">cloud.yandex.com</a> 创建服务账号并生成 API 密钥。
               </p>
             </div>
           )}
@@ -601,6 +677,7 @@ export const OnlinePanel: React.FC = () => {
               <div className="flex flex-wrap gap-2">
                 {llmPool.map((m) => {
                   const isActive = llm.id ? m.id === llm.id : m.provider === llm.provider && m.model === llm.model;
+                  const isModelEnabled = m.enabled ?? true;
                   return (
                     <div
                       key={m.id || `${m.provider}-${m.model}-${m.endpoint}`}
@@ -609,27 +686,66 @@ export const OnlinePanel: React.FC = () => {
                       onClick={() => m.id && setActiveLlmConfig(m.id)}
                       onKeyDown={(e) => { if (e.key === 'Enter' && m.id) setActiveLlmConfig(m.id); }}
                       className={`group flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-xl border text-[11px] font-medium transition-all cursor-pointer select-none ${
-                        isActive
-                          ? (isLight
+                        !isModelEnabled
+                          ? isLight
+                            ? 'bg-slate-100/90 text-slate-400 border-slate-200 opacity-60 hover:opacity-100'
+                            : 'bg-zinc-900/40 text-zinc-500 border-white/5 opacity-50 hover:opacity-90'
+                          : isActive
+                            ? isLight
                               ? 'bg-blue-600 text-white border-blue-400 shadow-md ring-2 ring-blue-500/25'
-                              : 'bg-blue-600 text-white border-blue-400/60 shadow-md ring-2 ring-blue-500/30')
-                          : (isLight
+                              : 'bg-blue-600 text-white border-blue-400/60 shadow-md ring-2 ring-blue-500/30'
+                            : isLight
                               ? 'bg-white text-slate-700 border-slate-200 hover:border-blue-300 hover:bg-blue-50/60'
-                              : 'bg-zinc-900/80 text-zinc-300 border-white/10 hover:border-blue-400/40 hover:bg-zinc-800')
+                              : 'bg-zinc-900/80 text-zinc-300 border-white/10 hover:border-blue-400/40 hover:bg-zinc-800'
                       }`}
-                      title="点击切换为激活模型"
+                      title={isModelEnabled ? '点击切换为激活模型（状态：已启用）' : '点击切换为激活模型（状态：已停用）'}
                     >
-                      <span className={`font-bold ${isActive ? 'text-white' : (isLight ? 'text-slate-500' : 'text-zinc-400')}`}>{m.provider}</span>
-                      <span className={`font-mono max-w-[180px] truncate ${isActive ? 'text-white/95' : 'text-blue-600'}`}>{m.model || '(未指定模型)'}</span>
-                      {!!m.apiKey && (
-                        <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-emerald-300' : 'bg-emerald-500'}`} title="已配置 API Key" />
+                      <span className={`font-mono font-medium max-w-[200px] truncate ${
+                        isActive && isModelEnabled ? 'text-white' : isModelEnabled ? (isLight ? 'text-blue-700 font-semibold' : 'text-blue-300 font-semibold') : 'line-through text-zinc-400'
+                      }`}>
+                        {m.model || m.provider || '(未指定模型)'}
+                      </span>
+                      {!isModelEnabled ? (
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-normal ${
+                          isLight ? 'bg-slate-200 text-slate-600' : 'bg-zinc-800 text-zinc-400'
+                        }`}>
+                          已停用
+                        </span>
+                      ) : (
+                        !!m.apiKey && (
+                          <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-emerald-300' : 'bg-emerald-500'}`} title="已配置 API Key" />
+                        )
                       )}
+
+                      {/* 胶囊快速开关 */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (m.id) toggleLlmConfigEnabled(m.id);
+                        }}
+                        className={`p-1 rounded-lg transition cursor-pointer ${
+                          isModelEnabled
+                            ? isActive
+                              ? 'hover:bg-white/20 text-emerald-300 hover:text-white'
+                              : isLight
+                                ? 'hover:bg-emerald-50 text-emerald-600'
+                                : 'hover:bg-emerald-500/20 text-emerald-400'
+                            : isLight
+                              ? 'hover:bg-slate-200 text-slate-400 hover:text-slate-700'
+                              : 'hover:bg-zinc-700 text-zinc-500 hover:text-zinc-200'
+                        }`}
+                        title={isModelEnabled ? '点击停用该模型' : '点击启用该模型'}
+                      >
+                        <Power className="h-3.5 w-3.5" />
+                      </button>
+
                       {llmPool.length > 1 && (
                         <button
                           type="button"
                           onClick={(e) => { e.stopPropagation(); if (m.id) deleteLlmConfig(m.id); }}
                           className={`p-1 rounded-lg transition cursor-pointer opacity-60 hover:opacity-100 ${
-                            isActive ? 'hover:bg-white/20 text-white' : (isLight ? 'hover:bg-rose-50 text-rose-500' : 'hover:bg-rose-500/20 text-rose-400')
+                            isActive && isModelEnabled ? 'hover:bg-white/20 text-white' : (isLight ? 'hover:bg-rose-50 text-rose-500' : 'hover:bg-rose-500/20 text-rose-400')
                           }`}
                           title={isActive ? '删除当前激活模型（自动切换）' : '删除该模型'}
                         >
@@ -647,8 +763,55 @@ export const OnlinePanel: React.FC = () => {
               </div>
 
               <p className={`text-[10px] leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
-                支持 DeepSeek / OpenAI / 本地私有化 Ollama / 智谱 GLM / 自定义兼容接口。多模型一键保存切换，下方表单实时编辑当前「激活模型」，测试与拉取模型操作均针对激活模型执行。
+                支持 DeepSeek / OpenAI / 本地私有化 Ollama / 智谱 GLM / 自定义兼容接口。每个模型均支持独立开启/关闭，点击电源图标或下方开关可快速启停，关闭后将暂停调用该模型。
               </p>
+            </div>
+
+            {/* 当前激活模型启停控制栏 */}
+            <div className={`flex items-center justify-between p-3.5 rounded-2xl border ${
+              isLight ? 'bg-slate-50/70 border-slate-200' : 'bg-zinc-950/40 border-white/[0.06]'
+            }`}>
+              <div className="min-w-0">
+                <div className="flex items-center space-x-2">
+                  <span className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-zinc-100'}`}>
+                    启用当前模型
+                  </span>
+                  <span className={`text-[10px] font-medium px-2 py-0.2 rounded-full border ${
+                    (llm.enabled ?? true)
+                      ? isLight
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        : 'bg-emerald-500/15 border-emerald-400/30 text-emerald-300'
+                      : isLight
+                        ? 'bg-slate-100 border-slate-200 text-slate-500'
+                        : 'bg-white/5 border-white/10 text-zinc-400'
+                  }`}>
+                    {(llm.enabled ?? true) ? '已开启' : '已停用'}
+                  </span>
+                </div>
+                <p className={`mt-0.5 text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                  {(llm.enabled ?? true)
+                    ? `当前模型（${llm.provider} - ${llm.model || '默认'}）已开启，将参与 AI 翻译与分层调用`
+                    : `当前模型（${llm.provider} - ${llm.model || '默认'}）已停用，系统将暂停该模型的调用`}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLlmConfig({ enabled: !(llm.enabled ?? true) })}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-3 ${
+                  (llm.enabled ?? true)
+                    ? 'bg-blue-600'
+                    : isLight
+                      ? 'bg-slate-300'
+                      : 'bg-zinc-700'
+                }`}
+                title={(llm.enabled ?? true) ? '停用此模型' : '启用此模型'}
+              >
+                <span
+                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                    (llm.enabled ?? true) ? 'translate-x-4.5' : 'translate-x-1'
+                  }`}
+                />
+              </button>
             </div>
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

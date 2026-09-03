@@ -37,6 +37,7 @@ impl LineClusterer {
     /// - cap 200px is what separates layout COLUMNS — a two-column page has a
     ///   ≥250px gutter, and without a cap a tall heading vertically spanning a
     ///   right-column row chained the whole foreign column into one line.
+    ///
     /// 2.0× tolerates the wider breaks DBNet leaves in faint low-contrast text
     /// (a whole word can vanish between two fragment boxes) while buttons and
     /// stat labels (gaps ≥3× line height) still stay independent.
@@ -126,8 +127,9 @@ impl LineClusterer {
 pub struct WordMerger;
 
 impl WordMerger {
-    pub fn merge_line(line_blocks: Vec<TextBlock>, _gap_threshold: f32) -> TextBlock {
-        if line_blocks.is_empty() {
+    pub fn merge_line(line_blocks: Vec<TextBlock>, gap_threshold: f32) -> TextBlock {
+        let segments = Self::merge_line_segments(line_blocks, gap_threshold);
+        if segments.is_empty() {
             return TextBlock {
                 text: String::new(),
                 confidence: 1.0,
@@ -139,23 +141,53 @@ impl WordMerger {
                 },
             };
         }
+        if segments.len() == 1 {
+            return segments.into_iter().next().unwrap();
+        }
+        // 多段时以换行拼接，保留向后兼容
+        let mut text = String::new();
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut max_y = i32::MIN;
+        let mut total_conf = 0.0f32;
+        for s in &segments {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&s.text);
+            total_conf += s.confidence;
+            min_x = min_x.min(s.box_rect.x);
+            min_y = min_y.min(s.box_rect.y);
+            max_x = max_x.max(s.box_rect.x + s.box_rect.width as i32);
+            max_y = max_y.max(s.box_rect.y + s.box_rect.height as i32);
+        }
+        TextBlock {
+            text,
+            confidence: total_conf / segments.len() as f32,
+            box_rect: BoundingBox {
+                x: min_x,
+                y: min_y,
+                width: (max_x - min_x) as u32,
+                height: (max_y - min_y) as u32,
+            },
+        }
+    }
 
-        // Defensive multi-line split: when clustering still groups two visual
-        // lines together, split by vertical center and join with '\n' so the
-        // frontend can divide the union box height by the real line count for
-        // font-size inference (otherwise the font is sized to the full height
-        // and the translated card renders twice as large as the original).
-        let mut valid: Vec<&TextBlock> = line_blocks
-            .iter()
+    /// 将同一视觉行按水平间距 threshold 切分为若干个独立的语义段（例如表格不同列、独立按钮）：
+    /// 间距 <= gap_threshold 的相邻词合并为一个 TextBlock（如 "Principled" + "BSDF"）；
+    /// 间距 > gap_threshold 的相邻块则作为独立的 TextBlock 返回，绝不跨列串联！
+    pub fn merge_line_segments(line_blocks: Vec<TextBlock>, gap_threshold: f32) -> Vec<TextBlock> {
+        if line_blocks.is_empty() {
+            return Vec::new();
+        }
+
+        let mut valid: Vec<TextBlock> = line_blocks
+            .into_iter()
             .filter(|b| !b.text.trim().is_empty())
             .collect();
         if valid.is_empty() {
-            let first = &line_blocks[0];
-            return TextBlock {
-                text: String::new(),
-                confidence: first.confidence,
-                box_rect: first.box_rect,
-            };
+            return Vec::new();
         }
 
         let mut heights: Vec<f32> = valid.iter().map(|b| b.box_rect.height as f32).collect();
@@ -163,9 +195,9 @@ impl WordMerger {
         let median_h = heights[heights.len() / 2].max(1.0);
 
         valid.sort_by_key(|b| b.box_rect.y + (b.box_rect.height as i32) / 2);
-        let mut sub_lines: Vec<Vec<&TextBlock>> = Vec::new();
+        let mut sub_lines: Vec<Vec<TextBlock>> = Vec::new();
         let mut last_center = f32::MIN;
-        for b in valid.iter().copied() {
+        for b in valid {
             let center = b.box_rect.y as f32 + b.box_rect.height as f32 * 0.5;
             if sub_lines.is_empty() || (center - last_center).abs() > median_h * 0.6 {
                 sub_lines.push(vec![b]);
@@ -175,84 +207,95 @@ impl WordMerger {
             last_center = center;
         }
 
-        let mut merged_text = String::new();
+        let mut result_blocks = Vec::new();
+
+        for mut sub in sub_lines {
+            if sub.is_empty() {
+                continue;
+            }
+            sub.sort_by_key(|b| b.box_rect.x);
+
+            // 在水平方向上按 gap_threshold 分割为独立的词簇 (clusters)
+            let mut clusters: Vec<Vec<TextBlock>> = Vec::new();
+            for b in sub {
+                let belongs_to_last = if let Some(last_cluster) = clusters.last() {
+                    let last = last_cluster.last().unwrap();
+                    let last_right = last.box_rect.x + last.box_rect.width as i32;
+                    let gap = b.box_rect.x - last_right;
+                    let max_gap = gap_threshold.min(median_h * 1.5).max(12.0);
+                    (gap as f32) <= max_gap
+                } else {
+                    false
+                };
+
+                if belongs_to_last {
+                    clusters.last_mut().unwrap().push(b);
+                } else {
+                    clusters.push(vec![b]);
+                }
+            }
+
+            for cluster in clusters {
+                if let Some(merged) = Self::merge_single_cluster(&cluster) {
+                    result_blocks.push(merged);
+                }
+            }
+        }
+
+        result_blocks
+    }
+
+    fn merge_single_cluster(cluster: &[TextBlock]) -> Option<TextBlock> {
+        if cluster.is_empty() {
+            return None;
+        }
+        let mut text = String::new();
         let mut min_x = i32::MAX;
         let mut min_y = i32::MAX;
         let mut max_x = i32::MIN;
         let mut max_y = i32::MIN;
         let mut total_confidence = 0.0f32;
-        let mut valid_blocks_count = 0;
 
-        for sub in &sub_lines {
-            let mut sorted: Vec<&TextBlock> = sub.iter().copied().collect();
-            sorted.sort_by_key(|b| b.box_rect.x);
-
-            let mut sub_text = String::new();
-            for b in sorted {
-                if !sub_text.is_empty() {
-                    let prev_char = sub_text.chars().last();
-                    let next_char = b.text.chars().next();
-
-                    let needs_space = match (prev_char, next_char) {
-                        (Some(p), Some(n)) => {
-                            !p.is_whitespace()
-                                && !n.is_whitespace()
-                                && !is_cjk_or_fullwidth(p)
-                                && !is_cjk_or_fullwidth(n)
-                        }
-                        _ => false,
-                    };
-
-                    if needs_space {
-                        sub_text.push(' ');
+        for b in cluster {
+            if !text.is_empty() {
+                let prev_char = text.chars().last();
+                let next_char = b.text.chars().next();
+                let needs_space = match (prev_char, next_char) {
+                    (Some(p), Some(n)) => {
+                        !p.is_whitespace()
+                            && !n.is_whitespace()
+                            && !is_cjk_or_fullwidth(p)
+                            && !is_cjk_or_fullwidth(n)
                     }
+                    _ => false,
+                };
+                if needs_space {
+                    text.push(' ');
                 }
-
-                sub_text.push_str(&b.text);
-                total_confidence += b.confidence;
-                valid_blocks_count += 1;
-
-                min_x = min_x.min(b.box_rect.x);
-                min_y = min_y.min(b.box_rect.y);
-                max_x = max_x.max(b.box_rect.x + b.box_rect.width as i32);
-                max_y = max_y.max(b.box_rect.y + b.box_rect.height as i32);
             }
-
-            if sub_text.is_empty() {
-                continue;
-            }
-            if !merged_text.is_empty() {
-                merged_text.push('\n');
-            }
-            merged_text.push_str(&sub_text);
+            text.push_str(&b.text);
+            total_confidence += b.confidence;
+            min_x = min_x.min(b.box_rect.x);
+            min_y = min_y.min(b.box_rect.y);
+            max_x = max_x.max(b.box_rect.x + b.box_rect.width as i32);
+            max_y = max_y.max(b.box_rect.y + b.box_rect.height as i32);
         }
-
-        if valid_blocks_count == 0 {
-            let first = &line_blocks[0];
-            return TextBlock {
-                text: String::new(),
-                confidence: first.confidence,
-                box_rect: first.box_rect,
-            };
-        }
-
-        let avg_confidence = total_confidence / (valid_blocks_count as f32);
 
         let final_x = min_x.max(0);
         let final_y = min_y.max(0);
         let final_w = (max_x - final_x).max(0) as u32;
         let final_h = (max_y - final_y).max(0) as u32;
 
-        TextBlock {
-            text: merged_text,
-            confidence: avg_confidence,
+        Some(TextBlock {
+            text,
+            confidence: total_confidence / cluster.len() as f32,
             box_rect: BoundingBox {
                 x: final_x,
                 y: final_y,
                 width: final_w,
                 height: final_h,
             },
-        }
+        })
     }
 }
 
@@ -436,6 +479,28 @@ mod tests {
         assert_eq!(merged_eng.text, "Principled BSDF");
         assert_eq!(merged_eng.box_rect.x, 10);
         assert_eq!(merged_eng.box_rect.width, 95);
+    }
+
+    #[test]
+    fn test_word_merger_segments_preserves_columns() {
+        // 同一行的两个表格单元格，间距 40px > gap_threshold(20.0)
+        // 必须返回 2 个独立的 TextBlock，绝不合并！
+        let table_row = vec![
+            TextBlock {
+                text: "问题表现".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 50, y: 20, width: 80, height: 20 },
+            },
+            TextBlock {
+                text: "修复前".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 170, y: 20, width: 60, height: 20 },
+            },
+        ];
+        let segments = WordMerger::merge_line_segments(table_row, 20.0);
+        assert_eq!(segments.len(), 2, "两列间距 40px > 20px 必须保持独立");
+        assert_eq!(segments[0].text, "问题表现");
+        assert_eq!(segments[1].text, "修复前");
     }
 }
 

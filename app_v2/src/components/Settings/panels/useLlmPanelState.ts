@@ -52,6 +52,7 @@ export function useLlmPanelState() {
   const updateLlmConfig = useSettingsStore((s) => s.updateLlmConfig);
   const deleteLlmConfig = useSettingsStore((s) => s.deleteLlmConfig);
   const setActiveLlmConfig = useSettingsStore((s) => s.setActiveLlmConfig);
+  const toggleLlmConfigEnabled = useSettingsStore((s) => s.toggleLlmConfigEnabled);
 
   const [showApiKey, setShowApiKey] = useState(false);
   const [testLatency, setTestLatency] = useState<number | null>(null);
@@ -207,5 +208,6 @@ export function useLlmPanelState() {
     updateLlmConfig,
     deleteLlmConfig,
     setActiveLlmConfig,
+    toggleLlmConfigEnabled,
   };
 }

@@ -13,7 +13,7 @@ pub struct ClipboardHistoryEntry {
     pub at_ms: u64,
 }
 
-const CAP: usize = 200;
+const CAP: usize = 1000;
 
 fn history_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     crate::commands::get_app_config_dir(app).join("clipboard_history.json")
@@ -89,6 +89,6 @@ mod tests {
     #[test]
     fn cap_truncates() {
         // 逻辑由 Vec::truncate 保证；此测试锁定上限常量防回归
-        assert_eq!(CAP, 200);
+        assert_eq!(CAP, 1000);
     }
 }

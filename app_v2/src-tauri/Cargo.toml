@@ -1,6 +1,6 @@
 [package]
 name = "MaobuTranslator"
-version = "0.2.0"
+version = "0.3.0"
 description = "猫步翻译"
 authors = ["maobukeai"]
 edition = "2021"
@@ -39,7 +39,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 roxmltree = "0.20"
 regex = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
-ort = { version = "2.0.0-rc.13", default-features = false, features = ["download-binaries", "ndarray", "std", "tls-rustls"] }
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["download-binaries", "directml", "ndarray", "std", "tls-rustls"] }
 ndarray = "0.17"
 
 [target.'cfg(windows)'.dependencies]
@@ -66,6 +66,12 @@ windows = { version = "0.58", features = [
 ] }
 
 
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 opt-level = "z"
 lto = "fat"
@@ -73,5 +79,6 @@ codegen-units = 1
 panic = "abort"
 strip = true
 overflow-checks = false
+
 
 

@@ -39,24 +39,7 @@ function App() {
     return () => window.removeEventListener("open-onboarding", reopen);
   }, []);
 
-  // 首次运行 / 安装后默认开启开机自启
-  useEffect(() => {
-    try {
-      const KEY = "catwalk_autostart_default_init_v1";
-      if (!localStorage.getItem(KEY)) {
-        localStorage.setItem(KEY, "true");
-        cmdGetAutoStart()
-          .then((enabled) => {
-            if (!enabled) {
-              void cmdSetAutoStart(true);
-            }
-          })
-          .catch(() => {});
-      }
-    } catch {
-      /* ignore */
-    }
-  }, []);
+
 
   const closeOnboarding = () => {
     try {
@@ -189,7 +172,7 @@ function App() {
   // Browser-level hotkey listener fallback (matches exact configured hotkey strings)
   // 依赖数组只登记 handler 实际读取的快捷键标量，避免 settings 任意字段
   // 变化（如拖动模糊滑杆）都重挂 window 级监听器。
-  const captureHotkeyEnabled = settings.captureHotkeyEnabled ?? settings.hotkeyEnabled ?? true;
+  const captureHotkeyEnabled = settings.captureHotkeyEnabled ?? true;
   const captureHotkey = settings.hotkey || 'F4';
   const spotlightHotkeyEnabled = settings.spotlightHotkeyEnabled ?? false;
   const spotlightHotkey = settings.spotlightHotkey || 'Alt+Space';
@@ -374,77 +357,77 @@ function App() {
 
   return (
     <div className="relative h-screen overflow-hidden">
-      {/* Aurora Backdrop — ultra-subtle ambient glow behind the glass that preserves true DWM desktop Acrylic penetration.
-          Hidden while overlay is open or in solid mode (invisible + saves GPU).
-          Lightweight ambient glow (opacity 0.15) ensures external desktop/wallpaper shows through cleanly. */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 z-0" style={{ willChange: 'transform' }}>
-        <div
-          className={`absolute inset-0 transition-opacity duration-500 aurora-field ${isOverlayOpen || isSolid ? 'opacity-0' : 'opacity-[0.15]'}`}
-          style={{
-            filter: `blur(${blurPx * 1.5}px) saturate(1.1)`,
-            transform: 'scale(1.04)',
-            transitionProperty: 'opacity',
-            transitionDuration: '500ms',
-            transitionTimingFunction: 'ease',
-          }}
-        >
-          {/* 轻盈微弱的环境辉光（低不透明度，不遮挡底层 Windows DWM 硬件级磨砂与桌面内容） */}
+      {/* Aurora Backdrop — only mounted when overlay is not active */}
+      {!isOverlayOpen && !isSolid && (
+        <div aria-hidden className="pointer-events-none fixed inset-0 z-0" style={{ willChange: 'transform' }}>
           <div
-            className="absolute -top-24 -left-20 h-[32rem] w-[32rem] rounded-full aurora-blob pointer-events-none"
+            className="absolute inset-0 transition-opacity duration-500 aurora-field opacity-[0.15]"
             style={{
-              background: isLight
-                ? 'radial-gradient(circle, rgba(186,230,253,0.30) 0%, rgba(224,242,254,0.12) 45%, transparent 70%)'
-                : 'radial-gradient(circle, rgba(255,255,255,0.02) 0%, rgba(148,163,184,0.01) 45%, transparent 70%)',
-              animation: 'aurora-drift 24s ease-in-out infinite alternate',
+              filter: `blur(${blurPx * 1.5}px) saturate(1.1)`,
+              transform: 'scale(1.04)',
+              transitionProperty: 'opacity',
+              transitionDuration: '500ms',
+              transitionTimingFunction: 'ease',
+            }}
+          >
+            {/* 轻盈微弱的环境辉光（低不透明度，不遮挡底层 Windows DWM 硬件级磨砂与桌面内容） */}
+            <div
+              className="absolute -top-24 -left-20 h-[32rem] w-[32rem] rounded-full aurora-blob pointer-events-none"
+              style={{
+                background: isLight
+                  ? 'radial-gradient(circle, rgba(186,230,253,0.30) 0%, rgba(224,242,254,0.12) 45%, transparent 70%)'
+                  : 'radial-gradient(circle, rgba(255,255,255,0.02) 0%, rgba(148,163,184,0.01) 45%, transparent 70%)',
+                animation: 'aurora-drift 24s ease-in-out infinite alternate',
+              }}
+            />
+            <div
+              className="absolute top-1/3 -right-16 h-[28rem] w-[28rem] rounded-full aurora-blob pointer-events-none"
+              style={{
+                background: isLight
+                  ? 'radial-gradient(circle, rgba(233,213,255,0.25) 0%, rgba(243,232,255,0.10) 45%, transparent 70%)'
+                  : 'radial-gradient(circle, rgba(255,255,255,0.015) 0%, rgba(100,116,139,0.01) 45%, transparent 70%)',
+                animation: 'aurora-drift 28s ease-in-out infinite alternate-reverse',
+              }}
+            />
+            <div
+              className="absolute -bottom-20 left-1/4 h-[30rem] w-[30rem] rounded-full aurora-blob pointer-events-none"
+              style={{
+                background: isLight
+                  ? 'radial-gradient(circle, rgba(254,240,138,0.20) 0%, rgba(254,249,195,0.08) 45%, transparent 70%)'
+                  : 'radial-gradient(circle, rgba(255,255,255,0.018) 0%, rgba(148,163,184,0.01) 45%, transparent 70%)',
+                animation: 'aurora-drift 32s ease-in-out infinite alternate',
+              }}
+            />
+          </div>
+
+          {/* 物理级喷砂微磨砂颗粒光栅层 (Physical Sandblasted Frosted Glass Texture) */}
+          <div
+            className="absolute inset-0 transition-opacity duration-500 pointer-events-none opacity-40"
+            style={{
+              filter: `blur(${(blurPx * 0.35).toFixed(1)}px)`,
+              backgroundImage: isLight
+                ? 'radial-gradient(rgba(100, 116, 139, 0.08) 1px, transparent 1.2px)'
+                : 'radial-gradient(rgba(255, 255, 255, 0.15) 1px, transparent 1.2px)',
+              backgroundSize: '10px 10px',
             }}
           />
           <div
-            className="absolute top-1/3 -right-16 h-[28rem] w-[28rem] rounded-full aurora-blob pointer-events-none"
+            className="absolute inset-0 transition-opacity duration-500 pointer-events-none opacity-30"
             style={{
-              background: isLight
-                ? 'radial-gradient(circle, rgba(233,213,255,0.25) 0%, rgba(243,232,255,0.10) 45%, transparent 70%)'
-                : 'radial-gradient(circle, rgba(255,255,255,0.015) 0%, rgba(100,116,139,0.01) 45%, transparent 70%)',
-              animation: 'aurora-drift 28s ease-in-out infinite alternate-reverse',
-            }}
-          />
-          <div
-            className="absolute -bottom-20 left-1/4 h-[30rem] w-[30rem] rounded-full aurora-blob pointer-events-none"
-            style={{
-              background: isLight
-                ? 'radial-gradient(circle, rgba(254,240,138,0.20) 0%, rgba(254,249,195,0.08) 45%, transparent 70%)'
-                : 'radial-gradient(circle, rgba(255,255,255,0.018) 0%, rgba(148,163,184,0.01) 45%, transparent 70%)',
-              animation: 'aurora-drift 32s ease-in-out infinite alternate',
+              filter: `blur(${(blurPx * 0.25).toFixed(1)}px)`,
+              backgroundImage: isLight
+                ? 'radial-gradient(rgba(148, 163, 184, 0.06) 1.2px, transparent 1.8px)'
+                : 'radial-gradient(rgba(255, 255, 255, 0.10) 1.2px, transparent 1.8px)',
+              backgroundSize: '22px 22px',
+              backgroundPosition: '7px 9px',
             }}
           />
         </div>
-
-        {/* 物理级喷砂微磨砂颗粒光栅层 (Physical Sandblasted Frosted Glass Texture) */}
-        <div
-          className={`absolute inset-0 transition-opacity duration-500 pointer-events-none ${isOverlayOpen || isSolid ? 'opacity-0' : 'opacity-40'}`}
-          style={{
-            filter: `blur(${(blurPx * 0.35).toFixed(1)}px)`,
-            backgroundImage: isLight
-              ? 'radial-gradient(rgba(100, 116, 139, 0.08) 1px, transparent 1.2px)'
-              : 'radial-gradient(rgba(255, 255, 255, 0.15) 1px, transparent 1.2px)',
-            backgroundSize: '10px 10px',
-          }}
-        />
-        <div
-          className={`absolute inset-0 transition-opacity duration-500 pointer-events-none ${isOverlayOpen || isSolid ? 'opacity-0' : 'opacity-30'}`}
-          style={{
-            filter: `blur(${(blurPx * 0.25).toFixed(1)}px)`,
-            backgroundImage: isLight
-              ? 'radial-gradient(rgba(148, 163, 184, 0.06) 1.2px, transparent 1.8px)'
-              : 'radial-gradient(rgba(255, 255, 255, 0.10) 1.2px, transparent 1.8px)',
-            backgroundSize: '22px 22px',
-            backgroundPosition: '7px 9px',
-          }}
-        />
-      </div>
+      )}
 
     <div
       style={glassRootStyle}
-      className={`relative z-10 flex flex-col h-screen antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden ${fontClass} ${fontSizeClass} ${textColorClass} ${isOverlayOpen ? 'bg-transparent' : (!isSolid ? (isLight ? 'border border-slate-200/60' : 'border border-white/[0.10]') : '')}`}
+      className={`relative z-10 flex flex-col h-screen antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden ${fontClass} ${fontSizeClass} ${textColorClass} ${isOverlayOpen ? 'bg-transparent border-none' : (!isSolid ? (isLight ? 'border border-slate-200/60' : 'border border-white/[0.10]') : '')}`}
     >
       {/* Real Frosted Glass Grain & Specular Top Reflection Layer */}
       {blurEnabled && !isSolid && !isOverlayOpen && (
@@ -476,9 +459,20 @@ function App() {
             </div>
           )}
 
-          {/* 主内容区：悬浮玻璃卡岛（全宽居中，底部为 Dock 让位） */}
-          <main className="relative flex-1 min-w-0 overflow-y-auto scrollbar-thin px-6 pt-2 pb-[86px]">
-            <div key={activeTab} className="page-in mx-auto h-full max-w-5xl">
+          {/* 主内容区：悬浮玻璃卡岛（宽屏自适应，底部为 Dock 让位留足呼吸空间） */}
+          <main className="relative flex-1 min-w-0 overflow-y-auto scrollbar-thin px-4 sm:px-6 pt-2 pb-[116px]">
+            <div
+              key={activeTab}
+              className={`page-in mx-auto h-full w-full ${
+                activeTab === "translate"
+                  ? "max-w-[1600px]"
+                  : activeTab === "ai"
+                  ? "max-w-[1400px]"
+                  : activeTab === "vocabulary"
+                  ? "max-w-[1300px]"
+                  : "max-w-5xl"
+              }`}
+            >
               {activeTab === "translate" && (
                 <DualPaneTranslator
                   key={`transfer_${transferred.seq}`}

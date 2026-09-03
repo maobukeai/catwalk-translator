@@ -209,6 +209,7 @@ fn test_m3_mock_llm_api_tier3_successful_batch_translation() {
             api_key: "sk-mock-key".to_string(),
             model: "deepseek-chat".to_string(),
             endpoint: format!("http://{}", addr),
+            enabled: Some(true),
         };
 
         let phrases = vec!["Custom Term XYZ".to_string()];
@@ -245,6 +246,7 @@ fn test_m3_mock_llm_timeout_fallback_transition() {
             api_key: "".to_string(),
             model: "llama3".to_string(),
             endpoint: format!("http://{}", addr),
+            enabled: Some(true),
         };
 
         let phrases = vec!["Unmatched Timeout Phrase".to_string()];
@@ -320,6 +322,7 @@ fn test_m3_universal_translate_forced_engine_dict_routing() {
                 my_memory: Some(false),
                 baidu: Some(false),
                 tencent: Some(false),
+                ..Default::default()
             }),
             translation_tiers: None,
             style: None,
@@ -328,6 +331,10 @@ fn test_m3_universal_translate_forced_engine_dict_routing() {
             baidu_secret: None,
             deepl_api_key: None,
             deepl_custom_url: None,
+            volcengine_access_key: None,
+            volcengine_secret_key: None,
+            yandex_api_key: None,
+            yandex_folder_id: None,
         };
 
         let res = app_v2_lib::translator::execute_universal_translate(req, &[]).await;
@@ -365,6 +372,7 @@ fn test_m3_universal_translate_forced_engine_substance_routing() {
                 my_memory: Some(false),
                 baidu: Some(false),
                 tencent: Some(false),
+                ..Default::default()
             }),
             translation_tiers: None,
             style: None,
@@ -373,6 +381,10 @@ fn test_m3_universal_translate_forced_engine_substance_routing() {
             baidu_secret: None,
             deepl_api_key: None,
             deepl_custom_url: None,
+            volcengine_access_key: None,
+            volcengine_secret_key: None,
+            yandex_api_key: None,
+            yandex_folder_id: None,
         };
 
         let res = app_v2_lib::translator::execute_universal_translate(req, &[]).await;
@@ -465,6 +477,7 @@ fn test_m3_universal_translate_100_percent_cards_retained() {
                 my_memory: Some(true),
                 baidu: Some(true),
                 tencent: Some(true),
+                ..Default::default()
             }),
             translation_tiers: None,
             style: None,
@@ -473,6 +486,10 @@ fn test_m3_universal_translate_100_percent_cards_retained() {
             baidu_secret: Some("mock_sec".to_string()),
             deepl_api_key: Some("mock_key".to_string()),
             deepl_custom_url: None,
+            volcengine_access_key: None,
+            volcengine_secret_key: None,
+            yandex_api_key: None,
+            yandex_folder_id: None,
         };
 
         let res = app_v2_lib::translator::execute_universal_translate(req, &[]).await;

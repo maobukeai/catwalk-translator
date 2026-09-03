@@ -145,6 +145,9 @@ describe('capture overlay upgrade regressions', () => {
     render(<CaptureOverlay isOpen={true} onClose={onClose} />);
     await screen.findByText(/猫步划词/);
 
+    // Draw a selection so the toolbar is displayed
+    await mouseSelection();
+
     // Pin via Ctrl+P
     fireEvent(window, new KeyboardEvent('keydown', { key: 'p', code: 'KeyP', ctrlKey: true, bubbles: true }));
     await waitFor(() => expect(screen.getByTitle(/已置顶固定/)).toBeInTheDocument());

@@ -244,7 +244,7 @@ describe('Dynamic Engine Switching and Online Channels Persistence Test Suite', 
       height: 1080,
       scaleFactor: 1.0,
     });
-    vi.spyOn(tauriService, 'cmdShowOverlay').mockResolvedValue();
+    const showOverlaySpy = vi.spyOn(tauriService, 'cmdShowOverlay').mockResolvedValue();
     vi.spyOn(tauriService, 'cmdRegionImage').mockResolvedValue('fakebase64');
     vi.spyOn(tauriService, 'cmdRegionOcrLayout').mockResolvedValue(mockLayout);
     vi.spyOn(tauriService, 'cmdTranslatePhrasesStyled').mockResolvedValue([
@@ -265,7 +265,7 @@ describe('Dynamic Engine Switching and Online Channels Persistence Test Suite', 
     });
 
     render(<CaptureOverlay isOpen={true} onClose={() => {}} />);
-    await screen.findByText(/猫步划词/);
+    await waitFor(() => expect(showOverlaySpy).toHaveBeenCalled());
 
     // Fast-forward into overlay phase by triggering selection
     const rootContainer = document.querySelector('.fixed.inset-0') as HTMLElement;

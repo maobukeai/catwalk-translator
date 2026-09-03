@@ -172,7 +172,7 @@ fn region_ocr_layout(
     let merged_blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|line| !line.is_empty())
-        .map(|line| WordMerger::merge_line(line, 20.0))
+        .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
 
@@ -283,8 +283,7 @@ pub async fn cmd_region_ocr_layout(
     let (ocr_engine, ocr_filter) = state
         .settings
         .lock()
-        .ok()
-        .and_then(|s| Some((s.ocr_engine.clone(), ocr_filter_from_settings(&s))))
+        .ok().map(|s| (s.ocr_engine.clone(), ocr_filter_from_settings(&s)))
         .unwrap_or((None, None));
     // OCR 是 CPU 密集的同步推理：放进 blocking 线程池，避免卡死 tokio worker
     //（否则 watch tick、翻译 HTTP 等并发任务都会被一起拖住）。
@@ -495,8 +494,7 @@ pub async fn cmd_region_ocr_translate(
     let (ocr_engine, ocr_filter) = state
         .settings
         .lock()
-        .ok()
-        .and_then(|s| Some((s.ocr_engine.clone(), ocr_filter_from_settings(&s))))
+        .ok().map(|s| (s.ocr_engine.clone(), ocr_filter_from_settings(&s)))
         .unwrap_or((None, None));
     // Stage 1: OCR + layout + colors（同步 CPU 推理 → blocking 线程池，不卡 runtime）
     let mut overlay_blocks = tauri::async_runtime::spawn_blocking(move || {
@@ -607,14 +605,29 @@ pub async fn cmd_image_ocr_translate(
         dst[3] = 0xFF;
     }
 
-    // 3. OCR + line clustering + word merge (identical to the capture path).
+    // 读取用户全局设置：OCR 引擎偏好 (onnx/winrt/auto)、自定义词库术语表、内容过滤与层级优先级
+    let (glossary, ocr_filter, ocr_engine, style) = state
+        .settings
+        .lock()
+        .ok()
+        .map(|s| {
+            (
+                crate::translator::glossary_from_settings(&s.custom_dict_items),
+                ocr_filter_from_settings(&s),
+                s.ocr_engine.clone(),
+                s.translation_style.clone(),
+            )
+        })
+        .unwrap_or_default();
+
+    // 3. OCR + line clustering + word merge (严格遵循用户配置的 OCR 引擎与模型版本).
     let ocr_result =
-        crate::ocr::execute_native_ocr(&bmp).unwrap_or(OcrResult { blocks: vec![] });
+        crate::ocr::execute_native_ocr_with_engine(&bmp, ocr_engine.as_deref()).unwrap_or(OcrResult { blocks: vec![] });
     let lines = LineClusterer::cluster_into_lines(ocr_result.blocks, 8.0);
     let mut merged_blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|line| !line.is_empty())
-        .map(|line| WordMerger::merge_line(line, 20.0))
+        .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
 
@@ -628,17 +641,6 @@ pub async fn cmd_image_ocr_translate(
 
     // 4. Translate through the shared multi-tier pipeline. 自定义词库作为术语强制表参与。
     let pipeline = crate::translator::shared_pipeline();
-    let (glossary, ocr_filter) = state
-        .settings
-        .lock()
-        .ok()
-        .map(|s| {
-            (
-                crate::translator::glossary_from_settings(&s.custom_dict_items),
-                ocr_filter_from_settings(&s),
-            )
-        })
-        .unwrap_or_default();
     // 内容过滤:时间戳/纯数字/水印块剔除(与截图翻译同一规则集)
     if let Some(rules) = &ocr_filter {
         let compiled = compile_ocr_filter_rules(rules);
@@ -653,25 +655,54 @@ pub async fn cmd_image_ocr_translate(
     }
     let phrases: Vec<String> = merged_blocks.iter().map(|b| b.text.clone()).collect();
     let translations = pipeline
-        .translate_phrases(&phrases, &preset, llm_config.as_ref(), &glossary)
+        .translate_phrases_styled(
+            &phrases,
+            &preset,
+            llm_config.as_ref(),
+            style.as_deref(),
+            &glossary,
+        )
         .await;
 
-    // 5. Sample per-block background colours from the image itself.
+    // 5. Sample per-block background colours & build Inpainting erased patch PNGs.
     let mut blocks = Vec::with_capacity(merged_blocks.len());
-    for (block, tr) in merged_blocks.iter().zip(translations.iter()) {
+    for (i, (block, tr)) in merged_blocks.iter().zip(translations.iter()).enumerate() {
+        let abs_phys = BoundingBox {
+            x: block.box_rect.x,
+            y: block.box_rect.y,
+            width: block.box_rect.width.max(4),
+            height: block.box_rect.height.max(4),
+        };
+        let neighbors: Vec<BoundingBox> = merged_blocks
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, b)| b.box_rect)
+            .collect();
+
+        let (patch_png, patch_rect) =
+            match crate::inpaint::build_erased_patch_png(&bmp, w, h, abs_phys, &neighbors) {
+                Some((b64, pw, ph)) => {
+                    let (x0, y0, _x1, _y1) =
+                        crate::inpaint::erased_patch_rect(abs_phys, w, h, &neighbors, &bmp);
+                    (
+                        Some(b64),
+                        (x0 as f64, y0 as f64, pw as f64, ph as f64),
+                    )
+                }
+                None => (None, (0.0, 0.0, 0.0, 0.0)),
+            };
+
         let bg_rgb = ColorSampler::sample_from_full_bmp(
             &bmp,
             w,
             h,
-            BoundingBox {
-                x: block.box_rect.x,
-                y: block.box_rect.y,
-                width: block.box_rect.width.max(4),
-                height: block.box_rect.height.max(4),
-            },
+            abs_phys,
             4,
         );
-        let brightness = ColorSampler::calc_perceived_brightness(bg_rgb[0], bg_rgb[1], bg_rgb[2]);
+        let ink_rgb = crate::inpaint::sample_text_color(&bmp, w, h, abs_phys);
+        let fg_css = format!("rgb({},{},{})", ink_rgb[0], ink_rgb[1], ink_rgb[2]);
+
         blocks.push(crate::models::ImageTranslateBlock {
             original: block.text.clone(),
             translated: tr.translated.clone(),
@@ -682,11 +713,12 @@ pub async fn cmd_image_ocr_translate(
             width: block.box_rect.width.max(4),
             height: block.box_rect.height.max(4),
             bg_css: format!("rgb({},{},{})", bg_rgb[0], bg_rgb[1], bg_rgb[2]),
-            fg_css: if brightness < 128.0 {
-                "#ffffff".to_string()
-            } else {
-                "#141417".to_string()
-            },
+            fg_css,
+            patch_png,
+            patch_x: patch_rect.0,
+            patch_y: patch_rect.1,
+            patch_w: patch_rect.2,
+            patch_h: patch_rect.3,
         });
     }
 
@@ -803,9 +835,7 @@ pub async fn cmd_show_overlay(window: tauri::WebviewWindow) -> Result<(), String
 
     #[cfg(target_os = "windows")]
     {
-        #[cfg(target_os = "windows")]
         crate::set_windows_dwm_blur(&window, false, true);
-        use tauri::LogicalSize;
         // Get full virtual screen dimensions covering all monitors
 
         #[link(name = "user32")]
@@ -828,10 +858,10 @@ pub async fn cmd_show_overlay(window: tauri::WebviewWindow) -> Result<(), String
         };
 
         let _ = window.set_always_on_top(true);
-        // Use logical pixels (scale factor handled by Tauri)
-        let sf = window.scale_factor().unwrap_or(1.0);
-        let _ = window.set_position(tauri::LogicalPosition::new(vx as f64 / sf, vy as f64 / sf));
-        let _ = window.set_size(LogicalSize::new(vw as f64 / sf, vh as f64 / sf));
+        let _ = window.set_shadow(false);
+        let _ = window.set_resizable(false);
+        let _ = window.set_position(tauri::PhysicalPosition::new(vx, vy));
+        let _ = window.set_size(tauri::PhysicalSize::new(vw as u32, vh as u32));
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -898,6 +928,8 @@ pub async fn cmd_close_overlay(
 
     if should_restore {
         let _ = window.set_always_on_top(false);
+        let _ = window.set_shadow(true);
+        let _ = window.set_resizable(true);
         if let Some((x, y, w, h)) = valid_saved {
             let _ = window.set_size(tauri::PhysicalSize::new(w, h));
             let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
@@ -912,6 +944,8 @@ pub async fn cmd_close_overlay(
         // 绝对静默隐退：取消/关闭划词时强行直接 hide 到系统托盘，绝不弹窗打扰当前游戏或工作
         let _ = window.hide();
         let _ = window.set_always_on_top(false);
+        let _ = window.set_shadow(true);
+        let _ = window.set_resizable(true);
         if let Some((x, y, w, h)) = valid_saved {
             let _ = window.set_size(tauri::PhysicalSize::new(w, h));
             let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
@@ -966,8 +1000,7 @@ pub async fn cmd_watch_tick(
         let (ocr_engine, ocr_filter) = state
         .settings
         .lock()
-        .ok()
-        .and_then(|s| Some((s.ocr_engine.clone(), ocr_filter_from_settings(&s))))
+        .ok().map(|s| (s.ocr_engine.clone(), ocr_filter_from_settings(&s)))
         .unwrap_or((None, None));
         // 安静刷新(GDI BitBlt) + stage-1 OCR 都是同步阻塞操作 → blocking 线程池
         let blocks = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<OverlayBlock>, String> {
@@ -1035,7 +1068,7 @@ pub async fn cmd_capture_and_ocr(
             let merged_blocks: Vec<TextBlock> = lines
                 .into_iter()
                 .filter(|line| !line.is_empty())
-                .map(|line| WordMerger::merge_line(line, 20.0))
+                .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
                 .filter(|b| !b.text.trim().is_empty())
                 .collect();
             Some(OcrResult { blocks: merged_blocks })
@@ -1120,7 +1153,7 @@ pub fn ocr_line_at(
     let mut blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|l| !l.is_empty())
-        .map(|l| WordMerger::merge_line(l, 20.0))
+        .flat_map(|l| WordMerger::merge_line_segments(l, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
     if blocks.is_empty() {
@@ -1258,7 +1291,7 @@ pub async fn cmd_snap_region(
     let mut blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|l| !l.is_empty())
-        .map(|l| WordMerger::merge_line(l, 20.0))
+        .flat_map(|l| WordMerger::merge_line_segments(l, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
     if blocks.is_empty() {

@@ -168,16 +168,6 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
       return null;
     case 'cmd_general_dict_install':
       return { installed: true, entries: 0, installedAt: '' };
-    // ── 剪贴板翻译历史 ──
-    case 'cmd_get_clipboard_history':
-      return [];
-    case 'cmd_clear_clipboard_history':
-      return null;
-    // ── 无感查词浮窗 ──
-    case 'cmd_get_lookup_payload':
-      return null;
-    case 'cmd_hide_lookup_popup':
-      return null;
     default:
       throw new Error(`Unhandled IPC command: ${cmd}`);
   }

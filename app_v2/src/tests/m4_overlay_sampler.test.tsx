@@ -4,6 +4,7 @@ import { CaptureOverlay } from '../components/Overlay/CaptureOverlay';
 import { cmdSampleColors, cmdRegionOcrTranslate } from '../services/tauri';
 import { createMockIpcHarness, getActiveHarness } from './harness/tauriIpcMock';
 import type { OverlayBlock } from '../services/types';
+import { useSettingsStore } from '../stores/useSettingsStore';
 
 const MOCK_PAYLOAD = { width: 1920, height: 1080, scaleFactor: 1.0 };
 const BASE = ['cmd_begin_capture', 'cmd_show_overlay', 'cmd_close_overlay'] as const;
@@ -30,16 +31,37 @@ describe('M4 overlay and sampler coverage', () => {
     cleanup();
     vi.clearAllMocks();
     delete (window as any).__TAURI_INTERNALS__;
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        captureReleaseAction: 'auto',
+      },
+    });
   });
 
-  it('renders selecting guidance when the overlay opens', async () => {
+  it('renders selecting guidance when the overlay opens and toolbar appears on selection', async () => {
     createMockIpcHarness();
     wireMock(() => Promise.resolve(undefined));
     (window as any).__TAURI_INTERNALS__ = {};
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        captureReleaseAction: 'adjust',
+      },
+    });
 
     render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
     expect(await screen.findByText(/猫步划词/)).toBeInTheDocument();
-    expect(screen.getByTitle(/按住鼠标左键划框/)).toBeInTheDocument();
+    // Initially no top toolbar to keep viewport clean
+    expect(screen.queryByTestId('snipping-top-bar')).not.toBeInTheDocument();
+
+    // After drawing a selection, the toolbar appears attached to the selection
+    const container = document.querySelector('.fixed.inset-0')!;
+    fireEvent.mouseDown(container, { clientX: 100, clientY: 100, button: 0 });
+    fireEvent.mouseMove(container, { clientX: 400, clientY: 200 });
+    fireEvent.mouseUp(container);
+
+    expect(await screen.findByTitle(/按住鼠标左键划框/)).toBeInTheDocument();
     expect(screen.getByTitle(/退出划词/)).toBeInTheDocument();
   });
 

@@ -87,7 +87,7 @@ impl CoordinateMapper {
 
 pub fn encode_base64(bytes: &[u8]) -> String {
     const CHARSET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0];
         let b1 = if chunk.len() > 1 { chunk[1] } else { 0 };
@@ -112,7 +112,9 @@ pub fn encode_base64(bytes: &[u8]) -> String {
 
 // ─── Global in-memory storage for latest desktop screenshot ───────────────────
 
-static LATEST_CAPTURE: std::sync::Mutex<Option<(Vec<u8>, u32, u32, f64)>> =
+pub type CaptureData = (Vec<u8>, u32, u32, f64);
+
+static LATEST_CAPTURE: std::sync::Mutex<Option<CaptureData>> =
     std::sync::Mutex::new(None);
 
 pub fn set_latest_capture(data: Vec<u8>, width: u32, height: u32, scale_factor: f64) {
@@ -121,13 +123,14 @@ pub fn set_latest_capture(data: Vec<u8>, width: u32, height: u32, scale_factor: 
     }
 }
 
-pub fn get_latest_capture() -> Option<(Vec<u8>, u32, u32, f64)> {
+pub fn get_latest_capture() -> Option<CaptureData> {
     LATEST_CAPTURE.lock().ok()?.clone()
 }
 
 // ─── Windows Native Implementation ────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
     type HDC = *mut std::ffi::c_void;
     type HBITMAP = *mut std::ffi::c_void;
@@ -319,6 +322,7 @@ pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 pub fn capture_region_bmp(rect: PhysicalRect) -> Result<(Vec<u8>, u32, u32, f64), String> {
     type HDC = *mut std::ffi::c_void;
     type HBITMAP = *mut std::ffi::c_void;

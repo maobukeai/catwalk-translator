@@ -195,6 +195,16 @@ describe('result reading experience (view cycle / selectable / zoom / active car
     expect(utterances[utterances.length - 1]?.text).toBe('Subsurface Scattering');
   });
 
+  it('btn-speech on SnippingToolbar speaks full text of all blocks when no card is focused', async () => {
+    await openWithResult();
+
+    const speechBtn = screen.getByTestId('btn-speech');
+    fireEvent.click(speechBtn);
+
+    expect(speakMock).toHaveBeenCalled();
+    expect(utterances[utterances.length - 1]?.text).toBe('Subsurface Scattering\nRoughness');
+  });
+
   it('context menu offers region image copy & save (PNG)', async () => {
     const calls = await openWithResult();
 

@@ -62,6 +62,8 @@ interface OverlayBlockCardProps {
   onViewCycle?: () => void;
   /** Hover marks this card as the active keyboard target (Space / Ctrl+D / ↑↓). */
   onActive?: () => void;
+  /** Hover leaves card, clearing active focus when mouse moves away. */
+  onInactive?: () => void;
   isActive?: boolean;
   /** Reports the real rendered size so wrapped/wide cards avoid overlapping. */
   onRenderedSize?: (blockIndex: number, size: { width: number; height: number }) => void;
@@ -223,6 +225,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   onScaleChange,
   onViewCycle,
   onActive,
+  onInactive,
   isActive,
   onRenderedSize,
 }) => {
@@ -298,7 +301,9 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   const singleLineH = Math.max(10, block.logicalH / lineCount);
   const nonSpaceLen = Math.max(1, block.original.replace(/\s/g, '').length);
   const cjkCount = (block.original.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
-  const emFactor = cjkCount / nonSpaceLen > 0.3 ? 1.05 : 0.92;
+  // OCR 检测框天然包含行距与 DBNet unclip 安全扩展，真实印刷字高约占框高的 68%~72%。
+  // 采用 0.72 (CJK) 与 0.66 (西文) 使渲染字号与原图真实字号 1:1 贴合，彻底消除字体臃肿、冲出边框与上下挤压。
+  const emFactor = cjkCount / nonSpaceLen > 0.3 ? 0.72 : 0.66;
   const baseFontSize = singleLineH * emFactor;
 
   // 自适应字号缩放计算 (Auto Font-Fit Calculation)
@@ -452,6 +457,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
       }}
       onMouseLeave={() => {
         setIsHovered(false);
+        onInactive?.();
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -529,12 +535,23 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         </span>
       )}
       <span
-        className={`relative z-[2] ${isPending ? 'opacity-80' : 'tooltip-pop'}`}
+        key={displayText}
+        className={`relative z-[2] transition-opacity duration-200 ${isPending ? 'opacity-80' : 'tooltip-pop'}`}
         style={{ userSelect: 'text', lineHeight: 'inherit' }}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {renderText}
       </span>
+
+      {/* ✨ AI 精翻完成后的专属金色呼吸星标角标 */}
+      {block.sourceTier && block.sourceTier.includes('✨') && (
+        <span
+          className="absolute -top-1.5 -right-1.5 z-20 flex items-center justify-center w-3.5 h-3.5 rounded-full text-[8px] bg-gradient-to-r from-amber-400 to-indigo-500 text-white shadow-sm pointer-events-none"
+          title={`已升级：${block.sourceTier}`}
+        >
+          ✨
+        </span>
+      )}
 
       {/* 📌 Pin indicator on card top-right when pinned */}
       {isPinned && (

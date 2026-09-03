@@ -180,7 +180,7 @@ pub fn uninstall_offline() -> Result<OfflineModelStatus, String> {
     let _ = std::fs::remove_file(dir.join("dict_override.json"));
     let _ = std::fs::remove_file(manifest_path());
     // Optionally remove empty dirs
-    let _ = std::fs::remove_dir(&dir.join("dicts"));
+    let _ = std::fs::remove_dir(dir.join("dicts"));
     Ok(status())
 }
 
