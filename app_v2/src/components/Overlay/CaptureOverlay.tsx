@@ -142,6 +142,46 @@ function rememberLastSelection(rect: SelRect) {
 
 export { memoKey, memoGet, memoPut, __clearTranslationMemoForTests } from './translationMemo';
 
+/** 归一化文本键用于模糊容错匹配，消除标点、序号或路径转义的微小偏差 */
+function normalizeKeyForMatching(text: string): string {
+  let s = text.trim();
+  s = s.replace(/^[•·\-*▪※●]\s*/, '');
+  s = s.replace(/^(\d+|[\(\[]\d+[\)\]])[\.、:：\s]+/, '');
+  s = s.replace(/[:：;；.。!！\s]+$/, '');
+  return s.replace(/\\\//g, '/').trim().toLowerCase();
+}
+
+/** 从翻译结果 map 中智能查找最佳匹配文本 */
+function findBestTranslationMatch(phrase: string, map: Record<string, string>): string | undefined {
+  const p = phrase.trim();
+  if (!p) return undefined;
+  if (map[p]) return map[p];
+  if (map[p.toLowerCase()]) return map[p.toLowerCase()];
+  const unescaped = p.replace(/\\\//g, '/');
+  if (map[unescaped]) return map[unescaped];
+
+  const normOrig = normalizeKeyForMatching(p);
+  if (!normOrig) return undefined;
+
+  for (const [k, v] of Object.entries(map)) {
+    if (normalizeKeyForMatching(k) === normOrig && v && v.trim()) {
+      return v;
+    }
+  }
+
+  for (const [k, v] of Object.entries(map)) {
+    const normK = normalizeKeyForMatching(k);
+    if (normK && (normOrig.includes(normK) || normK.includes(normOrig)) && v && v.trim()) {
+      const minLen = Math.min(normOrig.length, normK.length);
+      const maxLen = Math.max(normOrig.length, normK.length);
+      if (minLen / maxLen >= 0.6) {
+        return v;
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Region-watch refresh interval default (ms); user-configurable 1000–10000. */
 const WATCH_INTERVAL_MS = 3000;
 
@@ -1151,6 +1191,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           preset,
           fastLlmConfig,
           style,
+          targetLang,
         );
         if (stale()) return;
         const byIdx = new Map<number, TranslationResult>();
@@ -1332,7 +1373,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                 if (!prev) return prev;
                 const nextBlocks = [...prev.blocks];
                 refineCandidates.forEach(({ index, phrase }) => {
-                  const aiText = resultMap[phrase] || resultMap[phrase.toLowerCase()];
+                  const aiText = findBestTranslationMatch(phrase, resultMap);
                   if (aiText && aiText.trim() && aiText.trim() !== nextBlocks[index].original) {
                     refinedAny = true;
                     const modelName = usedLlm!.model || usedLlm!.provider || 'AI';
@@ -1393,7 +1434,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     const preset = selectedEngine !== 'auto' ? selectedEngine : effectivePreset();
     const llmConfig = resolveLlmConfig(selectedEngine);
     try {
-      const [tr] = await cmdTranslatePhrasesStyled([block.original], preset, llmConfig, settings.translationStyle);
+      const [tr] = await cmdTranslatePhrasesStyled([block.original], preset, llmConfig, settings.translationStyle, targetLang);
       if (!mountedRef.current) return;
       if (tr && tr.translated && tr.translated.trim()) {
         setOverlayResult((prev) => prev ? {
@@ -1409,7 +1450,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     } catch {
       if (mountedRef.current) showFeedback('⚠️ 重试失败：翻译通道不可用');
     }
-  }, [overlayResult, selectedEngine, settings]);
+  }, [overlayResult, selectedEngine, settings, targetLang]);
 
   /** 把整场译文渲染为分享卡片 PNG 保存到图片库 */
   const exportOverlayImage = async () => {

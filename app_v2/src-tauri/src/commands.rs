@@ -217,6 +217,7 @@ pub async fn cmd_translate_phrases_styled(
     preset: String,
     llm_config: Option<LlmConfig>,
     style: Option<String>,
+    target_lang: Option<String>,
 ) -> Result<Vec<TranslationResult>, String> {
     if phrases.is_empty() {
         return Ok(vec![]);
@@ -231,7 +232,14 @@ pub async fn cmd_translate_phrases_styled(
         .unwrap_or_default();
 
     let results = pipeline
-        .translate_phrases_styled(&phrases, &preset, llm_config.as_ref(), style.as_deref(), &glossary)
+        .translate_phrases_styled(
+            &phrases,
+            &preset,
+            llm_config.as_ref(),
+            style.as_deref(),
+            &glossary,
+            target_lang.as_deref(),
+        )
         .await;
     Ok(results)
 }
@@ -255,9 +263,23 @@ pub async fn cmd_llm_batch_refine(
         .map(|s| crate::translator::glossary_from_settings(&s.custom_dict_items))
         .unwrap_or_default();
 
-    pipeline
+    let raw_map = pipeline
         .translate_via_llm_with_style(&phrases, &config, style.as_deref(), &glossary)
-        .await
+        .await?;
+
+    // 关键对齐：针对 LLM 经常去除前缀序号(1./•)、改动冒号分号或转义路径，
+    // 以原始输入短语为基准自动对齐注入，确保前端能 100% 命中键值。
+    let mut aligned_map = raw_map.clone();
+    for p in &phrases {
+        let trimmed = p.trim();
+        if !aligned_map.contains_key(trimmed) {
+            if let Some(matched_trans) = crate::translator::match_from_translation_map(trimmed, &raw_map) {
+                aligned_map.insert(trimmed.to_string(), matched_trans);
+            }
+        }
+    }
+
+    Ok(aligned_map)
 }
 
 

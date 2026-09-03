@@ -247,7 +247,8 @@ export async function cmdTranslatePhrasesStyled(
   phrases: string[],
   preset: string,
   llmConfig?: LlmConfig | null,
-  style?: 'literal' | 'free' | 'terminology'
+  style?: 'literal' | 'free' | 'terminology',
+  targetLang?: string | null
 ): Promise<TranslationResult[]> {
   if (isTauri()) {
     return await invoke<TranslationResult[]>('cmd_translate_phrases_styled', {
@@ -255,6 +256,7 @@ export async function cmdTranslatePhrasesStyled(
       preset,
       llmConfig: llmConfig || null,
       style: style ?? null,
+      targetLang: targetLang ?? null,
     });
   }
   return cmdTranslatePhrases(phrases, preset, llmConfig);

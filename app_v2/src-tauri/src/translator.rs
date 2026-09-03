@@ -196,6 +196,84 @@ pub fn is_technical_identifier(text: &str) -> bool {
     has_digit && has_version_sep
 }
 
+/// 智能提取用于对齐匹配的归一化字符串：
+/// 1. 去除前导序号（如 "1.", "1、", "1)", "[1]"）、项目符号（如 "•", "·", "-", "*", "▪", "※", "●"）及前后空格；
+/// 2. 去除末尾标点（如 ":", "：", ";", "；", ".", "。", "!", "！"）；
+/// 3. 转小写并去除反斜杠转义，用于鲁棒对齐大模型或翻译引擎返回的微调键。
+pub fn normalize_key_for_matching(text: &str) -> String {
+    let mut s = text.trim();
+    loop {
+        let prev = s;
+        s = s.trim();
+        if let Some(rest) = s.strip_prefix(|c: char| c == '•' || c == '·' || c == '-' || c == '*' || c == '▪' || c == '※' || c == '●') {
+            s = rest;
+        } else if let Some(dot_pos) = s.find(|c: char| c == '.' || c == '、' || c == ')' || c == '：' || c == ':') {
+            let prefix = &s[..dot_pos];
+            if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit() || c == '(' || c == '[') {
+                s = &s[dot_pos + 1..];
+            }
+        }
+        if s == prev {
+            break;
+        }
+    }
+    s = s.trim();
+    while let Some(rest) = s.strip_suffix(|c: char| c == ':' || c == '：' || c == ';' || c == '；' || c == '.' || c == '。' || c == '!' || c == '！') {
+        s = rest.trim();
+    }
+    s.replace("\\/", "/").to_lowercase()
+}
+
+/// 从 LLM 返回的 key-value map 中智能对齐翻译结果：
+/// 针对 LLM 经常去除前缀序号、改动全半角冒号/分号、转义路径等问题提供鲁棒的多级匹配。
+pub fn match_from_translation_map(orig: &str, map: &std::collections::HashMap<String, String>) -> Option<String> {
+    let trimmed = orig.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // 1. 精确匹配
+    if let Some(trans) = map.get(trimmed) {
+        if !trans.trim().is_empty() {
+            return Some(trans.clone());
+        }
+    }
+    // 2. 忽略大小写匹配
+    for (k, v) in map {
+        if k.trim().eq_ignore_ascii_case(trimmed) && !v.trim().is_empty() {
+            return Some(v.clone());
+        }
+    }
+    // 3. 转义路径匹配 (如 "\/" -> "/")
+    let unescaped = trimmed.replace("\\/", "/");
+    if let Some(trans) = map.get(&unescaped) {
+        if !trans.trim().is_empty() {
+            return Some(trans.clone());
+        }
+    }
+    // 4. 归一化序号与首尾标点匹配
+    let norm_orig = normalize_key_for_matching(trimmed);
+    if !norm_orig.is_empty() {
+        for (k, v) in map {
+            let norm_k = normalize_key_for_matching(k);
+            if norm_k == norm_orig && !v.trim().is_empty() {
+                return Some(v.clone());
+            }
+        }
+        // 5. 包含度高于 60% 的模糊重叠匹配
+        for (k, v) in map {
+            let norm_k = normalize_key_for_matching(k);
+            if !norm_k.is_empty() && (norm_orig.contains(&norm_k) || norm_k.contains(&norm_orig)) {
+                let min_len = norm_orig.len().min(norm_k.len()) as f64;
+                let max_len = norm_orig.len().max(norm_k.len()) as f64;
+                if min_len / max_len >= 0.60 && !v.trim().is_empty() {
+                    return Some(v.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// 从设置中的自定义词条构建术语对(过滤空项并 trim)。
 pub fn glossary_from_settings(items: &[crate::models::CustomDictItem]) -> GlossaryPairs {
     items
@@ -707,7 +785,7 @@ impl MultiTierPipeline {
         llm_config: Option<&LlmConfig>,
         glossary: &[(String, String)],
     ) -> Vec<TranslationResult> {
-        self.translate_phrases_styled(phrases, preset, llm_config, None, glossary)
+        self.translate_phrases_styled(phrases, preset, llm_config, None, glossary, None)
             .await
     }
 
@@ -718,12 +796,25 @@ impl MultiTierPipeline {
         llm_config: Option<&LlmConfig>,
         style: Option<&str>,
         glossary: &[(String, String)],
+        target_lang: Option<&str>,
     ) -> Vec<TranslationResult> {
         // 词库变化 → 翻译记忆整体失效(读锁快路径,通常零开销)
         self.cache.ensure_glossary(glossary_hash(glossary));
         let mut results: Vec<Option<TranslationResult>> = vec![None; phrases.len()];
         let mut unmatched_indices: Vec<usize> = Vec::new();
         let offline_ready = crate::offline::status().installed;
+
+        // 智能双向源语种与目标语种推断：
+        // 待译文本若含汉字，源语言为 zh-CN，目标默认为 en；反之源语言为 auto，目标默认为 zh-CN。
+        // 若外部显式传入有效 target_lang（如 "en"、"ja"、"zh-CN"），则绝对优先采用外部指定目标语种。
+        let phrases_has_chinese = phrases
+            .iter()
+            .any(|p| p.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)));
+        let actual_target = match target_lang {
+            Some(t) if !t.trim().is_empty() && t != "auto" => t.trim(),
+            _ => if phrases_has_chinese { "en" } else { "zh-CN" },
+        };
+        let actual_source = if phrases_has_chinese { "zh-CN" } else { "auto" };
 
         for (i, phrase) in phrases.iter().enumerate() {
             let trimmed = phrase.trim();
@@ -851,10 +942,11 @@ impl MultiTierPipeline {
                             let mut still_unmatched_indices = Vec::new();
                             for &idx in &unmatched_indices {
                                 let p = phrases[idx].trim();
-                                if let Some(translated) = map.get(p) {
+                                // 采用鲁棒的智能对齐匹配，彻底杜绝因前缀序号(1./•)、全半角标点或路径转义导致遗漏
+                                if let Some(translated) = match_from_translation_map(p, &map) {
                                     let res = TranslationResult {
                                         original: phrases[idx].clone(),
-                                        translated: translated.clone(),
+                                        translated,
                                         source_tier: tier_label.clone(),
                                     };
                                     self.cache.store(res.clone());
@@ -882,7 +974,7 @@ impl MultiTierPipeline {
                 "google" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_google(&self.client, p, "auto", "zh-CN").await {
+                        if let Some(tr) = translate_google(&self.client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "Google 官方".to_string()));
                         }
                     }
@@ -890,7 +982,7 @@ impl MultiTierPipeline {
                 "bing" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_bing(&self.client, p, "auto", "zh-CN").await {
+                        if let Some(tr) = translate_bing(&self.client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "微软 Bing".to_string()));
                         }
                     }
@@ -898,7 +990,7 @@ impl MultiTierPipeline {
                 "youdao" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_youdao(&self.client, p, "auto", "zh-CN").await {
+                        if let Some(tr) = translate_youdao(&self.client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "网易有道".to_string()));
                         }
                     }
@@ -906,7 +998,7 @@ impl MultiTierPipeline {
                 "tencent" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_tencent(&self.client, p, "auto", "zh-CN").await {
+                        if let Some(tr) = translate_tencent(&self.client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "腾讯翻译".to_string()));
                         }
                     }
@@ -914,7 +1006,7 @@ impl MultiTierPipeline {
                 "deepl" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        let tr = translate_deepl(&self.client, p, "auto", "zh-CN", None, None).await;
+                        let tr = translate_deepl(&self.client, p, actual_source, actual_target, None, None).await;
                         if !tr.translated.is_empty() {
                             online_results.insert(idx, (tr.translated, "DeepL 翻译".to_string()));
                         }
@@ -923,7 +1015,7 @@ impl MultiTierPipeline {
                 "baidu" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        let tr = translate_baidu(&self.client, p, "auto", "zh-CN", None, None).await;
+                        let tr = translate_baidu(&self.client, p, actual_source, actual_target, None, None).await;
                         if !tr.translated.is_empty() {
                             online_results.insert(idx, (tr.translated, "百度翻译".to_string()));
                         }
@@ -932,7 +1024,7 @@ impl MultiTierPipeline {
                 "caiyun" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_caiyun(&self.client, p, "auto", "zh-CN").await {
+                        if let Some(tr) = translate_caiyun(&self.client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "彩云小译".to_string()));
                         }
                     }
@@ -940,7 +1032,7 @@ impl MultiTierPipeline {
                 "volcengine" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        let tr = translate_volcengine(&self.client, p, "auto", "zh-CN", None, None).await;
+                        let tr = translate_volcengine(&self.client, p, actual_source, actual_target, None, None).await;
                         if !tr.translated.is_empty() {
                             online_results.insert(idx, (tr.translated, "火山翻译".to_string()));
                         }
@@ -949,7 +1041,7 @@ impl MultiTierPipeline {
                 "lingva" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_lingva(&self.client, p, "auto", "zh-CN").await {
+                        if let Some(tr) = translate_lingva(&self.client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "Lingva".to_string()));
                         }
                     }
@@ -957,7 +1049,7 @@ impl MultiTierPipeline {
                 "mymemory" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_mymemory(&self.client, p, "auto", "zh-CN").await {
+                        if let Some(tr) = translate_mymemory(&self.client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "MyMemory".to_string()));
                         }
                     }
@@ -973,7 +1065,7 @@ impl MultiTierPipeline {
                 "yandex" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        let tr = translate_yandex(&self.client, p, "auto", "zh-CN", None, None).await;
+                        let tr = translate_yandex(&self.client, p, actual_source, actual_target, None, None).await;
                         if !tr.translated.is_empty() {
                             online_results.insert(idx, (tr.translated, "Yandex".to_string()));
                         }
@@ -1041,6 +1133,26 @@ impl MultiTierPipeline {
         let mut still_unmatched = Vec::new();
         for &idx in &unmatched_indices {
             if let Some((translated, tier_name)) = online_results.remove(&idx) {
+                // 如果翻译出来的文本与原文完全一模一样（无论原语种是中文还是外文），说明选定的单一引擎原样透传了原文
+                // 立即尝试全引擎并发竞速自动挽救，确保绝不将未经翻译的文本留白在界面上
+                let is_untranslated = translated.trim().eq_ignore_ascii_case(phrases[idx].trim())
+                    && phrases[idx].chars().any(|c| c.is_alphabetic() || ('\u{4E00}'..='\u{9FFF}').contains(&c));
+
+                if is_untranslated {
+                    if let Ok(fallback_tr) = translate_online_fallback_with(&self.client, phrases[idx].trim()).await {
+                        if !fallback_tr.trim().eq_ignore_ascii_case(phrases[idx].trim()) {
+                            let res = TranslationResult {
+                                original: phrases[idx].clone(),
+                                translated: fallback_tr,
+                                source_tier: format!("{} (并发兜底)", tier_name),
+                            };
+                            self.cache.store(res.clone());
+                            results[idx] = Some(res);
+                            continue;
+                        }
+                    }
+                }
+
                 let res = TranslationResult {
                     original: phrases[idx].clone(),
                     translated,
@@ -1051,6 +1163,26 @@ impl MultiTierPipeline {
             } else {
                 still_unmatched.push(idx);
             }
+        }
+
+        // 终极救赎：若选定的单引擎连接超时或完全不可用，自动使用全引擎并发竞速（必应/有道/彩云/MyMemory）
+        if !still_unmatched.is_empty() {
+            let mut final_unmatched = Vec::new();
+            for idx in still_unmatched {
+                let p = phrases[idx].trim();
+                if let Ok(fallback_tr) = translate_online_fallback_with(&self.client, p).await {
+                    let res = TranslationResult {
+                        original: phrases[idx].clone(),
+                        translated: fallback_tr,
+                        source_tier: "多引擎竞速".to_string(),
+                    };
+                    self.cache.store(res.clone());
+                    results[idx] = Some(res);
+                } else {
+                    final_unmatched.push(idx);
+                }
+            }
+            still_unmatched = final_unmatched;
         }
 
         // Final Fallback:所有引擎(词典/离线/LLM/在线)均不可用时保留干净原文,
@@ -1107,9 +1239,9 @@ impl MultiTierPipeline {
             glossary_directive(glossary, &texts, has_chinese)
         };
         let system_prompt = if has_chinese {
-            format!("You are an expert translator. Translate the given Chinese text/terms into natural English. Return ONLY a valid JSON object mapping each original Chinese string to its English translation, without markdown formatting or extra text.{}{}", style_directive(style), directive)
+            format!("You are an expert translator. Translate the given Chinese text/terms into natural English. Return ONLY a valid JSON object mapping each original Chinese string to its English translation, without markdown formatting or extra text. CRITICAL: The keys in the JSON object MUST EXACTLY match the input strings character-for-character, including all symbols (like •, ·), numbers (like 1., 2.), colons, and file paths. Do not strip or modify the keys.{}{}", style_directive(style), directive)
         } else {
-            format!("You are an expert translator. Translate the given foreign/English text/terms into simplified Chinese. Return ONLY a valid JSON object mapping each original string to its simplified Chinese translation, without markdown formatting or extra text.{}{}", style_directive(style), directive)
+            format!("You are an expert translator. Translate the given foreign/English text/terms into natural simplified Chinese. Even for code snippets, command line arguments (e.g. flags), or technical terms, translate the English words into meaningful Chinese explanations (do NOT simply return the identical English string unless it is a proper name or brand). Return ONLY a valid JSON object mapping each original string to its simplified Chinese translation, without markdown formatting or extra text. CRITICAL: The keys in the JSON object MUST EXACTLY match the input strings character-for-character. Do not strip or modify the keys.{}{}", style_directive(style), directive)
         };
         let user_prompt = serde_json::to_string(phrases).unwrap_or_else(|_| "[]".to_string());
 
@@ -3489,6 +3621,13 @@ pub async fn translate_online_fallback_with(
     while let Some(joined) = futures.next().await {
         if let Ok(Some(trans)) = joined {
             if is_valid_translation(phrase, &trans) {
+                // 外文翻中文时，译文必须包含中文字符，避免纯英文俚语释义或原样英文抢跑胜出
+                if target_lang == "zh-CN" && !has_chinese {
+                    let trans_has_chinese = trans.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+                    if !trans_has_chinese {
+                        continue;
+                    }
+                }
                 return Ok(trans);
             }
         }
@@ -4328,4 +4467,48 @@ mod glossary_tests {
 
         println!("===================================================================\n");
     }
+
+    #[tokio::test]
+    async fn test_debug_user_missing_translation() {
+        let pipeline = shared_pipeline();
+        let phrases = vec![
+            "彻底修复落地".to_string(),
+            "1. 彻底清除破损的增量链接缓存:".to_string(),
+            "• 彻底移除了 target/debug/deps 下损坏的陈旧符号缓存与 incremental 临时文件;".to_string(),
+            "• 重新执行了干净链接编译，整个 Rust 后端已 100% 成功重新链接生成最新的 MaobuTranslator.exe (0 报错、退出码 0) !".to_string(),
+            "2. 端口与孤儿进程彻底清理:".to_string(),
+            "• 占用的 1420 端口已经完全释放 (处于纯空闲状态)。".to_string(),
+        ];
+        let res = pipeline.translate_phrases(&phrases, "auto", None, &[]).await;
+        for (i, r) in res.iter().enumerate() {
+            println!("DEBUG_ROW {}: orig='{}' -> trans='{}' (tier={})", i, r.original, r.translated, r.source_tier);
+            assert!(!r.translated.is_empty(), "Translation must not be empty");
+            // 验证译文不是完全未经翻译的原文
+            assert_ne!(r.translated, r.original, "Translation must not be identical to original");
+        }
+    }
+
+    #[test]
+    fn test_match_from_translation_map_robustness() {
+        use std::collections::HashMap;
+        let mut map = HashMap::new();
+        // 模拟大模型将前缀序号或标点剥离生成的返回结果
+        map.insert("彻底修复落地".to_string(), "Full Recovery Landing".to_string());
+        map.insert("彻底清除破损的增量链接缓存".to_string(), "Completely clear damaged incremental link cache".to_string());
+        map.insert("彻底移除了 target/debug/deps 下损坏的陈旧符号缓存与 incremental 临时文件".to_string(), "Thoroughly removed stale symbol cache and incremental temporary files under target/debug/deps".to_string());
+        map.insert("2. 端口与孤儿进程彻底清理".to_string(), "Thoroughly clean ports and orphan processes".to_string());
+
+        // 原文 1：包含前缀 "1." 与末尾 ":"
+        let matched1 = match_from_translation_map("1. 彻底清除破损的增量链接缓存:", &map);
+        assert_eq!(matched1, Some("Completely clear damaged incremental link cache".to_string()));
+
+        // 原文 2：包含前缀 "• " 与末尾 ";"
+        let matched2 = match_from_translation_map("• 彻底移除了 target/debug/deps 下损坏的陈旧符号缓存与 incremental 临时文件;", &map);
+        assert_eq!(matched2, Some("Thoroughly removed stale symbol cache and incremental temporary files under target/debug/deps".to_string()));
+
+        // 原文 3：包含前缀 "2." 与全角冒号 "："
+        let matched3 = match_from_translation_map("2. 端口与孤儿进程彻底清理：", &map);
+        assert_eq!(matched3, Some("Thoroughly clean ports and orphan processes".to_string()));
+    }
 }
+

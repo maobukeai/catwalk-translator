@@ -661,6 +661,7 @@ pub async fn cmd_image_ocr_translate(
             llm_config.as_ref(),
             style.as_deref(),
             &glossary,
+            None,
         )
         .await;
 

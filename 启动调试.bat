@@ -9,6 +9,15 @@ echo   * 后端热重载 (Cargo Watch): 修改 Rust 代码自动重新编译并重载
 echo ===================================================================
 echo.
 
+echo [*] 正在检查端口 1420 与旧进程占用情况...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr /r /c:":1420 .*LISTENING"' ) do (
+    echo [*] 发现端口 1420 被旧进程 (PID: %%a) 占用，正在自动释放...
+    taskkill /f /pid %%a >nul 2>&1
+)
+taskkill /f /im MaobuTranslator.exe >nul 2>&1
+echo [OK] 端口环境已就绪。
+echo.
+
 cd /d "%~dp0app_v2"
 
 echo [*] 正在启动热重载开发调试服务...
@@ -28,3 +37,4 @@ if %errorlevel% neq 0 (
     echo.
     pause
 )
+
