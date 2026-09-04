@@ -28,9 +28,14 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 describe('DualPaneTranslator CG Terminology & Tab Polish Test Suite', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it('renders CG terminology tag badge and sky blue dashed underline when engine source tier contains CG dictionary source', async () => {
@@ -140,6 +145,7 @@ describe('DualPaneTranslator CG Terminology & Tab Polish Test Suite', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('粗糙度')[0]).toBeInTheDocument();
+      expect(screen.getByText('Google')).toBeInTheDocument();
     }, { timeout: 3000 });
 
     const googleTab = screen.getByText('Google');

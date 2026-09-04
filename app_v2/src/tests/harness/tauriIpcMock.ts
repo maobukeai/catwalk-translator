@@ -41,7 +41,8 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
       return null;
     case 'cmd_capture_and_ocr':
       return state.ocrResult;
-    case 'cmd_translate_phrases': {
+    case 'cmd_translate_phrases':
+    case 'cmd_translate_phrases_styled': {
       const phrases: string[] = args?.phrases || [];
       return phrases.map((p) => ({
         original: p,

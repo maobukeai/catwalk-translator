@@ -93,6 +93,7 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
   });
 
   beforeEach(() => {
+    createMockIpcHarness();
     useSettingsStore.setState({
       settings: {
         ...useSettingsStore.getState().settings,

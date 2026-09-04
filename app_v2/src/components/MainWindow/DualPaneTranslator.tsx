@@ -32,11 +32,13 @@ import {
   Maximize2,
   FileText,
 } from "lucide-react";
-import { cmdUniversalTranslate, detectLanguage, saveTranslationHistory, cmdImageOcrTranslate, cmdOpenPin } from "../../services/tauri";
+import * as tauriService from "../../services/tauri";
+import { cmdUniversalTranslate, cmdTranslatePhrasesStyled, detectLanguage, saveTranslationHistory, cmdImageOcrTranslate, cmdOpenPin } from "../../services/tauri";
 import { exportTranslationImage } from "../../services/exportImage";
 import { speakText } from "../../services/tts";
 import type { ImageTranslateResponse } from "../../services/tauri";
 import { useSettingsStore } from "../../stores/useSettingsStore";
+import { DEFAULT_SETTINGS } from "../../services/defaultSettings";
 import { useAppTheme } from "../../hooks/useAppTheme";
 import { buildCaptureEngineChoices, buildImageTranslateEngineChoices, isLlmChannelReady } from "../../services/engineOptions";
 import { toTranslucentBg, toSolidBg, isLightBg, getCardTextColor } from "../Overlay/OverlayBlockCard";
@@ -217,11 +219,13 @@ function getCgSoftwareHint(original: string, translated: string): string {
 }
 
 export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
-  settings,
+  settings: propsSettings,
   initialText = "",
   onOpenSettings,
 }) => {
   const { setTranslationStyle } = useSettingsStore();
+  const storeSettings = useSettingsStore((s) => s.settings);
+  const settings = propsSettings || storeSettings || DEFAULT_SETTINGS;
   const [sourceText, setSourceText] = useState(initialText);
   const [sourceLang, setSourceLang] = useState<LanguageCode>("auto");
   const [targetLang, setTargetLang] = useState<LanguageCode>("zh-CN");
@@ -264,6 +268,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 翻译请求序号：防止并发触发（切语言/交换/重译）时慢的旧请求覆盖新结果
   const translationSeqRef = useRef(0);
+  const stage1DoneSeqRef = useRef(0);
 
   // Tab row scroll refs & helpers
   const tabsRef = useRef<HTMLDivElement | null>(null);
@@ -490,17 +495,67 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       );
       const isProgressive = isAutoMode && hasActiveLlm && settings.enableLlmProgressiveRefine !== false;
 
+      // ── Stage-0: 闪电先锋快通道 (与截图翻译完全一致的并发竞速，150ms 秒级直出上屏) ──
+      if (isAutoMode) {
+        tauriService.cmdTranslatePhrasesStyled(
+          [trimmed],
+          settings.defaultPreset,
+          null,
+          settings.translationStyle,
+          tgt
+        )
+          .then(([flashRes]) => {
+            if (seq !== translationSeqRef.current) return;
+            if (stage1DoneSeqRef.current === seq) return;
+            if (flashRes && flashRes.translated && flashRes.translated.trim()) {
+              setResponse((prev) => {
+                if (stage1DoneSeqRef.current === seq) return prev;
+                if (prev && !prev.engines.some(e => e.engineName.includes('⚡'))) return prev;
+                return {
+                  original: trimmed,
+                  detectedLang: src === "auto" ? (detectLanguage(trimmed).detected || "en") : src,
+                  mainTranslation: flashRes.translated,
+                  engines: [
+                    {
+                      engineName: flashRes.sourceTier ? `⚡ 极速快译 (${flashRes.sourceTier})` : "⚡ 极速快译",
+                      translated: flashRes.translated,
+                      sourceTier: flashRes.sourceTier || "Online Fallback",
+                    },
+                  ],
+                };
+              });
+              setLoading(false);
+            }
+          })
+          .catch(() => {});
+      }
+
       try {
-        // ── Stage-1: 快通道 (在线引擎并发大竞速，150ms 闪电秒出) ──
-        const res = await cmdUniversalTranslate({
+        // ── Stage-1: 全引擎多源对照 (带 1.2s 动态熔断截断，绝不拖垮首屏) ──
+        const res = await tauriService.cmdUniversalTranslate({
           ...baseParams,
           skipLlm: isProgressive,
         });
 
         // 请求期间用户又触发了新翻译，丢弃本次过期结果
-        if (seq !== translationSeqRef.current) return;
+        if (seq !== translationSeqRef.current) {
+          return;
+        }
 
-        setResponse(res);
+        stage1DoneSeqRef.current = seq;
+
+        setResponse((prev) => {
+          // 若已有先锋有效结果且新返回的 mainTranslation 处于重试态，优先保留先锋优质译文
+          let finalMain = res.mainTranslation;
+          const isResMainRetry = !finalMain || finalMain.includes('点击重试') || finalMain.includes('网络连接超时');
+          if (isResMainRetry && prev?.mainTranslation && !prev.mainTranslation.includes('点击重试')) {
+            finalMain = prev.mainTranslation;
+          }
+          return {
+            ...res,
+            mainTranslation: finalMain,
+          };
+        });
 
         // 优先将选中 Tab 设定为用户固定的优先渠道（preferredEngine），若未固定或该渠道失败则智能优选首个有效引擎
         let targetIdx = -1;

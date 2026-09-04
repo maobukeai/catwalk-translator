@@ -116,8 +116,9 @@ pub fn effective_proxy() -> Option<String> {
 
 /// 创建带系统代理自适应、Cookie Store 与标准 UA 的统一 reqwest Client
 pub fn create_http_client(timeout_ms: u64) -> Client {
-    let timeout_val = timeout_ms.max(4500);
+    let timeout_val = timeout_ms.clamp(1200, 10000);
     let mut builder = Client::builder()
+        .connect_timeout(Duration::from_millis(1500))
         .timeout(Duration::from_millis(timeout_val))
         .cookie_store(true)
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
@@ -3748,13 +3749,60 @@ pub async fn execute_universal_translate(
         }
     }
 
-    // 等待所有并发网络任务完成（必定收集所有已开启引擎，不丢弃任何卡片）
+    // 并发流式收集各个引擎的结果，杜绝慢引擎/死连引擎卡死全局
+    use futures_util::stream::FuturesUnordered;
+    use futures_util::StreamExt;
+
+    let mut futures = FuturesUnordered::new();
     for task in tasks {
-        if let Ok(item) = task.await {
-            if item.engine_name.contains("Urban") && item.translated.contains("未收录") && !is_forced {
-                continue;
+        futures.push(task);
+    }
+
+    let mut collected_valid = engines.iter().any(|e| !is_retry_status(e) && !e.translated.trim().is_empty());
+    let deadline = Duration::from_millis(1500);
+    let mut deadline_at: Option<tokio::time::Instant> = if !run_llm && collected_valid && !is_forced && !futures.is_empty() {
+        Some(tokio::time::Instant::now() + deadline)
+    } else {
+        None
+    };
+
+    loop {
+        let sleep_duration = match deadline_at {
+            Some(at) => {
+                let now = tokio::time::Instant::now();
+                if now >= at {
+                    break;
+                }
+                at - now
             }
-            engines.push(item);
+            None => Duration::from_secs(3600),
+        };
+
+        tokio::select! {
+            Some(res) = futures.next() => {
+                if let Ok(item) = res {
+                    if item.engine_name.contains("Urban") && item.translated.contains("未收录") && !is_forced {
+                        continue;
+                    }
+                    if !is_retry_status(&item) && !item.translated.trim().is_empty() {
+                        collected_valid = true;
+                    }
+                    engines.push(item);
+                    // 仅在纯在线多引擎模式下（run_llm 为 false），一旦拿到了有效翻译结果且处于非强制单引擎模式，
+                    // 立即启动 1500ms 收尾倒计时，杜绝慢/死连引擎拖垮首屏；对于明确配置了 LLM 的请求则完整等待。
+                    if !run_llm && collected_valid && !is_forced && deadline_at.is_none() && !futures.is_empty() {
+                        deadline_at = Some(tokio::time::Instant::now() + deadline);
+                    }
+                }
+            }
+            _ = tokio::time::sleep(sleep_duration), if deadline_at.is_some() => {
+                // 收尾窗口已到，已有有效译文，直接返回现存引擎结果，避免拖慢首屏体验
+                break;
+            }
+            else => {
+                // 所有引擎已自然返回
+                break;
+            }
         }
     }
 

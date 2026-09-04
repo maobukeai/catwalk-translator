@@ -1,8 +1,8 @@
 {
-  "mission_id": "mission-release-v0.3.2",
-  "created_at": "2026-09-04T08:37:00+08:00",
-  "completed_at": "2026-09-04T08:42:00+08:00",
-  "task_description": "Git 发布 v0.3.2 最新版本，并完成百度通用与大模型双通道适配、API热同步与编译发布打包",
+  "mission_id": "mission-release-v0.3.3",
+  "created_at": "2026-09-04T12:29:00+08:00",
+  "completed_at": "2026-09-04T12:34:00+08:00",
+  "task_description": "Git 发布 v0.3.3 最新版本，并完成双栏 Stage-0 闪电先锋快通道、全引擎流式熔断、编译发布打包与 GitHub Releases 发布",
   "classification": "L2",
   "state": "COMPLETE",
   "budget": {
@@ -20,34 +20,28 @@
     "package.json",
     "src-tauri/Cargo.toml",
     "src-tauri/tauri.conf.json",
-    "src-tauri/src/models.rs",
     "src-tauri/src/translator.rs",
-    "src-tauri/src/commands.rs",
-    "src-tauri/src/lib.rs",
-    "src-tauri/src/backup.rs",
     "src/components/MainWindow/DualPaneTranslator.tsx",
-    "src/components/Settings/panels/OnlinePanel.tsx",
-    "src/services/defaultSettings.ts",
-    "src/services/engineOptions.ts",
-    "src/services/tauri.ts",
-    "src/services/types.ts",
-    "src/stores/useSettingsStore.ts",
+    "src/tests/cg_terms_and_tab_scroll.test.tsx",
+    "src/tests/dual_pane_flash_path.test.tsx",
+    "src/tests/harness/tauriIpcMock.ts",
+    "src/tests/robustness.test.tsx",
     "release_notes.md"
   ],
   "evidence": {
-    "frontend_unit_tests": "vitest: 36 passed (36), 269 passed (269), 0 failed",
-    "rust_backend_tests": "cargo test --lib: 123 passed, 0 failed (live baidu general + baidu llm verified)",
-    "frontend_build": "tsc && vite build: 1872 modules transformed, 0 errors, v0.3.2 built in 3.04s",
+    "frontend_unit_tests": "vitest: 37 passed (37), 270 passed (270), 0 failed",
+    "rust_backend_tests": "cargo test --lib: 126 passed, 0 failed (all unit + live benchmarks passing)",
+    "frontend_build": "tsc && vite build: 1872 modules transformed, 0 errors, v0.3.3 built in 2.58s",
     "release_bundles": [
-      "target/release/bundle/nsis/猫步翻译_0.3.2_x64-setup.exe (7.17 MB, SHA256: 98E3362F7467B46E98CA60EE950A9C4B5122B1DEB9C2CF67F5562AB4C149C8B8)",
-      "target/release/bundle/msi/猫步翻译_0.3.2_x64_zh-CN.msi (10.26 MB, SHA256: 8C26CAE24DECA05B3A0826F990EF19D57A0E9BD6744C1FB56DACF935054CB3A8)",
-      "target/release/bundle/nsis/猫步翻译_0.3.2_x64_portable.exe (27.04 MB, SHA256: 849C471FA8A12598905C4A094554F1C257930F76390C1D83143739A18558797C)"
+      "target/release/bundle/nsis/猫步翻译_0.3.3_x64-setup.exe (7.17 MB, SHA256: AF6EE9E7A5C5AA0C49F3C541D2763828AB445A363CE2A92036377B74D60FC29A)",
+      "target/release/bundle/msi/猫步翻译_0.3.3_x64_zh-CN.msi (10.26 MB, SHA256: C4C16B9368F5C16A160C59678575F89F17620CEAA3041472F63526F8955B2DC2)",
+      "target/release/bundle/nsis/猫步翻译_0.3.3_x64_portable.exe (27.04 MB, SHA256: 28AC418D62FEB5E1CEF6FF33CAF798805DECC098FF7DDDD882A27145CD860AEA)"
     ],
-    "git_remote": "main branch and v0.3.2 tag pushed to https://github.com/maobukeai/catwalk-translator.git",
-    "github_release": "Published to https://github.com/maobukeai/catwalk-translator/releases/tag/v0.3.2"
+    "git_remote": "main branch and v0.3.3 tag pushed to https://github.com/maobukeai/catwalk-translator.git",
+    "github_release": "Published to https://github.com/maobukeai/catwalk-translator/releases/tag/v0.3.3"
   },
   "quality_gate": {
     "status": "PASS",
-    "arbitration": "v0.3.2 version bump applied across package.json, Cargo.toml and tauri.conf.json. Baidu general + Baidu LLM dual channels, credential hot-sync and connectivity testing implemented and verified. All bundles compiled and ready for release."
+    "arbitration": "v0.3.3 version bump applied across package.json, Cargo.toml and tauri.conf.json. Stage-0 flash path in dual pane, 1500ms dynamic cutoff on universal translate and HTTP connect_timeout optimization implemented and verified. All bundles compiled and ready for release."
   }
 }
