@@ -335,6 +335,7 @@ fn test_m3_universal_translate_forced_engine_dict_routing() {
             volcengine_secret_key: None,
             yandex_api_key: None,
             yandex_folder_id: None,
+            skip_llm: None,
         };
 
         let res = app_v2_lib::translator::execute_universal_translate(req, &[]).await;
@@ -385,6 +386,7 @@ fn test_m3_universal_translate_forced_engine_substance_routing() {
             volcengine_secret_key: None,
             yandex_api_key: None,
             yandex_folder_id: None,
+            skip_llm: None,
         };
 
         let res = app_v2_lib::translator::execute_universal_translate(req, &[]).await;
@@ -490,6 +492,7 @@ fn test_m3_universal_translate_100_percent_cards_retained() {
             volcengine_secret_key: None,
             yandex_api_key: None,
             yandex_folder_id: None,
+            skip_llm: None,
         };
 
         let res = app_v2_lib::translator::execute_universal_translate(req, &[]).await;

@@ -319,6 +319,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   // 原文单行 → 无条件锁定单行渲染(nowrap),不只限于触发了字号收缩的情况:
   // 未收缩分支下 canvas 度量稍有偏差也会在 maxWidth 处折行
   const singleLineLock = lineCount === 1;
+  let estimatedWidth = 0;
   if (renderText) {
     const displayLines = renderText.split('\n').filter(Boolean);
     const longestLen = displayLines.reduce((m, l) => Math.max(m, l.length), 1);
@@ -326,7 +327,6 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
     const dispIsCjk = dispCjkCount / Math.max(1, renderText.replace(/\s/g, '').length) > 0.3;
     // 优先用 canvas 实测最长一行的真实渲染宽度；不可用时退回字符数×平均字宽
     // 启发式（CJK 约 1.05em，西文约 0.52em）
-    let estimatedWidth = 0;
     for (const line of displayLines) {
       const w = measureTextWidth(line, baseFontSize);
       if (w > estimatedWidth) estimatedWidth = w;
@@ -366,32 +366,52 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   const maxWidth = cardMaxWidth;
   const isLight = isLightBg(block.bgCss, block.fgCss);
   const hasPatch = !!block.patchPng && (block.patchW ?? 0) > 0;
+  const solidBg = toSolidBg(block.bgCss, block.fgCss);
+  const isMoved = dragging || userDraggedRef.current;
+  const renderedTextW = baseFontSize > 0 ? (estimatedWidth * (fontSize / (baseFontSize * Math.max(scale, 0.01)))) : estimatedWidth;
+  const patchW = block.patchW ?? block.logicalW;
+  const patchH = block.patchH ?? block.logicalH;
+  const isOverflowingPatch = hasPatch && (patchW < Math.min(maxWidth, renderedTextW) || patchH < block.logicalH);
+  const cardBg = isMoved || !hasPatch || isOverflowingPatch ? solidBg : undefined;
 
-  const onMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const onDragStart = (e: React.MouseEvent | React.PointerEvent<HTMLDivElement>) => {
     if (e.button === 2) {
-      // Right-click opens the card context menu (parent handles positioning)
-      onCardContextMenu?.(e);
+      // Right-click is handled by onContextMenu to avoid duplicate calls
       return;
     }
     if (e.button === 0) {
+      if (dragging) return;
+      e.stopPropagation();
       userDraggedRef.current = true;
       setDragging(true);
       setDragStart({ mx: e.clientX, my: e.clientY, ox: pos.x, oy: pos.y });
+      if ('setPointerCapture' in e.currentTarget && 'pointerId' in e) {
+        try {
+          (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+        } catch {}
+      }
     }
   };
 
-  const onMouseMove = (e: React.MouseEvent) => {
+  const onDragMove = (e: React.MouseEvent | React.PointerEvent<HTMLDivElement>) => {
     if (!dragging) return;
+    e.stopPropagation();
     setPos({
       x: dragStart.ox + (e.clientX - dragStart.mx),
       y: dragStart.oy + (e.clientY - dragStart.my),
     });
   };
 
-  const onMouseUp = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDragging(false);
+  const onDragEnd = (e: React.MouseEvent | React.PointerEvent<HTMLDivElement>) => {
+    if (dragging) {
+      e.stopPropagation();
+      setDragging(false);
+      if ('releasePointerCapture' in e.currentTarget && 'pointerId' in e) {
+        try {
+          (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+        } catch {}
+      }
+    }
   };
 
   // 悬停/固定/失败态一律用 boxShadow 描边——不占布局空间，卡片默认态
@@ -420,6 +440,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         maxWidth,
         minHeight: block.logicalH,
         height: 'auto',
+        backgroundColor: cardBg,
         color: getCardTextColor(block.bgCss, block.fgCss),
         fontSize: `${fontSize}px`,
         fontFamily: 'var(--app-font-family, "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif)',
@@ -431,7 +452,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         lineHeight: 1.2,
         cursor: dragging ? 'grabbing' : 'move',
         zIndex: isPinned ? 210 : 200,
-        borderRadius: 2,
+        borderRadius: isMoved ? 6 : 2,
         border: 'none',
         boxShadow: cardBoxShadow,
         textShadow: isLight
@@ -444,13 +465,16 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         wordBreak: 'break-word',
         overflowWrap: 'break-word',
         // 仅保留侧边余量，左/上 padding 为 0：文字与 OCR 框逐像素对齐
-        // （patch 层是绝对定位，本就不受 padding 影响，此前 1px/3px 只偏移了正文）
-        padding: '0 2px 0 0',
+        padding: isMoved ? '3px 8px' : '0 2px 0 0',
       }}
       title={`${block.original} → ${block.translated || '翻译中…'} [${block.sourceTier}]`}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
+      onPointerDown={onDragStart}
+      onPointerMove={onDragMove}
+      onPointerUp={onDragEnd}
+      onPointerCancel={onDragEnd}
+      onMouseDown={onDragStart}
+      onMouseMove={onDragMove}
+      onMouseUp={onDragEnd}
       onMouseEnter={() => {
         setIsHovered(true);
         onActive?.();

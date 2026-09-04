@@ -458,6 +458,16 @@ pub fn run() {
                 commands::get_app_config_dir(app.handle()).join("translation_memory.json"),
             );
             translator::shared_pipeline().cache.load_from_disk();
+            translator::shared_pipeline().update_credentials(translator::OnlineCredentials {
+                baidu_app_id: current_settings.baidu_app_id.clone(),
+                baidu_secret: current_settings.baidu_secret.clone(),
+                deepl_api_key: current_settings.deepl_api_key.clone(),
+                deepl_custom_url: current_settings.deepl_custom_url.clone(),
+                volcengine_access_key: current_settings.volcengine_access_key.clone(),
+                volcengine_secret_key: current_settings.volcengine_secret_key.clone(),
+                yandex_api_key: current_settings.yandex_api_key.clone(),
+                yandex_folder_id: current_settings.yandex_folder_id.clone(),
+            });
 
             // 启动时应用手动代理（优先于系统代理自动探测）
             let manual_proxy = if current_settings.proxy_enabled.unwrap_or(false) {
@@ -640,6 +650,8 @@ pub fn run() {
             commands::cmd_watch_tick,
             commands::cmd_copy_region_image,
             commands::cmd_save_region_image,
+            commands::cmd_save_composed_image,
+            commands::cmd_copy_composed_image,
             commands::cmd_hover_lookup,
             offline_models::cmd_offline_models_status,
             offline_models::cmd_download_offline_model,

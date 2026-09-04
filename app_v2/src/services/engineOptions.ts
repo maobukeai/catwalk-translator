@@ -47,6 +47,7 @@ const ONLINE_ENGINE_META: Array<{ key: keyof OnlineEngines; label: string; defau
   { key: 'youdao', label: '📶 网易有道翻译', defaultOn: true },
   { key: 'deepl', label: '🚀 DeepL 深度翻译', defaultOn: false },
   { key: 'baidu', label: '🐯 百度通用翻译', defaultOn: false },
+  { key: 'baiduLlm', label: '🧠 百度大模型翻译 (文心版)', defaultOn: false },
   { key: 'tencent', label: '🐧 腾讯交互翻译', defaultOn: false },
   { key: 'caiyun', label: '🌈 彩云小译 (地道文学意译)', defaultOn: false },
   { key: 'urban', label: '🧢 Urban 俚语黑话 (欧美流行梗)', defaultOn: false },

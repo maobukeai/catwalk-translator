@@ -251,6 +251,7 @@ pub async fn cmd_llm_batch_refine(
     phrases: Vec<String>,
     config: LlmConfig,
     style: Option<String>,
+    target_lang: Option<String>,
 ) -> Result<std::collections::HashMap<String, String>, String> {
     if phrases.is_empty() {
         return Ok(std::collections::HashMap::new());
@@ -264,7 +265,13 @@ pub async fn cmd_llm_batch_refine(
         .unwrap_or_default();
 
     let raw_map = pipeline
-        .translate_via_llm_with_style(&phrases, &config, style.as_deref(), &glossary)
+        .translate_via_llm_with_style(
+            &phrases,
+            &config,
+            style.as_deref(),
+            &glossary,
+            target_lang.as_deref(),
+        )
         .await?;
 
     // 关键对齐：针对 LLM 经常去除前缀序号(1./•)、改动冒号分号或转义路径，
@@ -394,7 +401,20 @@ pub async fn cmd_save_settings(
     *lock = settings.clone();
     save_settings_file(&app_handle, &settings);
 
-    eprintln!(">>> Settings saved successfully to disk.");
+    // 实时热同步在线翻译凭据（百度/DeepL/火山/Yandex）至底层全局管线
+    let creds = crate::translator::OnlineCredentials {
+        baidu_app_id: settings.baidu_app_id.clone(),
+        baidu_secret: settings.baidu_secret.clone(),
+        deepl_api_key: settings.deepl_api_key.clone(),
+        deepl_custom_url: settings.deepl_custom_url.clone(),
+        volcengine_access_key: settings.volcengine_access_key.clone(),
+        volcengine_secret_key: settings.volcengine_secret_key.clone(),
+        yandex_api_key: settings.yandex_api_key.clone(),
+        yandex_folder_id: settings.yandex_folder_id.clone(),
+    };
+    crate::translator::shared_pipeline().update_credentials(creds);
+
+    eprintln!(">>> Settings saved successfully to disk and credentials synced.");
     Ok(())
 }
 

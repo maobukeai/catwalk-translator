@@ -266,13 +266,15 @@ export async function cmdTranslatePhrasesStyled(
 export async function cmdLlmBatchRefine(
   phrases: string[],
   config: LlmConfig,
-  style?: 'literal' | 'free' | 'terminology'
+  style?: 'literal' | 'free' | 'terminology',
+  targetLang?: string
 ): Promise<Record<string, string>> {
   if (isTauri()) {
     return await invoke<Record<string, string>>('cmd_llm_batch_refine', {
       phrases,
       config,
       style: style ?? null,
+      targetLang: targetLang ?? null,
     });
   }
   return {};
@@ -369,6 +371,40 @@ export async function cmdSaveRegionImage(
     overlayWidth: overlayWidth ?? null,
     overlayHeight: overlayHeight ?? null,
   });
+}
+
+/// 将前端离屏合成的 1:1 原位视觉图/SVG 标注图（Base64 PNG）落盘保存到「Pictures/猫步翻译」
+export async function cmdSaveComposedImage(base64Data: string): Promise<string> {
+  if (isTauri()) {
+    return await invoke<string>('cmd_save_composed_image', { base64Data });
+  }
+  return 'C:/Users/demo/Pictures/猫步翻译/截图翻译_composed.png';
+}
+
+/// 将前端离屏合成的 1:1 原位视觉图/SVG 标注图（Base64 PNG）直接写入系统剪贴板 (CF_DIB)
+export async function cmdCopyComposedImage(base64Data: string): Promise<boolean> {
+  if (isTauri()) {
+    return await invoke<boolean>('cmd_copy_composed_image', { base64Data });
+  }
+  return true;
+}
+
+/// 获取当前选区的截屏图像（Base64 BMP/PNG 数据）供前端离屏 Canvas 绘制合成
+export async function cmdGetRegionImageBase64(
+  selection: { x: number; y: number; width: number; height: number },
+  scaleFactor: number,
+  overlayWidth?: number,
+  overlayHeight?: number
+): Promise<string> {
+  if (isTauri()) {
+    return await invoke<string>('cmd_region_image', {
+      selection,
+      scaleFactor,
+      overlayWidth: overlayWidth ?? null,
+      overlayHeight: overlayHeight ?? null,
+    });
+  }
+  return '';
 }
 
 export interface HoverLine {
@@ -1269,13 +1305,28 @@ export async function cmdUniversalTranslate(
     );
   }
 
-  // Baidu
+  // Baidu General
   const isBaiduConfigured = !!req.baiduAppId?.trim() && !!req.baiduSecret?.trim();
-  if ((forced && (forced.includes('baidu') || forced.includes('百度'))) || (!isForced && online.baidu && isBaiduConfigured)) {
+  if (
+    (forced && (forced === 'baidu' || forced.includes('百度通用') || (forced.includes('baidu') && !forced.includes('llm')))) ||
+    (!isForced && online.baidu && isBaiduConfigured)
+  ) {
     tasks.push(
       fetchBaiduTranslate(trimmed, actualSource, actualTarget)
         .then((res) => ({ name: '百度通用翻译', trans: res, tier: 'Online Fallback' }))
         .catch(() => ({ name: '百度通用翻译', trans: '[网络连接超时 / 点击重试]', tier: 'Online (Retry)' }))
+    );
+  }
+
+  // Baidu LLM
+  if (
+    (forced && (forced.includes('baidu_llm') || forced.includes('百度大模型') || forced.includes('文心'))) ||
+    (!isForced && online.baiduLlm && isBaiduConfigured)
+  ) {
+    tasks.push(
+      fetchBaiduTranslate(trimmed, actualSource, actualTarget)
+        .then((res) => ({ name: '百度大模型翻译 (文心版)', trans: res, tier: 'LLM API' }))
+        .catch(() => ({ name: '百度大模型翻译 (文心版)', trans: '[网络连接超时 / 点击重试]', tier: 'Online (Retry)' }))
     );
   }
 

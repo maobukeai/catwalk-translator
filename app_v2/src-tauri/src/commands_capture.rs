@@ -430,6 +430,95 @@ pub async fn cmd_save_region_image(
     }
 }
 
+/// 将前端离屏合成的 1:1 原位视觉图/标注图（Base64 PNG）落盘并保存到「Pictures/猫步翻译」
+#[tauri::command]
+pub async fn cmd_save_composed_image(
+    base64_data: String,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    let clean_b64 = if let Some(idx) = base64_data.find(";base64,") {
+        &base64_data[idx + 8..]
+    } else {
+        &base64_data
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(clean_b64)
+        .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+    let dir = std::env::var("USERPROFILE")
+        .map(|p| std::path::PathBuf::from(p).join("Pictures").join("猫步翻译"))
+        .unwrap_or_else(|_| std::path::PathBuf::from(".").join("猫步翻译"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create dir failed: {}", e))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let file = dir.join(format!("截图翻译_{}.png", ts));
+    std::fs::write(&file, &bytes).map_err(|e| format!("File write failed: {}", e))?;
+    Ok(file.to_string_lossy().into_owned())
+}
+
+/// 将前端离屏合成的 1:1 原位视觉图/标注图（Base64 PNG）直接写入 Windows 剪贴板 (CF_DIB)
+#[tauri::command]
+pub async fn cmd_copy_composed_image(
+    base64_data: String,
+) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use base64::Engine as _;
+        let clean_b64 = if let Some(idx) = base64_data.find(";base64,") {
+            &base64_data[idx + 8..]
+        } else {
+            &base64_data
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(clean_b64)
+            .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+        let img = image::load_from_memory(&bytes)
+            .map_err(|e| format!("Image decode failed: {}", e))?
+            .to_rgba8();
+        let (w, h) = img.dimensions();
+
+        // 构造 Windows 剪贴板所需的 32bpp top-down BGRA BMP 格式
+        let mut bmp = Vec::with_capacity(54 + (w as usize * h as usize * 4));
+        // 14 字节 BITMAPFILEHEADER
+        bmp.extend_from_slice(b"BM");
+        let file_size = 54u32 + (w * h * 4);
+        bmp.extend_from_slice(&file_size.to_le_bytes());
+        bmp.extend_from_slice(&[0u8; 4]);
+        bmp.extend_from_slice(&54u32.to_le_bytes());
+
+        // 40 字节 BITMAPINFOHEADER
+        bmp.extend_from_slice(&40u32.to_le_bytes());
+        bmp.extend_from_slice(&(w as i32).to_le_bytes());
+        bmp.extend_from_slice(&(-(h as i32)).to_le_bytes()); // 负数代表 top-down 从上至下行序
+        bmp.extend_from_slice(&1u16.to_le_bytes());
+        bmp.extend_from_slice(&32u16.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&(w * h * 4).to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+
+        for pixel in img.pixels() {
+            bmp.push(pixel[2]); // B
+            bmp.push(pixel[1]); // G
+            bmp.push(pixel[0]); // R
+            bmp.push(pixel[3]); // A
+        }
+
+        copy_bmp_to_clipboard(&bmp)?;
+        Ok(true)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = base64_data;
+        Ok(false)
+    }
+}
+
 /// Put a full BMP (54-byte header + top-down 32bpp pixels) on the clipboard.
 /// CF_DIB payload = BITMAPINFOHEADER + pixels, i.e. the BMP minus its 14-byte
 /// file header.
@@ -797,8 +886,13 @@ pub async fn cmd_begin_capture(
     // 1. Hide the window so the underlying desktop is 100% clean and un-obscured
     let _ = window.hide();
 
-    // 2. Wait 120ms and flush OS DWM to complete un-rendering the window from desktop DC
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    // 2. 若主窗口在截屏前本就处于隐藏或最小化状态，无需盲等 120ms 窗口淡出，时延直接压至 <15ms
+    let was_vis = WAS_MAIN_WINDOW_VISIBLE.load(Ordering::SeqCst);
+    if was_vis {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    } else {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
 
     #[cfg(target_os = "windows")]
     {

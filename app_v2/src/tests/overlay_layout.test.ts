@@ -139,6 +139,30 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
       expect(resolved[1].logicalY).toBe(144);
       expect(resolved[1].logicalH).toBe(20);
     });
+
+    it('preserves horizontal alignment for same-row menu items via elastic avoidance and scaling', () => {
+      // 3 menu items on the same baseline (y=20, h=24)
+      // "File" (x=10, w=40), "Edit" (x=55, w=40), "View" (x=100, w=40)
+      // When translated to wider text, "File" renders aabbW=60, overlapping "Edit"
+      const menuFile = { ...createMockBlock('file', 10, 20, 40, 24), aabbW: 60 };
+      const menuEdit = { ...createMockBlock('edit', 55, 20, 40, 24), aabbW: 60 };
+      const menuView = { ...createMockBlock('view', 100, 20, 40, 24), aabbW: 60 };
+
+      const resolved = resolveAABBCollisions([menuFile, menuEdit, menuView], 800, 600, 4);
+      expect(resolved).toHaveLength(3);
+
+      // They must STAY on the same horizontal row (y=20), NOT break into vertical stairs
+      expect(resolved[0].logicalY).toBe(20);
+      expect(resolved[1].logicalY).toBe(20);
+      expect(resolved[2].logicalY).toBe(20);
+
+      // And elastically avoid each other horizontally:
+      // menuFile ends at 10 + 60 = 70. menuEdit shifts to 70 + 4 = 74.
+      // menuEdit ends at 74 + 60 = 134. menuView shifts to 134 + 4 = 138.
+      expect(resolved[0].logicalX).toBe(10);
+      expect(resolved[1].logicalX).toBe(74);
+      expect(resolved[2].logicalX).toBe(138);
+    });
   });
 
   describe('Overlay card styling helpers: toSolidBg, toTranslucentBg & isLightBg', () => {

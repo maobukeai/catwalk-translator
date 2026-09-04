@@ -303,6 +303,7 @@ pub struct OnlineEngines {
     pub deepl: Option<bool>,
     pub my_memory: Option<bool>,
     pub baidu: Option<bool>,
+    pub baidu_llm: Option<bool>,
     pub tencent: Option<bool>,
     pub lingva: Option<bool>,
     pub caiyun: Option<bool>,
@@ -320,6 +321,7 @@ impl Default for OnlineEngines {
             deepl: Some(false),
             my_memory: Some(false),
             baidu: Some(false),
+            baidu_llm: Some(false),
             tencent: Some(false),
             lingva: Some(false),
             caiyun: Some(false),
@@ -570,6 +572,18 @@ pub struct AppSettings {
     /// 自定义 DeepLX 自建服务地址（如 http://localhost:1188/translate）
     #[serde(default)]
     pub deepl_custom_url: Option<String>,
+    /// 火山翻译 (字节跳动) AccessKey ID
+    #[serde(default)]
+    pub volcengine_access_key: Option<String>,
+    /// 火山翻译 (字节跳动) Secret Access Key
+    #[serde(default)]
+    pub volcengine_secret_key: Option<String>,
+    /// Yandex Translate API Key
+    #[serde(default)]
+    pub yandex_api_key: Option<String>,
+    /// Yandex Translate Folder ID
+    #[serde(default)]
+    pub yandex_folder_id: Option<String>,
     /// Window close action: "ask" | "minimize" | "exit" (default "ask")
     #[serde(default)]
     pub close_action: Option<String>,
@@ -697,6 +711,10 @@ impl Default for AppSettings {
             baidu_secret: None,
             deepl_api_key: None,
             deepl_custom_url: None,
+            volcengine_access_key: None,
+            volcengine_secret_key: None,
+            yandex_api_key: None,
+            yandex_folder_id: None,
             close_action: Some("ask".to_string()),
             mini_window_close_action: Some("hide".to_string()),
             always_on_top: Some(false),

@@ -147,6 +147,7 @@ function getShortEngineName(fullName: string): string {
   if (fullName.includes('Google') || fullName.includes('谷歌')) return 'Google';
   if (fullName.includes('Bing') || fullName.includes('微软')) return 'Bing';
   if (fullName.includes('有道')) return '有道';
+  if (fullName.includes('大模型') || fullName.includes('文心')) return '百度大模型';
   if (fullName.includes('Baidu') || fullName.includes('百度')) return '百度';
   if (fullName.includes('MyMemory')) return 'MyMemory';
   if (fullName.includes('DeepL')) return 'DeepL';

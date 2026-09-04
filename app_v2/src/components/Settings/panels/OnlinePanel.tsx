@@ -12,7 +12,7 @@ import { useAppTheme } from '../../../hooks/useAppTheme';
 import { NetworkDiagCard } from './NetworkDiagCard';
 import {
   cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall,
-  cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart,
+  cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart, cmdUniversalTranslate,
 } from '../../../services/tauri';
 import { normalizeHotkeyForCompare } from '../../../services/hotkeys';
 import type { OfflineEngineStatus } from '../../../services/tauri';
@@ -82,6 +82,16 @@ export const ONLINE_ENGINE_DEFS = [
     region: 'domestic',
     note: '国内引擎：无需代理；需在下方填入百度翻译 API 凭据（每月 100 万字符免费额度）',
     icon: '🐾',
+  },
+  {
+    id: 'baiduLlm',
+    name: '百度大模型翻译 (文心版)',
+    tag: '大模型意译',
+    tagColor: 'text-violet-300 bg-violet-500/15 border-violet-400/30',
+    desc: '基于百度文心大语言模型内核，擅长长句深度意译、上下文感知与专业术语统一',
+    region: 'domestic',
+    note: '国内大模型：无需代理；与通用版共用相同 AppID/密钥（个人/企业享 100 万字符免费）',
+    icon: '🧠',
   },
   {
     id: 'tencent',
@@ -192,7 +202,63 @@ export const OnlinePanel: React.FC = () => {
     deepl: false,
     myMemory: false,
     baidu: false,
+    baiduLlm: false,
     tencent: false,
+  };
+
+  const [baiduTesting, setBaiduTesting] = useState<'general' | 'llm' | null>(null);
+  const [baiduTestResult, setBaiduTestResult] = useState<{ success: boolean; msg: string } | null>(null);
+
+  const handleTestBaidu = async (engine: 'baidu' | 'baidu_llm') => {
+    const appId = settings.baiduAppId?.trim();
+    const secret = settings.baiduSecret?.trim();
+    if (!appId || !secret) {
+      setBaiduTestResult({ success: false, msg: '请先填写 AppID 和密钥' });
+      return;
+    }
+    setBaiduTesting(engine === 'baidu' ? 'general' : 'llm');
+    setBaiduTestResult(null);
+    const t0 = performance.now();
+    const testText = engine === 'baidu_llm' ? 'Subsurface Scattering' : 'apple';
+    try {
+      const res = await cmdUniversalTranslate({
+        text: testText,
+        sourceLang: 'en',
+        targetLang: 'zh-CN',
+        preset: 'auto',
+        forcedEngine: engine,
+        baiduAppId: appId,
+        baiduSecret: secret,
+        skipLlm: true,
+      });
+      const dur = Math.round(performance.now() - t0);
+      const isLlm = engine === 'baidu_llm';
+      const baiduEng = res.engines.find((e) =>
+        isLlm
+          ? e.engineName.includes('大模型') || e.engineName.includes('文心')
+          : (e.engineName.includes('百度') || e.engineName.toLowerCase().includes('baidu')) && !e.engineName.includes('大模型'),
+      ) || res.engines[0];
+
+      if (baiduEng && !baiduEng.translated.startsWith('[') && !baiduEng.translated.includes('错误') && !baiduEng.translated.includes('未配置')) {
+        const title = isLlm ? '🧠 文心大模型版' : '🐯 通用翻译版';
+        setBaiduTestResult({
+          success: true,
+          msg: `${title} 连通成功！${testText} ➔ ${baiduEng.translated.trim()} (${dur}ms)`,
+        });
+      } else {
+        setBaiduTestResult({
+          success: false,
+          msg: baiduEng ? baiduEng.translated : '未收到有效翻译返回',
+        });
+      }
+    } catch (err: any) {
+      setBaiduTestResult({
+        success: false,
+        msg: `连接失败: ${err?.message || String(err)}`,
+      });
+    } finally {
+      setBaiduTesting(null);
+    }
   };
 
   return (
@@ -208,7 +274,7 @@ export const OnlinePanel: React.FC = () => {
                   <Globe className="h-4 w-4 text-blue-500 shrink-0" />
                   <span className="truncate">在线公共翻译服务通道</span>
                   <span className={`text-[10px] font-normal px-1.5 py-0.5 rounded border ${isLight ? 'bg-blue-50 text-blue-600 border-blue-200/60' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
-                    10 大主流引擎 · 免 Key 极速并发
+                    13 大主流引擎 · 免 Key 极速并发
                   </span>
                 </div>
                 <p className={`mt-0.5 text-[11px] ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
@@ -353,16 +419,16 @@ export const OnlinePanel: React.FC = () => {
             </div>
           </div>
 
-          {/* 百度翻译 API 凭据配置（仅当百度引擎开启时显示）*/}
-          {online.baidu && (
+          {/* 百度翻译 API 凭据配置（通用版或大模型版开启时显示）*/}
+          {(online.baidu || online.baiduLlm) && (
             <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
               isLight ? 'bg-blue-50/60 border-blue-200/80' : 'bg-blue-950/20 border-blue-500/25'
             }`}>
               <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-blue-900' : 'text-blue-300'}`}>
                 <span>🐾</span>
-                <span>百度翻译 API 配置</span>
+                <span>百度翻译 API 配置（通用版与文心大模型共用）</span>
                 <span className={`text-[9px] font-normal px-1.5 py-0.5 rounded border ml-1 ${isLight ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>
-                  免费 · 每月 100 万字符
+                  个人/企业认证各享 100 万字符免费
                 </span>
                 <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer"
                   className={`ml-auto text-[10px] underline underline-offset-2 ${isLight ? 'text-blue-600' : 'text-blue-400'}`}>
@@ -395,8 +461,49 @@ export const OnlinePanel: React.FC = () => {
                   />
                 </div>
               </div>
-              <p className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
-                前往 <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer" className="underline underline-offset-2">fanyi-api.baidu.com</a> 注册开发者账号，创建应用后获取 AppID 与密钥，个人免费套餐每月 100 万字符。
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleTestBaidu('baidu')}
+                    disabled={baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()}
+                    className={`px-3 py-1 text-xs rounded-lg font-medium transition flex items-center gap-1.5 shrink-0 ${
+                      baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()
+                        ? 'opacity-50 cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-zinc-800 dark:text-zinc-500'
+                        : isLight
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm active:scale-95'
+                        : 'bg-blue-500 hover:bg-blue-600 text-white shadow-sm active:scale-95'
+                    }`}
+                  >
+                    {baiduTesting === 'general' ? '⏳ 测试中...' : '🐯 测试通用版'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleTestBaidu('baidu_llm')}
+                    disabled={baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()}
+                    className={`px-3 py-1 text-xs rounded-lg font-medium transition flex items-center gap-1.5 shrink-0 ${
+                      baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()
+                        ? 'opacity-50 cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-zinc-800 dark:text-zinc-500'
+                        : isLight
+                        ? 'bg-violet-600 hover:bg-violet-700 text-white shadow-sm active:scale-95'
+                        : 'bg-violet-500 hover:bg-violet-600 text-white shadow-sm active:scale-95'
+                    }`}
+                  >
+                    {baiduTesting === 'llm' ? '⏳ 测试中...' : '🧠 测试文心大模型'}
+                  </button>
+                </div>
+                {baiduTestResult && (
+                  <span className={`text-[11px] font-medium px-2.5 py-1 rounded-lg transition animate-in fade-in max-w-full truncate ${
+                    baiduTestResult.success
+                      ? isLight ? 'bg-emerald-100 text-emerald-800' : 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30'
+                      : isLight ? 'bg-rose-100 text-rose-800' : 'bg-rose-950/60 text-rose-300 border border-rose-500/30'
+                  }`}>
+                    {baiduTestResult.msg}
+                  </span>
+                )}
+              </div>
+              <p className={`text-[10px] leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                前往 <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer" className="underline underline-offset-2">fanyi-api.baidu.com</a> 注册开发者账号。同一组 AppID 与密钥可同时用于「通用翻译」与「大模型文本翻译」，个人/企业认证用户各享 100 万字符免费额度。
               </p>
             </div>
           )}

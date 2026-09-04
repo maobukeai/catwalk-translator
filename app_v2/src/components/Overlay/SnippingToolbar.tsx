@@ -215,9 +215,9 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
       onMouseDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      {/* ── 主工具条 (白底微阴影紧凑悬浮长条，6大功能分区，w-max 自适应包裹绝不溢出) ──────────────────────── */}
+      {/* ── 主工具条 (白底微阴影紧凑悬浮长条，6大功能分区，响应式自适应防溢出) ──────────────────────── */}
       <div
-        className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-xl backdrop-blur-md rounded-2xl py-1.5 pl-2 pr-3 flex items-center gap-1 w-max min-w-max flex-nowrap"
+        className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-xl backdrop-blur-md rounded-2xl py-1.5 pl-2 pr-3 flex items-center gap-1 max-w-[calc(100vw-24px)] overflow-x-auto scrollbar-none flex-nowrap shrink-0"
         onPointerDown={(e) => {
           // 如果点击的是工具条的空白 padding / 边框区域（非按钮或输入控件），也支持直接拖动
           if (e.target === e.currentTarget) {

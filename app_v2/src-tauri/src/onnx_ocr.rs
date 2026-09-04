@@ -713,30 +713,41 @@ impl OnnxOcrEngine {
             crops_all.push((crop_bgr(&bgr, w, h, bx, by, bw, bh), bw, bh));
         }
 
-        // 竖排框先整批做一次 180° 角度分类:逐框一次 `run` 的固定开销
-        // (线程唤醒/图调度/拷贝)在文字多时会线性放大,合批摊薄;
-        // batch 维固定为 1 的模型由 classify_angles_batch 内部逐框回退。
-        let vertical: Vec<(&[u8], u32, u32)> = crops_all
+        // 竖排框先顺时针旋转 90° 变为水平行，再整批做 180° 角度分类与文本识别：
+        // 杜绝竖直文字未旋转直接送入 rec_preprocess 压缩成 4px 细条乱码
+        let vertical_rotated: Vec<(Vec<u8>, u32, u32)> = crops_all
             .iter()
             .filter_map(|(crop, cw, ch)| {
-                (*cw < *ch && !crop.is_empty()).then_some((crop.as_slice(), *cw, *ch))
+                if *cw < *ch && !crop.is_empty() {
+                    let rot = rotate90_cw_bgr(crop, *cw, *ch);
+                    Some((rot, *ch, *cw))
+                } else {
+                    None
+                }
             })
             .collect();
-        let rot_flags = classify_angles_batch(sessions, &vertical)?;
+        let rot_refs: Vec<(&[u8], u32, u32)> = vertical_rotated
+            .iter()
+            .map(|(c, w, h)| (c.as_slice(), *w, *h))
+            .collect();
+        let rot_flags = classify_angles_batch(sessions, &rot_refs)?;
         let mut rot_iter = rot_flags.into_iter();
+        let mut vert_iter = vertical_rotated.into_iter();
 
         for (crop, cw, ch) in crops_all {
-            let needs_rot = if cw < ch {
-                rot_iter.next().unwrap_or(false)
+            let (final_crop, final_w, final_h) = if cw < ch {
+                let (rot90, rw, rh) = vert_iter.next().unwrap_or_else(|| (rotate90_cw_bgr(&crop, cw, ch), ch, cw));
+                let needs_180 = rot_iter.next().unwrap_or(false);
+                let final_img = if needs_180 {
+                    rotate180_bgr(&rot90, rw, rh)
+                } else {
+                    rot90
+                };
+                (final_img, rw, rh)
             } else {
-                false
+                (crop, cw, ch)
             };
-            let final_crop = if needs_rot {
-                rotate180_bgr(&crop, cw, ch)
-            } else {
-                crop
-            };
-            prepared.push(rec_preprocess(&final_crop, cw, ch));
+            prepared.push(rec_preprocess(&final_crop, final_w, final_h));
         }
 
         let mut order: Vec<usize> = (0..prepared.len()).collect();
@@ -953,7 +964,7 @@ fn use_hist_equalize() -> bool {
     *HE.get_or_init(|| {
         std::env::var("ONNX_PREPROCESS_HE")
             .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-            .unwrap_or(false)
+            .unwrap_or(true)
     })
 }
 
@@ -1519,6 +1530,23 @@ fn rotate180_bgr(img: &[u8], w: u32, h: u32) -> Vec<u8> {
     out
 }
 
+fn rotate90_cw_bgr(img: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let mut out = vec![0u8; img.len()];
+    let new_w = h;
+    for y in 0..h {
+        for x in 0..w {
+            let src = ((y * w + x) * 3) as usize;
+            let dst_x = h - 1 - y;
+            let dst_y = x;
+            let dst = ((dst_y * new_w + dst_x) * 3) as usize;
+            if src + 3 <= img.len() && dst + 3 <= out.len() {
+                out[dst..dst + 3].copy_from_slice(&img[src..src + 3]);
+            }
+        }
+    }
+    out
+}
+
 // ---- Unit tests: pure functions (no model files needed) ---------------------
 
 #[cfg(test)]
@@ -1654,6 +1682,21 @@ mod tests {
         let back = rotate180_bgr(&rotated, 1, 3);
         assert_eq!(back, img);
         assert_eq!(rotated.len(), 9);
+    }
+
+    #[test]
+    fn test_rotate90_cw() {
+        // 1x2 image (W=1, H=2, 3 bytes per pixel)
+        let img = vec![10, 20, 30, 40, 50, 60];
+        let rot1 = rotate90_cw_bgr(&img, 1, 2);
+        // After 90° CW: W=2, H=1. Pixel 1 (40,50,60) at (0,0), Pixel 0 (10,20,30) at (1,0)
+        assert_eq!(rot1, vec![40, 50, 60, 10, 20, 30]);
+
+        // 4 rotations return to original
+        let rot2 = rotate90_cw_bgr(&rot1, 2, 1);
+        let rot3 = rotate90_cw_bgr(&rot2, 1, 2);
+        let rot4 = rotate90_cw_bgr(&rot3, 2, 1);
+        assert_eq!(rot4, img);
     }
 
     #[test]

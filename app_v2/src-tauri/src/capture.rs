@@ -400,8 +400,8 @@ pub fn capture_region_bmp(rect: PhysicalRect) -> Result<(Vec<u8>, u32, u32, f64)
         let dpi = GetDeviceCaps(screen_dc, LOGPIXELSX);
         let scale_factor = (dpi as f64) / 96.0;
 
-        let rx = rect.x.max(0);
-        let ry = rect.y.max(0);
+        let rx = rect.x;
+        let ry = rect.y;
         let rw = rect.width.max(1) as i32;
         let rh = rect.height.max(1) as i32;
 
@@ -522,7 +522,36 @@ pub fn refresh_capture_region_quietly(hwnd_raw: isize, rect: PhysicalRect) -> Re
         let _ = DwmFlush();
 
         let result = (|| -> Result<(), String> {
-            let (region_bmp, rw, rh, _sf) = capture_region_bmp(rect)?;
+            #[link(name = "user32")]
+            extern "system" {
+                fn GetSystemMetrics(n_index: i32) -> i32;
+            }
+            const SM_XVIRTUALSCREEN: i32 = 76;
+            const SM_YVIRTUALSCREEN: i32 = 77;
+            const SM_CXVIRTUALSCREEN: i32 = 78;
+            const SM_CYVIRTUALSCREEN: i32 = 79;
+
+            let (vx, vy) = {
+                let mut vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                let mut vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                let width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                let height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                if width <= 0 || height <= 0 {
+                    vx = 0;
+                    vy = 0;
+                }
+                (vx, vy)
+            };
+
+            // rect 传入的是相对于截屏 BMP 的局部坐标，转换为桌面屏幕物理绝对坐标
+            let screen_rect = PhysicalRect {
+                x: rect.x + vx,
+                y: rect.y + vy,
+                width: rect.width,
+                height: rect.height,
+            };
+
+            let (region_bmp, rw, rh, _sf) = capture_region_bmp(screen_rect)?;
             let (mut full_bmp, bmp_w, bmp_h, stored_scale) = get_latest_capture()
                 .ok_or_else(|| "No desktop capture available in memory".to_string())?;
 

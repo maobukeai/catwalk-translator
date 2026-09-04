@@ -109,6 +109,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     deepl: false,
     myMemory: false,
     baidu: false,
+    baiduLlm: false,
     tencent: false,
     lingva: false,
     caiyun: false,

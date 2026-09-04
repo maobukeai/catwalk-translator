@@ -1,40 +1,35 @@
-@echo off
-title Ã¨²½·­Òë - ÊµÊ±ÈÈÖØÔØµ÷ÊÔÖÕ¶Ë
+ï»¿@echo off
+chcp 65001 >nul
+title çŒ«æ­¥ç¿»è¯‘ - å®æ—¶çƒ­é‡è½½å¼€å‘è°ƒè¯•
 color 0B
 
 echo ===================================================================
-echo             Ã¨²½·­Òë (Catwalk Translator) - ÊµÊ±¿ª·¢µ÷ÊÔ
-echo   * Ç°¶ËÈÈÖØÔØ (Vite HMR): ĞŞ¸Ä React/TSX/CSS ½çÃæÃë¼¶ÊµÊ±Ë¢ĞÂ
-echo   * ºó¶ËÈÈÖØÔØ (Cargo Watch): ĞŞ¸Ä Rust ´úÂë×Ô¶¯ÖØĞÂ±àÒë²¢ÖØÔØ
+echo             çŒ«æ­¥ç¿»è¯‘ (Catwalk Translator) - å®æ—¶å¼€å‘è°ƒè¯•
+echo   * å‰ç«¯çƒ­é‡è½½ (Vite HMR): ä¿®æ”¹ React/TSX/CSS ç•Œé¢ç§’çº§å®æ—¶åˆ·æ–°
+echo   * åç«¯çƒ­é‡è½½ (Cargo Watch): ä¿®æ”¹ Rust ä»£ç è‡ªåŠ¨é‡æ–°ç¼–è¯‘å¹¶é‡è½½
 echo ===================================================================
 echo.
 
-echo [*] ÕıÔÚ¼ì²é¶Ë¿Ú 1420 Óë¾É½ø³ÌÕ¼ÓÃÇé¿ö...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr /r /c:":1420 .*LISTENING"' ) do (
-    echo [*] ·¢ÏÖ¶Ë¿Ú 1420 ±»¾É½ø³Ì (PID: %%a) Õ¼ÓÃ£¬ÕıÔÚ×Ô¶¯ÊÍ·Å...
-    taskkill /f /pid %%a >nul 2>&1
-)
-taskkill /f /im MaobuTranslator.exe >nul 2>&1
-echo [OK] ¶Ë¿Ú»·¾³ÒÑ¾ÍĞ÷¡£
+echo [*] æ­£åœ¨æ£€æµ‹å¹¶é‡Šæ”¾ 1420 ç«¯å£ä¸å†å²è¿›ç¨‹...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\clean_dev.ps1"
 echo.
 
 cd /d "%~dp0app_v2"
 
-echo [*] ÕıÔÚÆô¶¯ÈÈÖØÔØ¿ª·¢µ÷ÊÔ·şÎñ...
+echo [*] æ­£åœ¨å¯åŠ¨çƒ­é‡è½½å¼€å‘è°ƒè¯•æœåŠ¡...
 echo.
 
 call pnpm run tauri dev
 if %errorlevel% neq 0 (
     echo.
-    echo [*] ³¢ÊÔÊ¹ÓÃ npm Æô¶¯...
+    echo [*] å°è¯•ä½¿ç”¨ npm å¯åŠ¨...
     call npm run tauri dev
 )
 
 if %errorlevel% neq 0 (
     color 0C
     echo.
-    echo [´íÎó] ¿ª·¢·şÎñÒì³£ÍË³ö£¬Çë¼ì²éÉÏ·½±¨´íĞÅÏ¢¡£
+    echo [é”™è¯¯] å¼€å‘æœåŠ¡å¼‚å¸¸é€€å‡ºï¼Œè¯·æ£€æŸ¥ä¸Šæ–¹æŠ¥é”™ä¿¡æ¯ã€‚
     echo.
     pause
 )
-

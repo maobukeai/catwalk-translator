@@ -150,6 +150,7 @@ export interface OnlineEngines {
   deepl?: boolean;
   myMemory?: boolean;
   baidu?: boolean;
+  baiduLlm?: boolean;
   tencent?: boolean;
   lingva?: boolean;
   caiyun?: boolean;

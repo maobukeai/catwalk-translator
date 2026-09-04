@@ -19,6 +19,9 @@ import {
   cmdWatchTick,
   cmdCopyRegionImage,
   cmdSaveRegionImage,
+  cmdSaveComposedImage,
+  cmdCopyComposedImage,
+  cmdGetRegionImageBase64,
   cmdHoverLookup,
   cmdTranslatePhrasesStyled,
   cmdLlmBatchRefine,
@@ -37,7 +40,7 @@ import { buildCaptureEngineChoices, flattenCaptureEngineChoices } from '../../se
 import type { OverlayBlock, OverlayResult, LanguageCode, TranslationResult } from '../../services/types';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { CheatSheetModal } from './CheatSheetModal';
-import { OverlayBlockCard } from './OverlayBlockCard';
+import { OverlayBlockCard, toSolidBg, getCardTextColor } from './OverlayBlockCard';
 import { SnippingToolbar, type AnnotationTool } from './SnippingToolbar';
 import { memoKey, memoGet, memoPut } from './translationMemo';
 import { YoudaoResultPanel } from './YoudaoResultPanel';
@@ -584,40 +587,69 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       const total = overlayResult.blocks.length;
       setTranslatingProgress({ done: 0, total });
       try {
-        let done = 0;
-        const forcedEngine = engine === 'auto' ? undefined : engine;
         const activeLlm = resolveLlmConfig(engine);
-        const updatedBlocks = await Promise.all(
-          overlayResult.blocks.map(async (block) => {
-            const res = await cmdUniversalTranslate({
-              text: block.original,
-              sourceLang: 'auto',
-              targetLang: newTargetLang,
-              preset: engine !== 'auto' ? engine : effectivePreset(),
-              llmConfig: activeLlm,
-              llmConfigs: settings.llmConfigs,
-              presetDicts: settings.presetDicts,
-              onlineEngines: settings.onlineEngines,
-              translationTiers: settings.translationTiers,
-              style: settings.translationStyle,
-              forcedEngine,
-              baiduAppId: settings.baiduAppId,
-              baiduSecret: settings.baiduSecret,
-              deeplApiKey: settings.deeplApiKey,
-              deeplCustomUrl: settings.deeplCustomUrl,
-            });
-            done += 1;
-            if (mountedRef.current) setTranslatingProgress({ done, total });
+        const preset = engine !== 'auto' ? engine : effectivePreset();
+        const style = settings.translationStyle;
+        const forcedEngine = engine === 'auto' ? undefined : engine;
+
+        // 当用户显式指定了第三方在线通道（如 DeepL/Baidu 等）时，按渠道调用 cmdUniversalTranslate 满足 API Key 与渠道路由
+        if (forcedEngine && !forcedEngine.startsWith('llm') && !settings.presetDicts?.[forcedEngine as keyof typeof settings.presetDicts]) {
+          let done = 0;
+          const updatedBlocks = await Promise.all(
+            overlayResult.blocks.map(async (block) => {
+              const res = await cmdUniversalTranslate({
+                text: block.original,
+                sourceLang: 'auto',
+                targetLang: newTargetLang,
+                preset: effectivePreset(),
+                llmConfig: activeLlm,
+                llmConfigs: settings.llmConfigs,
+                presetDicts: settings.presetDicts,
+                onlineEngines: settings.onlineEngines,
+                translationTiers: settings.translationTiers,
+                style: settings.translationStyle,
+                forcedEngine,
+                baiduAppId: settings.baiduAppId,
+                baiduSecret: settings.baiduSecret,
+                deeplApiKey: settings.deeplApiKey,
+                deeplCustomUrl: settings.deeplCustomUrl,
+              });
+              done += 1;
+              if (mountedRef.current) setTranslatingProgress({ done, total });
+              return {
+                ...block,
+                translated: res.mainTranslation || block.translated,
+                sourceTier: res.engines[0]?.sourceTier || block.sourceTier,
+                translationFailed: !res.mainTranslation,
+              };
+            })
+          );
+          setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : null));
+          showFeedback(`已切换至 ${engine} 重新翻译全部卡片`);
+        } else {
+          // 切换语种/auto/LLM/词典统一收敛为单次批处理 translate 接口，杜绝 N 次网络并发单发与连接风控打满
+          const phrases = overlayResult.blocks.map((b) => b.original);
+          const batchResults = await cmdTranslatePhrasesStyled(
+            phrases,
+            preset,
+            activeLlm,
+            style,
+            newTargetLang
+          );
+
+          const updatedBlocks = overlayResult.blocks.map((block, i) => {
+            const res = batchResults[i];
             return {
               ...block,
-              translated: res.mainTranslation || block.translated,
-              sourceTier: res.engines[0]?.sourceTier || block.sourceTier,
-              translationFailed: !res.mainTranslation,
+              translated: res?.translated || block.translated,
+              sourceTier: res?.sourceTier || block.sourceTier,
+              translationFailed: !res?.translated,
             };
-          })
-        );
-        setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : null));
-        showFeedback(`已切换至 ${engine === 'auto' ? '智能回退' : engine} 重新翻译全部卡片`);
+          });
+
+          setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : null));
+          showFeedback(`已切换至 ${engine === 'auto' ? '智能回退' : engine} 重新翻译全部卡片`);
+        }
       } catch (err) {
         console.warn('[CaptureOverlay] Retranslate error:', err);
         showFeedback('⚠️ 重译失败，可按 Tab 切换引擎后重试');
@@ -1222,53 +1254,6 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : prev));
       setTranslatingProgress({ done: translatedCount, total: layout.blocks.length });
 
-      // Non-Chinese target (e.g. ja/en/ko): progressively re-translate each card in place
-      if (targetLang !== 'zh-CN' && translations.length > 0) {
-        let done = 0;
-        await Promise.all(
-          updatedBlocks.map(async (block, i) => {
-            try {
-              const forcedEngine = selectedEngine === 'auto' ? undefined : selectedEngine;
-              const res = await cmdUniversalTranslate({
-                text: block.original,
-                sourceLang: 'auto',
-                targetLang: targetLang,
-                preset,
-                llmConfig,
-                llmConfigs: settings.llmConfigs,
-                presetDicts: settings.presetDicts,
-                onlineEngines: settings.onlineEngines,
-                translationTiers: settings.translationTiers,
-                style,
-                forcedEngine,
-                baiduAppId: settings.baiduAppId,
-                baiduSecret: settings.baiduSecret,
-                deeplApiKey: settings.deeplApiKey,
-                deeplCustomUrl: settings.deeplCustomUrl,
-              });
-              if (res.mainTranslation) {
-                const newBlock = {
-                  ...block,
-                  translated: res.mainTranslation,
-                  sourceTier: res.engines[0]?.sourceTier || block.sourceTier,
-                };
-                if (!stale()) {
-                  setOverlayResult((prev) =>
-                    prev
-                      ? { ...prev, blocks: prev.blocks.map((b, j) => (j === i ? newBlock : b)) }
-                      : prev
-                  );
-                  done += 1;
-                  setTranslatingProgress({ done, total: updatedBlocks.length });
-                }
-              }
-            } catch {
-              // keep the zh-CN translation for this card
-            }
-          })
-        );
-      }
-
       // 将识别并翻译的文本块异步写入历史记录（按原文去重）
       updatedBlocks.forEach((b) => {
         saveTranslationHistory(b.original, b.translated, b.sourceTier).catch((e) =>
@@ -1314,7 +1299,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       const enableProgressive = settings.enableLlmProgressiveRefine !== false;
       const isAutoOrOnline = selectedEngine === 'auto' || !selectedEngine.startsWith('llm');
 
-      if (enableProgressive && candidateLlms.length > 0 && isAutoOrOnline && !isWatch && targetLang === 'zh-CN') {
+      if (enableProgressive && candidateLlms.length > 0 && isAutoOrOnline && !isWatch) {
         const refineCandidates: { index: number; phrase: string }[] = [];
         updatedBlocks.forEach((block, idx) => {
           const orig = block.original.trim();
@@ -1343,7 +1328,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               // 逐个尝试候选模型，首选失败自动轮转备用模型（如商汤欠费自动无缝切到 Gemini）
               for (const currentLlm of candidateLlms) {
                 try {
-                  const map = await cmdLlmBatchRefine(phrasesToRefine, currentLlm, style);
+                  const map = await cmdLlmBatchRefine(phrasesToRefine, currentLlm, style, targetLang);
                   if (map && Object.keys(map).length > 0) {
                     resultMap = map;
                     usedLlm = currentLlm;
@@ -1494,29 +1479,193 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       .catch((e) => showFeedback(`⚠️ 贴图失败：${String(e).slice(0, 40)}`));
   };
 
-  /** Copy the whole selection region image (clean desktop BMP) to the clipboard. */
-  const copyRegionImage = useCallback(async (rect: SelRect) => {
-    try {
+  /** 离屏合成选区截图：按需将底图、原位翻译色块与译文、SVG 标注合成到一张高保真图 */
+  const getComposedRegionDataUrl = useCallback(
+    async (rect: SelRect, includeTranslations: boolean, includeAnnotations: boolean): Promise<string> => {
       const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
       const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
-      const ok = await cmdCopyRegionImage(rect, scaleFactor, vw, vh);
-      showFeedback(ok ? '📷 选区图片已复制到剪贴板' : '⚠️ 图片复制失败');
-    } catch (err) {
-      showFeedback(`⚠️ 图片复制失败：${err instanceof Error ? err.message.slice(0, 40) : String(err)}`);
-    }
-  }, [scaleFactor]);
+      const b64 = await cmdGetRegionImageBase64(rect, scaleFactor, vw, vh);
+      if (!b64) return '';
+
+      return new Promise<string>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve('');
+              return;
+            }
+
+            // 1. 底层干净屏幕原图
+            ctx.drawImage(img, 0, 0);
+
+            const scaleX = img.width / Math.max(1, rect.width);
+            const scaleY = img.height / Math.max(1, rect.height);
+
+            // 2. 原位 1:1 视觉翻译合成（底色抹除层 + 译文文本）
+            if (includeTranslations && overlayResult?.blocks && overlayResult.blocks.length > 0) {
+              for (const block of overlayResult.blocks) {
+                const bx = (block.logicalX - rect.x) * scaleX;
+                const by = (block.logicalY - rect.y) * scaleY;
+                const bw = block.logicalW * scaleX;
+                const bh = block.logicalH * scaleY;
+
+                ctx.fillStyle = toSolidBg(block.bgCss, block.fgCss);
+                ctx.fillRect(bx, by, bw, bh);
+
+                if (block.translated) {
+                  const fontSize = Math.round(Math.max(11, block.logicalH * 0.72) * scaleY);
+                  ctx.font = `600 ${fontSize}px "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif`;
+                  ctx.fillStyle = getCardTextColor(block.bgCss, block.fgCss);
+                  ctx.textBaseline = 'top';
+                  ctx.fillText(block.translated, bx + 2 * scaleX, by + 2 * scaleY, bw);
+                }
+              }
+            }
+
+            // 3. SVG 标注绘制（矩形、箭头、涂鸦画笔、马赛克、文字）
+            if (includeAnnotations && annotations && annotations.length > 0) {
+              for (const ann of annotations) {
+                ctx.save();
+                ctx.strokeStyle = ann.color;
+                ctx.fillStyle = ann.color;
+                ctx.lineWidth = Math.max(1, ann.strokeWidth * scaleX);
+
+                if (ann.type === 'rect' && ann.start && ann.end) {
+                  const x = (Math.min(ann.start.x, ann.end.x) - rect.x) * scaleX;
+                  const y = (Math.min(ann.start.y, ann.end.y) - rect.y) * scaleY;
+                  const w = Math.abs(ann.end.x - ann.start.x) * scaleX;
+                  const h = Math.abs(ann.end.y - ann.start.y) * scaleY;
+                  ctx.strokeRect(x, y, w, h);
+                } else if (ann.type === 'arrow' && ann.start && ann.end) {
+                  const x1 = (ann.start.x - rect.x) * scaleX;
+                  const y1 = (ann.start.y - rect.y) * scaleY;
+                  const x2 = (ann.end.x - rect.x) * scaleX;
+                  const y2 = (ann.end.y - rect.y) * scaleY;
+
+                  ctx.beginPath();
+                  ctx.moveTo(x1, y1);
+                  ctx.lineTo(x2, y2);
+                  ctx.stroke();
+
+                  const angle = Math.atan2(y2 - y1, x2 - x1);
+                  const headLen = Math.max(10, 14 * scaleX);
+                  ctx.beginPath();
+                  ctx.moveTo(x2, y2);
+                  ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
+                  ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+                  ctx.closePath();
+                  ctx.fill();
+                } else if (ann.type === 'pen' && ann.points && ann.points.length > 1) {
+                  ctx.beginPath();
+                  const p0 = ann.points[0];
+                  ctx.moveTo((p0.x - rect.x) * scaleX, (p0.y - rect.y) * scaleY);
+                  for (let i = 1; i < ann.points.length; i++) {
+                    const pt = ann.points[i];
+                    ctx.lineTo((pt.x - rect.x) * scaleX, (pt.y - rect.y) * scaleY);
+                  }
+                  ctx.stroke();
+                } else if (ann.type === 'mosaic' && ann.start && ann.end) {
+                  const mx = Math.round((Math.min(ann.start.x, ann.end.x) - rect.x) * scaleX);
+                  const my = Math.round((Math.min(ann.start.y, ann.end.y) - rect.y) * scaleY);
+                  const mw = Math.round(Math.abs(ann.end.x - ann.start.x) * scaleX);
+                  const mh = Math.round(Math.abs(ann.end.y - ann.start.y) * scaleY);
+                  if (mw > 0 && mh > 0) {
+                    const blockSize = Math.max(8, Math.round(12 * scaleX));
+                    for (let px = mx; px < mx + mw; px += blockSize) {
+                      for (let py = my; py < my + mh; py += blockSize) {
+                        const blockW = Math.min(blockSize, mx + mw - px);
+                        const blockH = Math.min(blockSize, my + mh - py);
+                        const imgData = ctx.getImageData(px, py, 1, 1);
+                        const [r, g, b] = imgData.data;
+                        ctx.fillStyle = `rgb(${r},${g},${b})`;
+                        ctx.fillRect(px, py, blockW, blockH);
+                      }
+                    }
+                  }
+                } else if (ann.type === 'text' && ann.text && ann.x !== undefined && ann.y !== undefined) {
+                  const tx = (ann.x - rect.x) * scaleX;
+                  const ty = (ann.y - rect.y) * scaleY;
+                  const textSize = Math.round(16 * scaleY);
+                  ctx.font = `bold ${textSize}px sans-serif`;
+                  ctx.fillText(ann.text, tx, ty);
+                }
+                ctx.restore();
+              }
+            }
+
+            resolve(canvas.toDataURL('image/png'));
+          } catch {
+            resolve('');
+          }
+        };
+        img.onerror = () => resolve('');
+        img.src = 'data:image/bmp;base64,' + b64;
+      });
+    },
+    [scaleFactor, overlayResult, annotations]
+  );
+
+  /** Copy the selection region image (clean desktop BMP or composed with annotations/translations) to clipboard. */
+  const copyRegionImage = useCallback(
+    async (rect: SelRect, options?: { forceComposed?: boolean }) => {
+      try {
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+        const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
+        const hasAnnotations = annotations.length > 0;
+        const hasTranslations = phase === 'overlay' && !!overlayResult?.blocks?.length;
+
+        const shouldCompose = options?.forceComposed ?? (hasAnnotations || hasTranslations);
+
+        if (shouldCompose) {
+          const dataUrl = await getComposedRegionDataUrl(rect, hasTranslations, hasAnnotations);
+          if (dataUrl) {
+            const ok = await cmdCopyComposedImage(dataUrl);
+            showFeedback(ok ? '📷 1:1 原位视觉合成图已复制到剪贴板' : '⚠️ 图片复制失败');
+            return;
+          }
+        }
+
+        const ok = await cmdCopyRegionImage(rect, scaleFactor, vw, vh);
+        showFeedback(ok ? '📷 选区图片已复制到剪贴板' : '⚠️ 图片复制失败');
+      } catch (err) {
+        showFeedback(`⚠️ 图片复制失败：${err instanceof Error ? err.message.slice(0, 40) : String(err)}`);
+      }
+    },
+    [scaleFactor, annotations, phase, overlayResult, getComposedRegionDataUrl, showFeedback]
+  );
 
   /** Save the selection region image as PNG under Pictures/猫步翻译/. */
-  const saveRegionImage = useCallback(async (rect: SelRect) => {
-    try {
-      const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
-      const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
-      const path = await cmdSaveRegionImage(rect, scaleFactor, vw, vh);
-      showFeedback(`💾 已保存：…${path.slice(-46)}`);
-    } catch (err) {
-      showFeedback(`⚠️ 图片保存失败：${err instanceof Error ? err.message.slice(0, 40) : String(err)}`);
-    }
-  }, [scaleFactor]);
+  const saveRegionImage = useCallback(
+    async (rect: SelRect, options?: { forceComposed?: boolean }) => {
+      try {
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+        const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
+        const hasAnnotations = annotations.length > 0;
+        const hasTranslations = phase === 'overlay' && !!overlayResult?.blocks?.length;
+        const shouldCompose = options?.forceComposed ?? (hasAnnotations || hasTranslations);
+
+        if (shouldCompose) {
+          const dataUrl = await getComposedRegionDataUrl(rect, hasTranslations, hasAnnotations);
+          if (dataUrl) {
+            const path = await cmdSaveComposedImage(dataUrl);
+            showFeedback(`💾 1:1 视觉合成图已保存：…${path.slice(-46)}`);
+            return;
+          }
+        }
+
+        const path = await cmdSaveRegionImage(rect, scaleFactor, vw, vh);
+        showFeedback(`💾 已保存：…${path.slice(-46)}`);
+      } catch (err) {
+        showFeedback(`⚠️ 图片保存失败：${err instanceof Error ? err.message.slice(0, 40) : String(err)}`);
+      }
+    },
+    [scaleFactor, annotations, phase, overlayResult, getComposedRegionDataUrl, showFeedback]
+  );
 
   /** Stable callback: real card sizes join the AABB collision layout. */
   const handleRenderedSize = useCallback((blockIndex: number, size: { width: number; height: number }) => {
@@ -2424,8 +2573,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             left: Math.max(
               12,
               Math.min(
-                effectiveRect.x + (effectiveRect.width - 1040) / 2,
-                Math.max(12, vw - 1040 - 16)
+                effectiveRect.x + (effectiveRect.width - Math.min(1040, vw - 24)) / 2,
+                Math.max(12, vw - Math.min(1040, vw - 24) - 12)
               )
             ),
             top:
@@ -2835,8 +2984,13 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                 overlayResult.selectionY,
               ),
             });
-            items.push({ label: '📷 复制选区图片', run: () => void copyRegionImage(selRect) });
-            items.push({ label: '💾 保存选区图片 (PNG)', run: () => void saveRegionImage(selRect) });
+            items.push({ label: '📷 复制选区图片', run: () => void copyRegionImage(selRect, { forceComposed: false }) });
+            items.push({ label: '💾 保存选区图片 (PNG)', run: () => void saveRegionImage(selRect, { forceComposed: false }) });
+            const hasOverlayOrAnnotations = !!overlayResult?.blocks?.length || annotations.length > 0;
+            if (hasOverlayOrAnnotations) {
+              items.push({ label: '🎨 复制 1:1 原位视觉图', run: () => void copyRegionImage(selRect, { forceComposed: true }) });
+              items.push({ label: '💾 保存 1:1 原位视觉图 (PNG)', run: () => void saveRegionImage(selRect, { forceComposed: true }) });
+            }
             return items.map((item) => (
               <button
                 key={item.label}
