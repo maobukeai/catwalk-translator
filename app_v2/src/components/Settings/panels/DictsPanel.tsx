@@ -549,6 +549,11 @@ export const DictsPanel: React.FC = () => {
                   添加您工作流程中的专属英文缩写、品牌名称或 CG 术语，翻译时将享有第一最高优先级匹配！
                   词条同时作为<span className="font-semibold">术语强制表</span>：精确命中直接出结果，未命中的句子也会把相关术语注入 AI 翻译，保证术语始终按您的译法输出。
                 </p>
+                <div className={`mt-2 p-2 rounded-xl border flex items-center justify-between text-[11px] font-medium ${
+                  isLight ? 'bg-blue-50/80 border-blue-200/80 text-blue-800' : 'bg-blue-950/30 border-blue-800/40 text-blue-300'
+                }`}>
+                  <span>💡 提示：如需拖拽导入 Excel (.xlsx)、TSV、TXT 文本或配置 Anki 联动，请直接点击顶部导航栏中的<strong>「专属术语库」</strong>选项卡。</span>
+                </div>
               </div>
 
               {/* 工具按钮组 */}

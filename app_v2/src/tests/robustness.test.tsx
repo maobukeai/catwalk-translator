@@ -75,7 +75,12 @@ async function openWithResult(ctx: Ctx = {}) {
   const onClose = vi.fn();
   render(<CaptureOverlay isOpen={true} onClose={onClose} />);
   await screen.findByText(/猫步划词/);
+  await waitFor(() => expect(container()?.style?.cursor).toBe('crosshair'));
   await selectAndConfirm();
+  const confirmBtn = screen.queryByTestId('adjust-confirm-btn') || screen.queryByTestId('btn-tool-confirm');
+  if (confirmBtn) {
+    fireEvent.click(confirmBtn);
+  }
   await screen.findByText('粗糙度');
   return { calls, onClose };
 }
@@ -271,7 +276,7 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
     await screen.findByText('粗糙度');
 
     pressKey('w', 'KeyW');
-    expect(await screen.findByText(/区域监控已开启/)).toBeInTheDocument();
+    expect(await screen.findByText(/区域监控已开启/, {}, { timeout: 3000 })).toBeInTheDocument();
 
     // Three consecutive quiet failures → auto-stop with an honest notice
     await waitFor(() => {

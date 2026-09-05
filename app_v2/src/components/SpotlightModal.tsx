@@ -175,9 +175,19 @@ export const SpotlightModal: React.FC<SpotlightModalProps> = ({ isOpen, onClose,
                       {result.wordDetail.cgDomainNote}
                     </span>
                   </div>
-                  <div className="text-xs font-mono text-zinc-400">
-                    美 {result.wordDetail.phoneticUs} | 英 {result.wordDetail.phoneticUk}
-                  </div>
+                  {(result.wordDetail.phoneticUs || result.wordDetail.phoneticUk) ? (
+                    <div className="text-xs font-mono text-zinc-400">
+                      {result.wordDetail.phoneticUs && `美 ${result.wordDetail.phoneticUs}`}
+                      {result.wordDetail.phoneticUs && result.wordDetail.phoneticUk && ' | '}
+                      {result.wordDetail.phoneticUk && `英 ${result.wordDetail.phoneticUk}`}
+                    </div>
+                  ) : (
+                    result.wordDetail.pos ? (
+                      <div className="text-xs font-mono text-zinc-400">
+                        {result.wordDetail.pos}
+                      </div>
+                    ) : null
+                  )}
                 </div>
                 <p className="text-sm font-semibold leading-relaxed">{result.wordDetail.definition}</p>
               </div>

@@ -13,6 +13,15 @@ pub const RELEASES_PAGE: &str = "https://github.com/maobukeai/catwalk-translator
 pub const RELEASES_WEB_LATEST_URL: &str =
     "https://github.com/maobukeai/catwalk-translator/releases/latest";
 
+pub const JSDELIVR_VERSION_URL: &str =
+    "https://cdn.jsdelivr.net/gh/maobukeai/catwalk-translator@main/version.json";
+pub const FASTLY_VERSION_URL: &str =
+    "https://fastly.jsdelivr.net/gh/maobukeai/catwalk-translator@main/version.json";
+pub const JSDELIVR_PACKAGE_URL: &str =
+    "https://cdn.jsdelivr.net/gh/maobukeai/catwalk-translator@main/app_v2/package.json";
+pub const FASTLY_PACKAGE_URL: &str =
+    "https://fastly.jsdelivr.net/gh/maobukeai/catwalk-translator@main/app_v2/package.json";
+
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_NAME: &str = "猫步翻译";
 
@@ -62,6 +71,102 @@ fn build_update_client() -> Result<Client, String> {
         .timeout(Duration::from_secs(16))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))
+}
+
+/// 解析 CDN 返回的元数据（支持根目录 version.json 以及 app_v2/package.json）
+pub fn parse_cdn_version_info(body: &str, current: &str) -> Option<UpdateCheckResult> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    let v_str = json.get("version").and_then(|v| v.as_str())?;
+    let version = strip_leading_v(v_str).to_string();
+    if version.is_empty() {
+        return None;
+    }
+    let has_update = version_compare(&version, current) == Ordering::Greater;
+
+    let release_date = json
+        .get("release_date")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let download_url = json
+        .get("download_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(RELEASES_PAGE)
+        .to_string();
+    let release_notes = json
+        .get("release_notes")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut assets = parse_assets(json.get("assets"));
+
+    if assets.is_empty() {
+        assets.push(UpdateAssetInfo {
+            name: format!("猫步翻译_{}_x64-setup.exe", version),
+            url: format!(
+                "https://github.com/{}/{}/releases/download/v{}/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_{}_x64-setup.exe",
+                GITHUB_OWNER, GITHUB_REPO, version, version
+            ),
+            size: 0,
+            sha256: None,
+        });
+    }
+
+    let notes = if !release_notes.is_empty() {
+        release_notes
+    } else if has_update {
+        format!(
+            "发现新版本 v{}（已通过全球高速 CDN 免限流通道探知，点击下方前往下载更新）",
+            version
+        )
+    } else {
+        "当前已是最新版本".to_string()
+    };
+
+    Some(UpdateCheckResult {
+        latest: Some(UpdateInfo {
+            version,
+            release_date,
+            download_url,
+            sha256: None,
+            release_notes: notes,
+            assets,
+        }),
+        has_update,
+        current_version: current.into(),
+        error: None,
+    })
+}
+
+/// 免限流全球 CDN 探针 (jsDelivr / Fastly 全球节点镜像)
+/// 完全绕过 GitHub API 匿名 60次/小时 的 IP 限流机制与国内网络阻断，秒级返回最新版本
+pub async fn check_update_via_cdn(current: &str) -> Option<UpdateCheckResult> {
+    let client = Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok()?;
+
+    let cdn_urls = [
+        JSDELIVR_VERSION_URL,
+        FASTLY_VERSION_URL,
+        JSDELIVR_PACKAGE_URL,
+        FASTLY_PACKAGE_URL,
+    ];
+
+    for url in cdn_urls {
+        if let Ok(resp) = client.get(url).send().await {
+            if resp.status().is_success() {
+                if let Ok(text) = resp.text().await {
+                    if let Some(res) = parse_cdn_version_info(&text, current) {
+                        return Some(res);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// 免限流网页 302 重定向探针 (HTML Redirect Probe)
@@ -148,7 +253,10 @@ pub async fn check_app_update() -> UpdateCheckResult {
     let client = match build_update_client() {
         Ok(c) => c,
         Err(e) => {
-            // 客户端构建异常时尝试网页 302 探针
+            // 客户端构建异常时尝试 CDN 探针与网页 302 探针
+            if let Some(cdn_res) = check_update_via_cdn(current).await {
+                return cdn_res;
+            }
             if let Some(fallback_res) = check_update_via_html_redirect(current).await {
                 return fallback_res;
             }
@@ -159,7 +267,10 @@ pub async fn check_app_update() -> UpdateCheckResult {
     let response = match client.get(RELEASES_LATEST_URL).send().await {
         Ok(r) => r,
         Err(e) => {
-            // 直连 API 超时或网络异常时，立即无缝降级到免限流 302 探针
+            // 直连 API 超时或网络异常时，立即无缝降级到免限流 CDN 探针
+            if let Some(cdn_res) = check_update_via_cdn(current).await {
+                return cdn_res;
+            }
             if let Some(fallback_res) = check_update_via_html_redirect(current).await {
                 return fallback_res;
             }
@@ -181,7 +292,10 @@ pub async fn check_app_update() -> UpdateCheckResult {
 
     let status = response.status();
     if !status.is_success() {
-        // 关键点：当遇到 403 限流、429、500 等任何异常时，优先触发免限流 302 探针！
+        // 关键点：当遇到 403 限流、429、500 等任何异常时，优先触发免限流 CDN 探针！
+        if let Some(cdn_res) = check_update_via_cdn(current).await {
+            return cdn_res;
+        }
         if let Some(fallback_res) = check_update_via_html_redirect(current).await {
             return fallback_res;
         }
@@ -190,7 +304,7 @@ pub async fn check_app_update() -> UpdateCheckResult {
         let display_err = if status.as_u16() == 403
             && (err_body.contains("rate limit") || err_body.contains("Rate limit"))
         {
-            "当前网络 IP 请求 GitHub 接口触发限流 (403)，请稍后重试或开启系统代理".to_string()
+            "当前网络 IP 请求 GitHub 接口触发限流 (403)，已自动尝试 CDN 镜像。请稍后重试或开启系统代理".to_string()
         } else if status.as_u16() == 404 {
             "未找到已发布的 Release 版本 (404)。请确认 GitHub 仓库已发布 Release 包".to_string()
         } else {
@@ -202,6 +316,9 @@ pub async fn check_app_update() -> UpdateCheckResult {
     let body = match response.text().await {
         Ok(t) => t,
         Err(e) => {
+            if let Some(cdn_res) = check_update_via_cdn(current).await {
+                return cdn_res;
+            }
             if let Some(fallback_res) = check_update_via_html_redirect(current).await {
                 return fallback_res;
             }
@@ -211,6 +328,9 @@ pub async fn check_app_update() -> UpdateCheckResult {
     let json: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(e) => {
+            if let Some(cdn_res) = check_update_via_cdn(current).await {
+                return cdn_res;
+            }
             if let Some(fallback_res) = check_update_via_html_redirect(current).await {
                 return fallback_res;
             }
@@ -219,6 +339,9 @@ pub async fn check_app_update() -> UpdateCheckResult {
     };
 
     let Some(info) = parse_release(&json) else {
+        if let Some(cdn_res) = check_update_via_cdn(current).await {
+            return cdn_res;
+        }
         if let Some(fallback_res) = check_update_via_html_redirect(current).await {
             return fallback_res;
         }
@@ -481,5 +604,52 @@ mod tests {
         assert_eq!(version_compare("0.2.0", "0.2.0"), Ordering::Equal);
         assert_eq!(version_compare("0.1.9", "0.2.0"), Ordering::Less);
         assert_eq!(version_compare("1.0.0", "0.9.9"), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_parse_cdn_version_info_full_json() {
+        let json_str = r#"{
+            "version": "0.3.3",
+            "name": "猫步翻译",
+            "release_date": "2026-09-05",
+            "download_url": "https://github.com/maobukeai/catwalk-translator/releases",
+            "release_notes": "1. 升级大图覆写\n2. 纯文通读",
+            "assets": [
+                {
+                    "name": "猫步翻译_0.3.3_x64-setup.exe",
+                    "url": "https://example.com/setup.exe",
+                    "size": 12345,
+                    "sha256": null
+                }
+            ]
+        }"#;
+
+        let res1 = parse_cdn_version_info(json_str, "0.1.8").expect("should parse");
+        assert!(res1.has_update);
+        assert_eq!(res1.current_version, "0.1.8");
+        let latest1 = res1.latest.unwrap();
+        assert_eq!(latest1.version, "0.3.3");
+        assert_eq!(latest1.release_notes, "1. 升级大图覆写\n2. 纯文通读");
+        assert_eq!(latest1.assets.len(), 1);
+
+        let res2 = parse_cdn_version_info(json_str, "0.3.3").expect("should parse");
+        assert!(!res2.has_update);
+    }
+
+    #[test]
+    fn test_parse_cdn_version_info_package_json() {
+        let pkg_str = r#"{
+            "name": "app_v2",
+            "private": true,
+            "version": "0.3.3"
+        }"#;
+
+        let res = parse_cdn_version_info(pkg_str, "0.1.8").expect("should parse package.json");
+        assert!(res.has_update);
+        let latest = res.latest.unwrap();
+        assert_eq!(latest.version, "0.3.3");
+        assert!(latest.release_notes.contains("发现新版本 v0.3.3"));
+        assert_eq!(latest.assets.len(), 1);
+        assert!(latest.assets[0].name.contains("0.3.3"));
     }
 }

@@ -65,6 +65,9 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
   // Auto source-language label for the header pill (Youdao shows the pair)
   const srcHasCJK = blocks.some((b) => /[\u4e00-\u9fff]/.test(b.original));
   const srcLabel = srcHasCJK ? '中文' : 'English';
+  const isAiRefined = blocks.some(
+    (b) => b.sourceTier && (b.sourceTier.includes('✨') || b.sourceTier.includes('AI 精翻') || b.sourceTier.includes('LLM'))
+  );
 
   return (
     <div
@@ -89,6 +92,11 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
           }`}>
             {srcLabel} ⇄ {targetLang}
           </span>
+          {isAiRefined && (
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500/15 to-indigo-500/15 border border-amber-500/30 text-amber-500 dark:text-amber-400 shrink-0 select-none shadow-xs">
+              ✨ AI 精翻
+            </span>
+          )}
           {translating && (
             <span className="text-[10px] font-mono text-sky-400 animate-pulse">翻译中…</span>
           )}

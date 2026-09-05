@@ -567,15 +567,6 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         {renderText}
       </span>
 
-      {/* ✨ AI 精翻完成后的专属金色呼吸星标角标 */}
-      {block.sourceTier && block.sourceTier.includes('✨') && (
-        <span
-          className="absolute -top-1.5 -right-1.5 z-20 flex items-center justify-center w-3.5 h-3.5 rounded-full text-[8px] bg-gradient-to-r from-amber-400 to-indigo-500 text-white shadow-sm pointer-events-none"
-          title={`已升级：${block.sourceTier}`}
-        >
-          ✨
-        </span>
-      )}
 
       {/* 📌 Pin indicator on card top-right when pinned */}
       {isPinned && (

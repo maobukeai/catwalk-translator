@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { X, Minus, Square, Command, Info } from "lucide-react";
+import { X, Minus, Square, Command, Info, Pin } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "../services/tauri";
 import { useAppTheme } from "../hooks/useAppTheme";
@@ -12,9 +12,17 @@ interface TitleBarProps {
   onQuickSearch?: () => void;
   onOpenAbout?: () => void;
   onRequestClose?: () => void;
+  onOpenQuickWindow?: () => void;
+  quickWindowHotkey?: string;
 }
 
-export const TitleBar: React.FC<TitleBarProps> = ({ onQuickSearch, onOpenAbout, onRequestClose }) => {
+export const TitleBar: React.FC<TitleBarProps> = ({
+  onQuickSearch,
+  onOpenAbout,
+  onRequestClose,
+  onOpenQuickWindow,
+  quickWindowHotkey = "Alt+W",
+}) => {
   const [isMaximized, setIsMaximized] = useState(false);
 
   // 原生窗口拖拽处理（同步无延迟调用）
@@ -148,8 +156,29 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onQuickSearch, onOpenAbout, 
       {/* 中间：原生窗口可拖拽区域 */}
       <div data-tauri-drag-region className="flex-1 h-full min-w-8" />
 
-      {/* 右侧：OCR 状态 + 软件信息 + ⌘K + Windows 11 Fluent 风格窗口控制按钮组 */}
+      {/* 右侧：贴图 + 软件信息 + OCR 状态 + ⌘K + Windows 11 Fluent 风格窗口控制按钮组 */}
       <div className="flex items-center gap-1.5" data-tauri-drag-region={false}>
+        {/* 贴图 顶部快捷入口 */}
+        {onOpenQuickWindow && (
+          <button
+            type="button"
+            data-tauri-drag-region={false}
+            onClick={onOpenQuickWindow}
+            className={`group flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all duration-150 cursor-pointer shadow-sm ${
+              isLight
+                ? 'text-slate-600 hover:text-slate-900 bg-white/70 hover:bg-white/95 border border-slate-200/80 hover:border-slate-300 active:scale-95'
+                : 'text-zinc-300 hover:text-white bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.08] hover:border-white/15 active:scale-95'
+            }`}
+            title={`打开/收起桌面贴图 (${quickWindowHotkey})`}
+            aria-label="贴图"
+          >
+            <Pin className={`h-3.5 w-3.5 shrink-0 transition-colors ${
+              isLight ? 'text-indigo-500 group-hover:text-indigo-600' : 'text-indigo-400 group-hover:text-indigo-300'
+            }`} />
+            <span>贴图</span>
+          </button>
+        )}
+
         {/* 软件信息 / 关于 顶部快捷按钮 */}
         {onOpenAbout && (
           <button

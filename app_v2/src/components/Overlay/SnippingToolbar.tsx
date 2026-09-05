@@ -52,6 +52,9 @@ export interface SnippingToolbarProps {
   onCheatSheet?: () => void;
   isDowngraded?: boolean;
   effectiveEngineName?: string;
+  isAiRefined?: boolean;
+  isAiRefining?: boolean;
+  aiEngineName?: string;
   bannerDismissed?: boolean;
   viewMode?: 'translated' | 'original' | 'bilingual';
   onSelectViewMode?: (mode: 'translated' | 'original' | 'bilingual') => void;
@@ -125,6 +128,9 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
   onCheatSheet,
   isDowngraded = false,
   effectiveEngineName = '',
+  isAiRefined = false,
+  isAiRefining = false,
+  aiEngineName = '',
   bannerDismissed = false,
   viewMode = 'translated',
   onSelectViewMode,
@@ -215,47 +221,222 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
       onMouseDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      {/* ── 主工具条 (白底微阴影紧凑悬浮长条，6大功能分区，响应式自适应防溢出) ──────────────────────── */}
+      {/* ── 第 1 层: [翻译与阅读控制条] (核心动作、双语阅读、字号、语种与引擎) ─────────────── */}
       <div
-        className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-xl backdrop-blur-md rounded-2xl py-1.5 pl-2 pr-3 flex items-center gap-1 max-w-[calc(100vw-24px)] overflow-x-auto scrollbar-none flex-nowrap shrink-0"
+        className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-md backdrop-blur-md rounded-xl py-1 px-2 flex items-center gap-1 max-w-[calc(100vw-24px)] overflow-x-auto scrollbar-none flex-nowrap shrink-0"
         onPointerDown={(e) => {
-          // 如果点击的是工具条的空白 padding / 边框区域（非按钮或输入控件），也支持直接拖动
-          if (e.target === e.currentTarget) {
-            handlePointerDownDrag(e);
-          }
+          if (e.target === e.currentTarget) handlePointerDownDrag(e);
         }}
         onMouseDown={(e) => {
-          if (e.target === e.currentTarget) {
-            handlePointerDownDrag(e);
-          }
+          if (e.target === e.currentTarget) handlePointerDownDrag(e);
         }}
       >
-        {/* ── 分区 1: [品牌标签与拖拽把手] ── */}
+        {/* 截图翻译 [文A] */}
+        <button
+          type="button"
+          data-testid="adjust-confirm-btn"
+          onClick={onTranslate}
+          disabled={isProcessing}
+          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-medium text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50 shrink-0"
+          title="截图翻译 (文A / Enter)"
+        >
+          <Languages className="w-3.5 h-3.5 text-emerald-100" />
+          <span className="tracking-wide font-semibold">翻译</span>
+        </button>
+
+        {/* 提取文字 [A] (OCR) */}
+        <button
+          type="button"
+          data-testid="btn-ocr"
+          onClick={onOcr}
+          disabled={isProcessing}
+          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-sky-500 hover:bg-sky-600 active:scale-95 text-white font-medium text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50 shrink-0"
+          title="提取纯文本并复制到剪贴板 (OCR / A)"
+        >
+          <FileText className="w-3.5 h-3.5 text-sky-100" />
+          <span className="tracking-wide font-semibold">提取</span>
+        </button>
+
+        {/* 细竖线分隔 */}
+        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+
+        {/* 3态分段胶囊按钮 [ 文 | 原 | 双 ] */}
+        <div className="flex items-center bg-slate-100/90 dark:bg-slate-800/90 p-0.5 rounded-lg border border-slate-200/60 dark:border-slate-700/60 shrink-0">
+          <button
+            type="button"
+            data-testid="view-mode-translated"
+            onClick={() => onSelectViewMode?.('translated')}
+            className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
+              viewMode === 'translated'
+                ? 'bg-sky-500 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400'
+            }`}
+            title="仅显示译文 (O)"
+          >
+            文
+          </button>
+          <button
+            type="button"
+            data-testid="view-mode-original"
+            onClick={() => onSelectViewMode?.('original')}
+            className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
+              viewMode === 'original'
+                ? 'bg-sky-500 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400'
+            }`}
+            title="仅显示原文 (O)"
+          >
+            原
+          </button>
+          <button
+            type="button"
+            data-testid="view-mode-bilingual"
+            onClick={() => onSelectViewMode?.('bilingual')}
+            className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
+              viewMode === 'bilingual'
+                ? 'bg-sky-500 text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400'
+            }`}
+            title="双语对照 (O)"
+          >
+            双
+          </button>
+        </div>
+
+        {/* 🔊 朗读 按钮 */}
+        <button
+          type="button"
+          data-testid="btn-speech"
+          onClick={onSpeech}
+          className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer shrink-0 flex items-center justify-center"
+          title="语音朗读 (Space)"
+        >
+          <Volume2 className="w-3.5 h-3.5 text-sky-500" />
+        </button>
+
+        {/* A⁻ | A⁺ 紧凑微型步进按钮组 */}
+        <div className="flex items-center bg-slate-100/90 dark:bg-slate-800/90 p-0.5 rounded-lg border border-slate-200/60 dark:border-slate-700/60 shrink-0">
+          <button
+            type="button"
+            data-testid="btn-zoom-out"
+            onClick={onZoomOut}
+            className="px-1.5 py-0.5 rounded text-[11px] font-bold hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition cursor-pointer"
+            title="缩小字号 (A⁻)"
+          >
+            A⁻
+          </button>
+          <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5 shrink-0" />
+          <button
+            type="button"
+            data-testid="btn-zoom-in"
+            onClick={onZoomIn}
+            className="px-1.5 py-0.5 rounded text-[11px] font-bold hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition cursor-pointer"
+            title="放大字号 (A⁺)"
+          >
+            A⁺
+          </button>
+        </div>
+
+        {/* 细竖线分隔 */}
+        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+
+        {/* 语种选择下拉框 */}
+        <select
+          value={targetLang}
+          onChange={(e) => onSelectLanguage?.(e.target.value as LanguageCode)}
+          className="bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/60 dark:border-slate-700/60 rounded-lg text-[11px] px-1.5 py-0.5 font-medium text-slate-700 dark:text-slate-200 outline-none cursor-pointer hover:border-sky-400 transition shrink-0"
+          title="切换目标语种"
+        >
+          {TARGET_LANG_OPTIONS.map((opt) => (
+            <option key={opt.code} value={opt.code}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+
+        {/* 引擎选择极简下拉框 */}
+        <select
+          value={selectedEngine}
+          onChange={(e) => onSelectEngine?.(e.target.value)}
+          className="bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/60 dark:border-slate-700/60 rounded-lg text-[11px] px-1.5 py-0.5 font-medium text-slate-700 dark:text-slate-200 outline-none cursor-pointer hover:border-sky-400 transition shrink-0 max-w-[96px]"
+          title="切换翻译引擎 (Tab)"
+        >
+          <option value={engineChoices.auto.value}>🤖 智能极速</option>
+          {engineChoices.groups.map((g) => (
+            <optgroup key={g.key} label={g.label}>
+              {g.options.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+
+        {/* 大模型深度精翻标注 */}
+        {isAiRefining && (
+          <div
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-600 dark:text-sky-400 text-[10px] font-semibold shrink-0 animate-pulse select-none ml-0.5"
+            title="正在使用大模型后台异步润色中…"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-ping" />
+            <span className="whitespace-nowrap">AI 润色中…</span>
+          </div>
+        )}
+        {isAiRefined && !isAiRefining && (
+          <div
+            data-testid="ai-refined-badge"
+            className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-lg bg-gradient-to-r from-amber-500/15 via-indigo-500/15 to-sky-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-[10px] font-semibold shrink-0 animate-fade-in select-none shadow-xs ml-0.5"
+            title={`大模型深度精翻已就绪${aiEngineName ? `: ${aiEngineName}` : ''}`}
+          >
+            <span className="text-[11px] leading-none">✨</span>
+            <span className="whitespace-nowrap max-w-[76px] truncate inline-block align-bottom">{aiEngineName ? `${aiEngineName} 精翻` : 'AI 精翻'}</span>
+          </div>
+        )}
+
+        {/* 降级提示（如有） */}
+        {isDowngraded && !bannerDismissed && (
+          <div className="ml-0.5 pl-1.5 border-l border-amber-400/40 text-[10px] font-semibold text-amber-500 flex items-center gap-0.5 shrink-0" title={`通道已自动降级至: ${effectiveEngineName}`}>
+            <span>⚠️ {effectiveEngineName}</span>
+          </div>
+        )}
+      </div>
+
+      {/* ── 第 2 层: [截图标注与输出工具条] (手柄、标注工具、监控、速查与输出) ──────────── */}
+      <div
+        className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-xl backdrop-blur-md rounded-xl py-1 px-2 flex items-center gap-1 max-w-[calc(100vw-24px)] overflow-x-auto scrollbar-none flex-nowrap shrink-0"
+        onPointerDown={(e) => {
+          if (e.target === e.currentTarget) handlePointerDownDrag(e);
+        }}
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) handlePointerDownDrag(e);
+        }}
+      >
+        {/* 品牌标签与拖拽把手 */}
         <div
-          className="flex items-center gap-1 px-2 py-1 select-none font-bold text-xs shrink-0 cursor-grab active:cursor-grabbing hover:bg-slate-100/90 dark:hover:bg-slate-800/90 rounded-lg transition-colors group"
+          className="flex items-center gap-1 px-1.5 py-0.5 select-none font-bold text-xs shrink-0 cursor-grab active:cursor-grabbing hover:bg-slate-100/90 dark:hover:bg-slate-800/90 rounded-lg transition-colors group"
           title="按住拖拽移动工具栏 · 按住鼠标左键划框 · 双击恢复默认位置"
           onPointerDown={handlePointerDownDrag}
           onMouseDown={handlePointerDownDrag}
           onDoubleClick={handleResetPosition}
         >
           <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-sky-500 transition-colors shrink-0" />
-          <span className="text-sm shrink-0">🐾</span>
-          <span className="font-extrabold bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 bg-clip-text text-transparent tracking-tight whitespace-nowrap">
-            猫步划词
+          <span className="text-xs shrink-0">🐾</span>
+          <span className="font-extrabold bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 bg-clip-text text-transparent tracking-tight whitespace-nowrap text-[11px]">
+            猫步
           </span>
         </div>
 
         {/* 细竖线分隔 */}
-        <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
 
-        {/* ── 分区 2: [5大标注工具] ── */}
+        {/* 5 大标注工具 */}
         <div className="flex items-center gap-0.5 shrink-0">
-          {/* 矩形框 */}
           <button
             type="button"
             data-testid="btn-tool-rect"
             onClick={() => onSelectTool(activeTool === 'rect' ? null : 'rect')}
-            className={`p-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
               activeTool === 'rect'
                 ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
                 : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -265,12 +446,11 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             <Square className="w-3.5 h-3.5" />
           </button>
 
-          {/* 箭头 */}
           <button
             type="button"
             data-testid="btn-tool-arrow"
             onClick={() => onSelectTool(activeTool === 'arrow' ? null : 'arrow')}
-            className={`p-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
               activeTool === 'arrow'
                 ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
                 : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -280,12 +460,11 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             <MoveUpRight className="w-3.5 h-3.5" />
           </button>
 
-          {/* 画笔 */}
           <button
             type="button"
             data-testid="btn-tool-pen"
             onClick={() => onSelectTool(activeTool === 'pen' ? null : 'pen')}
-            className={`p-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
               activeTool === 'pen'
                 ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
                 : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -295,12 +474,11 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             <PenLine className="w-3.5 h-3.5" />
           </button>
 
-          {/* 马赛克 */}
           <button
             type="button"
             data-testid="btn-tool-mosaic"
             onClick={() => onSelectTool(activeTool === 'mosaic' ? null : 'mosaic')}
-            className={`p-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
               activeTool === 'mosaic'
                 ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
                 : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -310,12 +488,11 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             <Grid3X3 className="w-3.5 h-3.5" />
           </button>
 
-          {/* 文字 */}
           <button
             type="button"
             data-testid="btn-tool-text"
             onClick={() => onSelectTool(activeTool === 'text' ? null : 'text')}
-            className={`p-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
               activeTool === 'text'
                 ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
                 : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -327,205 +504,45 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
         </div>
 
         {/* 细竖线分隔 */}
-        <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
 
-        {/* ── 分区 3: [核心翻译与OCR] ── */}
-        <div className="flex items-center gap-1 shrink-0">
-          {/* 截图翻译 [文A] */}
-          <button
-            type="button"
-            data-testid="adjust-confirm-btn"
-            onClick={onTranslate}
-            disabled={isProcessing}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-medium text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50 shrink-0"
-            title="截图翻译 (文A / Enter)"
-          >
-            <Languages className="w-3.5 h-3.5 text-emerald-100" />
-            <span className="tracking-wide">翻译</span>
-          </button>
-
-          {/* 提取文字 [A] (OCR) */}
-          <button
-            type="button"
-            data-testid="btn-ocr"
-            onClick={onOcr}
-            disabled={isProcessing}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-500 hover:bg-sky-600 active:scale-95 text-white font-medium text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50 shrink-0"
-            title="提取纯文本并复制到剪贴板 (OCR)"
-          >
-            <FileText className="w-3.5 h-3.5 text-sky-100" />
-            <span className="tracking-wide">提取文字</span>
-          </button>
-        </div>
-
-        {/* 细竖线分隔 */}
-        <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
-
-        {/* ── 分区: [视图与阅读控制组] ── */}
-        <div className="flex items-center gap-1 shrink-0">
-          {/* 3态分段胶囊按钮 [ 文 | 原 | 双 ] */}
-          <div className="flex items-center bg-slate-100/90 dark:bg-slate-800/90 p-0.5 rounded-lg border border-slate-200/60 dark:border-slate-700/60">
-            <button
-              type="button"
-              data-testid="view-mode-translated"
-              onClick={() => onSelectViewMode?.('translated')}
-              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
-                viewMode === 'translated'
-                  ? 'bg-sky-500 text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400'
-              }`}
-              title="仅显示译文 (O)"
-            >
-              文
-            </button>
-            <button
-              type="button"
-              data-testid="view-mode-original"
-              onClick={() => onSelectViewMode?.('original')}
-              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
-                viewMode === 'original'
-                  ? 'bg-sky-500 text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400'
-              }`}
-              title="仅显示原文 (O)"
-            >
-              原
-            </button>
-            <button
-              type="button"
-              data-testid="view-mode-bilingual"
-              onClick={() => onSelectViewMode?.('bilingual')}
-              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
-                viewMode === 'bilingual'
-                  ? 'bg-sky-500 text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400'
-              }`}
-              title="双语对照 (O)"
-            >
-              双
-            </button>
-          </div>
-
-          {/* 🔊 朗读 按钮 */}
-          <button
-            type="button"
-            data-testid="btn-speech"
-            onClick={onSpeech}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer shrink-0"
-            title="语音朗读 (Space)"
-          >
-            <Volume2 className="w-3.5 h-3.5 text-sky-500" />
-            <span>朗读</span>
-          </button>
-
-          {/* A⁻ | A⁺ 紧凑微型步进按钮组 */}
-          <div className="flex items-center bg-slate-100/90 dark:bg-slate-800/90 p-0.5 rounded-lg border border-slate-200/60 dark:border-slate-700/60">
-            <button
-              type="button"
-              data-testid="btn-zoom-out"
-              onClick={onZoomOut}
-              className="px-1.5 py-0.5 rounded text-[11px] font-bold hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition cursor-pointer"
-              title="缩小字号 (A⁻)"
-            >
-              A⁻
-            </button>
-            <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5 shrink-0" />
-            <button
-              type="button"
-              data-testid="btn-zoom-in"
-              onClick={onZoomIn}
-              className="px-1.5 py-0.5 rounded text-[11px] font-bold hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition cursor-pointer"
-              title="放大字号 (A⁺)"
-            >
-              A⁺
-            </button>
-          </div>
-        </div>
-
-        {/* 细竖线分隔 */}
-        <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
-
-        {/* ── 分区 4: [语种与引擎] ── */}
-        <div className="flex items-center gap-1 shrink-0">
-          {/* 语种选择极简下拉框 */}
-          <select
-            value={targetLang}
-            onChange={(e) => onSelectLanguage?.(e.target.value as LanguageCode)}
-            className="bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/60 dark:border-slate-700/60 rounded-lg text-[11px] px-2 py-1 font-medium text-slate-700 dark:text-slate-200 outline-none cursor-pointer hover:border-sky-400 transition shrink-0"
-            title="切换目标语种"
-          >
-            {TARGET_LANG_OPTIONS.map((opt) => (
-              <option key={opt.code} value={opt.code}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-
-          {/* 引擎选择极简下拉框（选项 = 设置中的模型池 + 已开启引擎/词库，与设置页同源） */}
-          <select
-            value={selectedEngine}
-            onChange={(e) => onSelectEngine?.(e.target.value)}
-            className="bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/60 dark:border-slate-700/60 rounded-lg text-[11px] px-2 py-1 font-medium text-slate-700 dark:text-slate-200 outline-none cursor-pointer hover:border-sky-400 transition shrink-0 max-w-[135px]"
-            title="切换翻译引擎 (Tab)"
-          >
-            <option value={engineChoices.auto.value}>{engineChoices.auto.label}</option>
-            {engineChoices.groups.map((g) => (
-              <optgroup key={g.key} label={g.label}>
-                {g.options.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </div>
-
-        {/* 细竖线分隔 */}
-        <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
-
-        {/* ── 分区 5: [辅助工具] ── */}
-        <div className="flex items-center gap-1 shrink-0">
-          {/* 监控区域 (W) */}
+        {/* 辅助工具 */}
+        <div className="flex items-center gap-0.5 shrink-0">
           <button
             type="button"
             onClick={onToggleWatch}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer shrink-0 ${
+            className={`p-1 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer shrink-0 flex items-center justify-center ${
               watchMode
                 ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/40'
-                : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+                : ''
             }`}
             title="开启/关闭区域监控 (W)"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${watchMode ? 'animate-spin' : ''}`} />
-            <span>监控 (W)</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${watchMode ? 'animate-spin text-emerald-500' : ''}`} />
           </button>
 
-          {/* 快捷键速查 (?) */}
           <button
             type="button"
             data-testid="cheatsheet-btn"
             onClick={onCheatSheet}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer shrink-0"
+            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer shrink-0 flex items-center justify-center"
             title="快捷键速查 (? / F1)"
           >
-            <span className="w-3.5 h-3.5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-[9px]">?</span>
-            <span>速查</span>
+            <span className="w-3.5 h-3.5 rounded-full bg-slate-200/90 dark:bg-slate-700/90 flex items-center justify-center font-bold text-[9px]">?</span>
           </button>
         </div>
 
         {/* 细竖线分隔 */}
-        <div className="w-[1px] h-4 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
 
-        {/* ── 分区 6: [操作与退出] ── */}
-        <div className="flex items-center gap-1 shrink-0 pr-1">
-          {/* 撤销 (Undo) */}
+        {/* 输出与退出操作 */}
+        <div className="flex items-center gap-0.5 shrink-0">
           <button
             type="button"
             data-testid="btn-undo"
             onClick={onUndo}
             disabled={!canUndo}
-            className={`p-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
               canUndo
                 ? 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
                 : 'opacity-30 cursor-not-allowed text-slate-400'
@@ -535,12 +552,11 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             <Undo2 className="w-3.5 h-3.5" />
           </button>
 
-          {/* 置顶贴图 (Pin) */}
           <button
             type="button"
             data-testid="btn-pin"
             onClick={onPin}
-            className={`p-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
               isPinned
                 ? 'bg-amber-500 text-white shadow-sm ring-1 ring-amber-400/40'
                 : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -550,57 +566,46 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             <Pin className="w-3.5 h-3.5" />
           </button>
 
-          {/* 保存 (Save) */}
           <button
             type="button"
             data-testid="btn-save"
             onClick={onSave}
-            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer flex items-center justify-center"
+            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer flex items-center justify-center"
             title="保存截图为图片 (Ctrl+S)"
           >
             <Download className="w-3.5 h-3.5" />
           </button>
 
-          {/* 复制 (Copy) */}
           <button
             type="button"
             data-testid="btn-copy"
             onClick={onCopy}
-            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer flex items-center justify-center"
+            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer flex items-center justify-center"
             title="复制截图到剪贴板 (Ctrl+C)"
           >
             <Copy className="w-3.5 h-3.5" />
           </button>
 
-          {/* 取消 / 退出 (X) */}
           <button
             type="button"
             data-testid="adjust-cancel-btn"
             onClick={onCancel}
-            className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:text-rose-600 transition-all cursor-pointer flex items-center justify-center shrink-0"
+            className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:text-rose-600 transition-all cursor-pointer flex items-center justify-center shrink-0"
             title="退出划词 (Esc / 鼠标右键)"
           >
             <X className="w-3.5 h-3.5" />
           </button>
 
-          {/* 完成 (Check) */}
           <button
             type="button"
             data-testid="btn-done"
             onClick={onConfirm}
-            className="p-1.5 px-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center shadow-sm shrink-0 ring-1 ring-emerald-400/30"
+            className="p-1 px-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center shadow-sm shrink-0 ring-1 ring-emerald-400/30"
             title="完成并复制 (Enter)"
           >
             <Check className="w-3.5 h-3.5 stroke-[2.5]" />
           </button>
         </div>
-
-        {/* 降级提示（如有） */}
-        {isDowngraded && !bannerDismissed && (
-          <div className="ml-1 pl-2 border-l border-amber-400/40 text-[11px] font-semibold text-amber-500 flex items-center gap-1 shrink-0">
-            <span>⚠️ 通道降级: {effectiveEngineName}</span>
-          </div>
-        )}
       </div>
 
       {/* ── 标注工具子选项条 (颜色选择与粗细调整) ─────────────────────────── */}

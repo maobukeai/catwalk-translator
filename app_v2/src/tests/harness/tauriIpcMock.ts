@@ -77,11 +77,16 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
       return true;
     case 'cmd_save_region_image':
       return 'C:/mock/猫步翻译/截图翻译_0.png';
-    case 'cmd_universal_translate':
+    case 'cmd_universal_translate': {
+      const text = args?.req?.text || args?.text || '';
+      const translated = state.translationMap[text] || (text === '你好' ? 'Hello' : `[Mock Universal] ${text}`);
       return {
-        mainTranslation: args?.text ? `[Mock Universal] ${args.text}` : '',
-        engines: [{ sourceTier: 'mock', translated: '' }],
+        original: text,
+        detectedLang: text === '你好' ? 'zh-CN' : 'en',
+        mainTranslation: translated,
+        engines: [{ engineName: 'Mock Engine', sourceTier: 'mock', translated }],
       };
+    }
     case 'cmd_offline_models_status':
       return [];
     case 'cmd_get_active_ocr_version':
@@ -163,12 +168,57 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
     // ── 通用词典 (GeneralDictCard / general_dict 命令) ──
     case 'cmd_general_dict_status':
       return { installed: false, entries: 0, installedAt: '' };
-    case 'cmd_general_dict_lookup':
-      return null;
+    case 'cmd_general_dict_lookup': {
+      const word = (args?.query || args?.word || args?.text || '').toLowerCase().trim();
+      return (state as any).generalDictEntries?.[word] || null;
+    }
     case 'cmd_general_dict_uninstall':
       return null;
     case 'cmd_general_dict_install':
       return { installed: true, entries: 0, installedAt: '' };
+    case 'cmd_show_main_window':
+    case 'cmd_hide_main_window':
+    case 'cmd_open_quick_window':
+    case 'cmd_set_pin_always_on_top':
+    case 'cmd_save_history':
+    case 'cmd_add_history':
+    case 'cmd_delete_history':
+    case 'cmd_clear_history':
+      return null;
+    case 'cmd_get_history':
+      return [];
+    case 'cmd_chat_llm': {
+      const msgs = args?.messages || [];
+      const userMsg = msgs.find((m: any) => m.role === 'user')?.content || '';
+      if (userMsg.includes('Three alternative style rewrites') || userMsg.includes('Provide deep, high-precision translation analysis')) {
+        return JSON.stringify({
+          rewrites: [
+            { style: 'formal', styleLabel: '商务正式', iconName: 'Briefcase', text: 'Guidelines for Proper Configuration' },
+            { style: 'technical', styleLabel: '技术规范', iconName: 'Wrench', text: 'Correct Configuration Specification' },
+            { style: 'casual', styleLabel: '地道自然', iconName: 'MessageSquare', text: 'How to configure it correctly' },
+          ],
+          vocabulary: [
+            { word: 'configuration', phonetic: '/kənˌfɪɡjəˈreɪʃn/', pos: 'n.', meaning: '配置；结构' },
+            { word: 'specification', phonetic: '/ˌspesɪfɪˈkeɪʃn/', pos: 'n.', meaning: '规范；说明书' },
+          ],
+          examples: [
+            { en: 'Follow the correct configuration guide carefully.', zh: '请仔细遵循正确配置指引。' },
+          ],
+        });
+      }
+      if (userMsg.includes('collocations')) {
+        return JSON.stringify({
+          examples: [
+            { en: 'This is an authentic example.', zh: '这是一个地道例句。' },
+          ],
+          collocations: [
+            { phrase: 'sample collocation', trans: '搭配示例' },
+          ],
+          usageTip: 'This is a test usage tip.',
+        });
+      }
+      return 'Mock AI Response';
+    }
     default:
       throw new Error(`Unhandled IPC command: ${cmd}`);
   }

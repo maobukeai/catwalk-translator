@@ -272,7 +272,7 @@ describe('DualPaneTranslator 图片粘贴与拖拽翻译', () => {
     expect(llmConfigArg?.provider).toBe('DeepSeek');
   });
 
-  it('点击查看大图按钮可弹出高清大图模态框', async () => {
+  it('点击查看大图按钮可弹出高清大图模态框，且模态框内完整保留并放大原位译文图层', async () => {
     vi.spyOn(tauriService, 'cmdImageOcrTranslate').mockResolvedValue(MOCK_IMAGE_RESULT);
 
     render(<DualPaneTranslator settings={DEFAULT_SETTINGS} initialText="" />);
@@ -282,7 +282,28 @@ describe('DualPaneTranslator 图片粘贴与拖拽翻译', () => {
     const zoomBtn = screen.getByTitle('查看大图');
     fireEvent.click(zoomBtn);
 
+    // 验证大图模态框弹出
     expect(await screen.findByText(/高清大图/)).toBeInTheDocument();
+
+    // 核心断言：验证模态框内依然能看到译文覆写，彻底解决“放大图片译文就没有了”的问题
+    expect(screen.getAllByText('粗糙度').length).toBeGreaterThanOrEqual(2);
+
+    // 验证模态框内提供的模式切换功能与复制译文按钮
+    expect(screen.getByTitle('查看原位覆写译文')).toBeInTheDocument();
+    expect(screen.getByTitle('查看双语对照')).toBeInTheDocument();
+    expect(screen.getByTitle('查看纯译文排版通读')).toBeInTheDocument();
+    expect(screen.getByTitle('查看纯原图')).toBeInTheDocument();
+    expect(screen.getByTitle('复制整张图片所有译文')).toBeInTheDocument();
+
+    // 切换到双语对照模式
+    fireEvent.click(screen.getByTitle('查看双语对照'));
+    expect(screen.getAllByText('Roughness').length).toBeGreaterThanOrEqual(1);
+
+    // 切换到纯文排版通读模式
+    fireEvent.click(screen.getByTitle('查看纯译文排版通读'));
+    expect(await screen.findByText(/纯译文排版通读/)).toBeInTheDocument();
+
+    // 关闭大图预览
     fireEvent.click(screen.getByTitle('关闭大图预览'));
     await waitFor(() => {
       expect(screen.queryByText(/高清大图/)).not.toBeInTheDocument();

@@ -11,7 +11,7 @@ import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
 import {
   cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall,
-  cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart,
+  cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart, cmdOpenQuickWindow,
 } from '../../../services/tauri';
 import type { OfflineEngineStatus } from '../../../services/tauri';
 import { normalizeHotkeyForCompare } from '../../../services/hotkeys';
@@ -27,14 +27,16 @@ interface HotkeyPanelProps {
   onTriggerSpotlight?: () => void;
   onTriggerClipboard?: () => void;
   onToggleWindow?: () => void;
+  onTriggerQuickWindow?: () => void;
 }
 
-/** 快捷键与 AI 模型：四个全局热键录制(含冲突检测)、LLM 多模型池与连接测试 */
+/** 快捷键与 AI 模型：五个全局热键录制(含冲突检测)、LLM 多模型池与连接测试 */
 export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
   onStartCapture,
   onTriggerSpotlight,
   onTriggerClipboard,
   onToggleWindow,
+  onTriggerQuickWindow,
 }) => {
   const { isLight } = useAppTheme();
   const {
@@ -43,10 +45,12 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
     setSpotlightHotkey,
     setClipboardHotkey,
     setToggleWindowHotkey,
+    setQuickWindowHotkey,
     setCaptureHotkeyEnabled,
     setSpotlightHotkeyEnabled,
     setClipboardHotkeyEnabled,
     setToggleWindowHotkeyEnabled,
+    setQuickWindowHotkeyEnabled,
     setCaptureReleaseAction,
     setClipboardWatchEnabled,
     setWatchIntervalMs,
@@ -86,7 +90,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
   void _llmSettings; void setShowApiKey; void setShowModelPicker; void setLlmConfig;
   void addLlmConfig; void updateLlmConfig; void setActiveLlmConfig; void toggleLlmConfigEnabled;
 
-  const [recordingTarget, setRecordingTarget] = useState<'capture' | 'spotlight' | 'clipboard' | 'toggleWindow' | null>(null);
+  const [recordingTarget, setRecordingTarget] = useState<'capture' | 'spotlight' | 'clipboard' | 'toggleWindow' | 'quickWindow' | null>(null);
 
   // 快捷键冲突提示（录制到与其他功能重复的组合时显示，4 秒后自动消失）
   const [hotkeyConflictNotice, setHotkeyConflictNotice] = useState<string | null>(null);
@@ -136,14 +140,15 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
       if (keys.length > 0) {
         const combo = keys.join('+');
 
-        // 与其他三个快捷键做冲突检测（归一化比较：忽略大小写与修饰键顺序）
+        // 与其他快捷键做冲突检测（归一化比较：忽略大小写与修饰键顺序）
         const normalizedCombo = normalizeHotkeyForCompare(combo);
         const conflict = (
           [
             { target: 'capture', label: '全局划词选区', value: settings.hotkey || 'F4' },
             { target: 'spotlight', label: 'Spotlight 查词', value: settings.spotlightHotkey || 'Alt+Space' },
             { target: 'clipboard', label: '剪贴板静默翻译', value: settings.clipboardHotkey || 'Ctrl+Shift+C' },
-            { target: 'toggleWindow', label: '唤醒/隐藏主程序', value: settings.toggleWindowHotkey || 'Alt+Q' },
+            { target: 'toggleWindow', label: '唤醒/隐藏主程序', value: settings.toggleWindowHotkey || 'Alt+W' },
+            { target: 'quickWindow', label: '桌面贴图悬浮窗', value: settings.quickWindowHotkey || 'Alt+W' },
           ] as { target: string; label: string; value: string }[]
         ).find(
           (o) => o.target !== recordingTarget && normalizeHotkeyForCompare(o.value) === normalizedCombo
@@ -159,6 +164,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
         else if (recordingTarget === 'spotlight') setSpotlightHotkey(combo);
         else if (recordingTarget === 'clipboard') setClipboardHotkey(combo);
         else if (recordingTarget === 'toggleWindow') setToggleWindowHotkey(combo);
+        else if (recordingTarget === 'quickWindow') setQuickWindowHotkey(combo);
 
         setRecordingTarget(null);
       }
@@ -168,7 +174,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown, true);
     };
-  }, [recordingTarget, setHotkey, setSpotlightHotkey, setClipboardHotkey, setToggleWindowHotkey, settings.hotkey, settings.spotlightHotkey, settings.clipboardHotkey, settings.toggleWindowHotkey]);
+  }, [recordingTarget, setHotkey, setSpotlightHotkey, setClipboardHotkey, setToggleWindowHotkey, setQuickWindowHotkey, settings.hotkey, settings.spotlightHotkey, settings.clipboardHotkey, settings.toggleWindowHotkey, settings.quickWindowHotkey]);
 
 
   return (
@@ -413,7 +419,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                     } ${!(settings.toggleWindowHotkeyEnabled ?? false) ? 'opacity-40 line-through' : ''}`}
                     title="点击开始录制按键"
                   >
-                    {recordingTarget === 'toggleWindow' ? '⌨️ 请按下按键...' : settings.toggleWindowHotkey || 'Alt+Q'}
+                    {recordingTarget === 'toggleWindow' ? '⌨️ 请按下按键...' : settings.toggleWindowHotkey || 'Alt+W'}
                   </kbd>
 
                   <button
@@ -448,6 +454,71 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   >
                     <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
                       (settings.toggleWindowHotkeyEnabled ?? false) ? 'translate-x-3.5' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* 5. 桌面贴图悬浮窗 */}
+              <div className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
+                isLight ? 'bg-white/80 border-slate-200/90 shadow-2xs hover:border-indigo-300' : 'bg-zinc-950/60 border-white/[0.08] shadow-2xs hover:border-indigo-500/30'
+              }`}>
+                <div className="flex items-center space-x-2 min-w-0 mr-2">
+                  <span className={`text-xs p-1.5 rounded-lg shrink-0 select-none ${
+                    isLight ? 'bg-indigo-50 text-indigo-600 border border-indigo-200/80' : 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30'
+                  }`}>📌</span>
+                  <div className="min-w-0">
+                    <div className={`text-xs font-bold leading-tight ${isLight ? 'text-slate-800' : 'text-zinc-100'} truncate`}>桌面贴图悬浮窗</div>
+                    <div className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-400'} truncate mt-0.5`}>光标处弹出桌面贴图并支持贴边收纳</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-1 shrink-0">
+                  <kbd
+                    onClick={() => setRecordingTarget(recordingTarget === 'quickWindow' ? null : 'quickWindow')}
+                    className={`px-2 py-0.5 rounded-md text-xs font-mono font-bold tracking-wide transition-all shadow-2xs cursor-pointer border ${
+                      recordingTarget === 'quickWindow'
+                        ? 'bg-indigo-600/20 text-indigo-600 border-indigo-500 animate-pulse ring-2 ring-indigo-500/20'
+                        : (isLight ? 'bg-white text-indigo-600 border-indigo-300 hover:bg-indigo-50' : 'bg-zinc-900 text-indigo-400 border-indigo-500/40 hover:bg-zinc-800')
+                    } ${!(settings.quickWindowHotkeyEnabled ?? false) ? 'opacity-40 line-through' : ''}`}
+                    title="点击开始录制按键"
+                  >
+                    {recordingTarget === 'quickWindow' ? '⌨️ 请按下按键...' : settings.quickWindowHotkey || 'Alt+W'}
+                  </kbd>
+
+                  <button
+                    type="button"
+                    onClick={() => setRecordingTarget(recordingTarget === 'quickWindow' ? null : 'quickWindow')}
+                    className={`px-1.5 py-0.5 rounded-md text-[11px] font-semibold border transition cursor-pointer ${
+                      recordingTarget === 'quickWindow'
+                        ? 'bg-rose-500/20 text-rose-600 border-rose-300'
+                        : (isLight ? 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50' : 'bg-zinc-800 text-zinc-200 border-white/10 hover:bg-zinc-700')
+                    }`}
+                  >
+                    {recordingTarget === 'quickWindow' ? '取消' : '重新录制'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onTriggerQuickWindow) onTriggerQuickWindow();
+                      else void cmdOpenQuickWindow();
+                    }}
+                    className="px-1.5 py-0.5 rounded-md bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-600 dark:text-indigo-400 text-[11px] font-semibold border border-indigo-500/30 transition cursor-pointer"
+                  >
+                    🚀 测试
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setQuickWindowHotkeyEnabled(!(settings.quickWindowHotkeyEnabled ?? false))}
+                    className={`relative inline-flex h-4.5 w-8 items-center rounded-full transition-colors cursor-pointer shrink-0 ml-0.5 ${
+                      (settings.quickWindowHotkeyEnabled ?? false) ? 'bg-indigo-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                    }`}
+                    title="开启或关闭该快捷键"
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      (settings.quickWindowHotkeyEnabled ?? false) ? 'translate-x-3.5' : 'translate-x-0.5'
                     }`} />
                   </button>
                 </div>
@@ -941,9 +1012,13 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   }`}
                 >
                   <option value="DeepSeek">DeepSeek (推荐·高性价比)</option>
+                  <option value="百度文心 (千帆)">百度文心千帆 (ERNIE-Speed / ERNIE-4.0)</option>
+                  <option value="SiliconFlow">SiliconFlow (硅基流动)</option>
+                  <option value="智谱 GLM">智谱 GLM (GLM-4-Flash)</option>
+                  <option value="通义千问">通义千问 (Qwen-Plus)</option>
+                  <option value="Kimi">Moonshot Kimi</option>
                   <option value="OpenAI">OpenAI (GPT-4o / GPT-4o-mini)</option>
                   <option value="Ollama">Ollama (本地私有化大模型)</option>
-                  <option value="智谱 GLM">智谱 GLM (GLM-4-Flash)</option>
                   <option value="Custom">自定义兼容接口 (Custom Endpoint)</option>
                 </select>
               </div>

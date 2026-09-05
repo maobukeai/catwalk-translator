@@ -5,7 +5,7 @@ pub use crate::models::{
     UniversalTranslationRequest, UniversalTranslationResponse, WordDetail,
 };
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 
 // 命令按领域拆分到子模块,统一从这里 re-export,lib.rs 注册表无需感知拆分
@@ -15,14 +15,51 @@ pub use crate::commands_history::*;
 #[tauri::command]
 pub async fn cmd_universal_translate(
     state: State<'_, AppState>,
-    req: UniversalTranslationRequest,
+    mut req: UniversalTranslationRequest,
 ) -> Result<UniversalTranslationResponse, String> {
-    let glossary = state
-        .settings
-        .lock()
-        .ok()
-        .map(|s| crate::translator::glossary_from_settings(&s.custom_dict_items))
-        .unwrap_or_default();
+    // 自动使用后端已加载的 settings 兜底补齐前端可能未传递或未准备好的凭据与配置
+    if let Ok(st) = state.settings.lock() {
+        if req.baidu_app_id.as_deref().map_or(true, |s| s.trim().is_empty()) {
+            req.baidu_app_id = st.baidu_app_id.clone();
+        }
+        if req.baidu_secret.as_deref().map_or(true, |s| s.trim().is_empty()) {
+            req.baidu_secret = st.baidu_secret.clone();
+        }
+        if req.baidu_llm_api_key.as_deref().map_or(true, |s| s.trim().is_empty()) {
+            req.baidu_llm_api_key = st.baidu_llm_api_key.clone();
+        }
+        if req.deepl_api_key.as_deref().map_or(true, |s| s.trim().is_empty()) {
+            req.deepl_api_key = st.deepl_api_key.clone();
+        }
+        if req.deepl_custom_url.as_deref().map_or(true, |s| s.trim().is_empty()) {
+            req.deepl_custom_url = st.deepl_custom_url.clone();
+        }
+        if req.volcengine_access_key.as_deref().map_or(true, |s| s.trim().is_empty()) {
+            req.volcengine_access_key = st.volcengine_access_key.clone();
+        }
+        if req.volcengine_secret_key.as_deref().map_or(true, |s| s.trim().is_empty()) {
+            req.volcengine_secret_key = st.volcengine_secret_key.clone();
+        }
+        if req.yandex_api_key.as_deref().map_or(true, |s| s.trim().is_empty()) {
+            req.yandex_api_key = st.yandex_api_key.clone();
+        }
+        if req.yandex_folder_id.as_deref().map_or(true, |s| s.trim().is_empty()) {
+            req.yandex_folder_id = st.yandex_folder_id.clone();
+        }
+        if req.llm_config.is_none() {
+            req.llm_config = st.llm_config.clone();
+        }
+        if req.llm_configs.is_none() {
+            req.llm_configs = Some(st.llm_configs.clone());
+        }
+        if req.online_engines.is_none() {
+            req.online_engines = st.online_engines.clone();
+        }
+        if req.preset_dicts.is_none() {
+            req.preset_dicts = Some(st.preset_dicts.clone());
+        }
+    }
+    let glossary = get_active_glossary_pairs(&state);
     crate::translator::execute_universal_translate(req, &glossary).await
 }
 
@@ -155,6 +192,7 @@ pub struct AppState {
     pub settings: Mutex<AppSettings>,
     pub history: Mutex<Vec<HistoryItem>>,
     pub capture_sessions: Mutex<Vec<CaptureSession>>,
+    pub glossary_store: crate::glossary::GlossaryStore,
 }
 
 impl AppState {
@@ -162,22 +200,59 @@ impl AppState {
         let settings = load_settings_file(app_handle);
         let history = load_history_file(app_handle);
         let capture_sessions = load_capture_sessions_file(app_handle);
+        let config_dir = get_app_config_dir(app_handle);
+        let glossary_store = crate::glossary::GlossaryStore::new(&config_dir);
+
+        // 自动兼容迁移历史 custom_dict_items
+        if glossary_store.get_all().is_empty() && !settings.custom_dict_items.is_empty() {
+            let migrated: Vec<crate::glossary::UserGlossaryEntry> = settings
+                .custom_dict_items
+                .iter()
+                .enumerate()
+                .map(|(idx, c)| crate::glossary::UserGlossaryEntry {
+                    id: if c.id.is_empty() { format!("term-legacy-{}", idx + 1) } else { c.id.clone() },
+                    source: c.original.clone(),
+                    target: c.translated.clone(),
+                    category: if c.category.is_empty() { "通用".to_string() } else { c.category.clone() },
+                    note: c.note.clone(),
+                    created_at: 0,
+                })
+                .collect();
+            let _ = glossary_store.import_entries(migrated, "merge");
+        }
+
         Self {
             settings: Mutex::new(settings),
             history: Mutex::new(history),
             capture_sessions: Mutex::new(capture_sessions),
+            glossary_store,
         }
     }
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let fallback_dir = std::env::temp_dir().join("cg_translator_config");
         Self {
             settings: Mutex::new(AppSettings::default()),
             history: Mutex::new(vec![]),
             capture_sessions: Mutex::new(vec![]),
+            glossary_store: crate::glossary::GlossaryStore::new(&fallback_dir),
         }
     }
+}
+
+pub fn get_active_glossary_pairs(state: &AppState) -> Vec<(String, String)> {
+    let mut pairs = state.glossary_store.get_pairs();
+    if let Ok(s) = state.settings.lock() {
+        let legacy = crate::translator::glossary_from_settings(&s.custom_dict_items);
+        for p in legacy {
+            if !pairs.iter().any(|(src, _)| src.eq_ignore_ascii_case(&p.0)) {
+                pairs.push(p);
+            }
+        }
+    }
+    pairs
 }
 
 
@@ -194,12 +269,7 @@ pub async fn cmd_translate_phrases(
     }
 
     let pipeline = crate::translator::shared_pipeline();
-    let glossary = state
-        .settings
-        .lock()
-        .ok()
-        .map(|s| crate::translator::glossary_from_settings(&s.custom_dict_items))
-        .unwrap_or_default();
+    let glossary = get_active_glossary_pairs(&state);
 
     let results = pipeline
         .translate_phrases(&phrases, &preset, llm_config.as_ref(), &glossary)
@@ -224,12 +294,7 @@ pub async fn cmd_translate_phrases_styled(
     }
 
     let pipeline = crate::translator::shared_pipeline();
-    let glossary = state
-        .settings
-        .lock()
-        .ok()
-        .map(|s| crate::translator::glossary_from_settings(&s.custom_dict_items))
-        .unwrap_or_default();
+    let glossary = get_active_glossary_pairs(&state);
 
     let results = pipeline
         .translate_phrases_styled(
@@ -257,12 +322,7 @@ pub async fn cmd_llm_batch_refine(
         return Ok(std::collections::HashMap::new());
     }
     let pipeline = crate::translator::shared_pipeline();
-    let glossary = state
-        .settings
-        .lock()
-        .ok()
-        .map(|s| crate::translator::glossary_from_settings(&s.custom_dict_items))
-        .unwrap_or_default();
+    let glossary = get_active_glossary_pairs(&state);
 
     let raw_map = pipeline
         .translate_via_llm_with_style(
@@ -400,11 +460,13 @@ pub async fn cmd_save_settings(
 
     *lock = settings.clone();
     save_settings_file(&app_handle, &settings);
+    let _ = app_handle.emit("settings-updated", ());
 
     // 实时热同步在线翻译凭据（百度/DeepL/火山/Yandex）至底层全局管线
     let creds = crate::translator::OnlineCredentials {
         baidu_app_id: settings.baidu_app_id.clone(),
         baidu_secret: settings.baidu_secret.clone(),
+        baidu_llm_api_key: settings.baidu_llm_api_key.clone(),
         deepl_api_key: settings.deepl_api_key.clone(),
         deepl_custom_url: settings.deepl_custom_url.clone(),
         volcengine_access_key: settings.volcengine_access_key.clone(),
@@ -444,12 +506,7 @@ pub async fn cmd_query_text(
     }
 
     let pipeline = crate::translator::shared_pipeline();
-    let glossary = state
-        .settings
-        .lock()
-        .ok()
-        .map(|s| crate::translator::glossary_from_settings(&s.custom_dict_items))
-        .unwrap_or_default();
+    let glossary = get_active_glossary_pairs(&state);
 
     let mut res = pipeline
         .query_text_detail(&text, &preset, llm_config.as_ref(), &glossary)
@@ -540,6 +597,15 @@ pub fn cmd_exit_app(app: tauri::AppHandle) {
 pub fn cmd_hide_main_window(app: tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
+    }
+}
+
+#[tauri::command]
+pub fn cmd_show_main_window(app: tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
     }
 }
 
@@ -639,5 +705,131 @@ pub async fn cmd_fetch_tts_audio(
     }
 
     Err("TTS service unavailable".to_string())
+}
+
+// ─── Anki 互通 Commands ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn cmd_anki_check_connection(
+    state: State<'_, AppState>,
+    endpoint: Option<String>,
+) -> Result<crate::anki::AnkiCheckResult, String> {
+    let ep = endpoint
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            state.settings.lock().ok().and_then(|s| {
+                s.anki_settings
+                    .as_ref()
+                    .and_then(|a| a.endpoint.clone())
+                    .filter(|e| !e.trim().is_empty())
+            })
+        })
+        .unwrap_or_else(crate::anki::default_anki_endpoint);
+
+    Ok(crate::anki::check_anki_status(&ep).await)
+}
+
+#[tauri::command]
+pub async fn cmd_anki_sync_notes(
+    state: State<'_, AppState>,
+    notes: Vec<crate::anki::AnkiNotePayload>,
+    deck_name: Option<String>,
+    endpoint: Option<String>,
+) -> Result<crate::anki::AnkiSyncResult, String> {
+    let ep = endpoint
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            state.settings.lock().ok().and_then(|s| {
+                s.anki_settings
+                    .as_ref()
+                    .and_then(|a| a.endpoint.clone())
+                    .filter(|e| !e.trim().is_empty())
+            })
+        })
+        .unwrap_or_else(crate::anki::default_anki_endpoint);
+
+    let deck = deck_name
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            state.settings.lock().ok().and_then(|s| {
+                s.anki_settings
+                    .as_ref()
+                    .and_then(|a| a.deck_name.clone())
+                    .filter(|d| !d.trim().is_empty())
+            })
+        })
+        .unwrap_or_else(|| "Catwalk".to_string());
+
+    crate::anki::sync_notes_to_anki(&ep, &deck, &notes).await
+}
+
+#[tauri::command]
+pub fn cmd_anki_export_file(
+    notes: Vec<crate::anki::AnkiNotePayload>,
+) -> Result<String, String> {
+    Ok(crate::anki::format_anki_tsv_export(&notes))
+}
+
+// ─── 专业术语库 Commands ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn cmd_get_custom_glossary(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::glossary::UserGlossaryEntry>, String> {
+    Ok(state.glossary_store.get_all())
+}
+
+#[tauri::command]
+pub fn cmd_import_custom_glossary(
+    state: State<'_, AppState>,
+    entries: Vec<crate::glossary::UserGlossaryEntry>,
+    mode: Option<String>,
+) -> Result<crate::glossary::GlossaryImportSummary, String> {
+    let m = mode.as_deref().unwrap_or("merge");
+    state.glossary_store.import_entries(entries, m)
+}
+
+#[tauri::command]
+pub fn cmd_parse_glossary_text(
+    content: String,
+    format: Option<String>,
+) -> Result<Vec<crate::glossary::UserGlossaryEntry>, String> {
+    let fmt = format.as_deref().unwrap_or("csv");
+    if fmt == "txt" {
+        Ok(crate::glossary::parse_txt_glossary(&content))
+    } else {
+        Ok(crate::glossary::parse_csv_or_tsv(&content))
+    }
+}
+
+#[tauri::command]
+pub fn cmd_upsert_custom_glossary_entry(
+    state: State<'_, AppState>,
+    entry: crate::glossary::UserGlossaryEntry,
+) -> Result<(), String> {
+    state.glossary_store.upsert_entry(entry)
+}
+
+#[tauri::command]
+pub fn cmd_delete_custom_glossary_entry(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<bool, String> {
+    state.glossary_store.delete_entry(&id)
+}
+
+#[tauri::command]
+pub fn cmd_clear_custom_glossary(
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.glossary_store.clear_all()
+}
+
+#[tauri::command]
+pub fn cmd_export_custom_glossary(
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let entries = state.glossary_store.get_all();
+    Ok(crate::glossary::export_to_csv(&entries))
 }
 

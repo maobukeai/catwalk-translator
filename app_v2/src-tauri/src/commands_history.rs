@@ -149,6 +149,72 @@ pub async fn cmd_clear_history(
     Ok(())
 }
 
+/// 仅清空未收藏的临时查询历史，完整保留用户收藏的所有生词本资产 (⭐)
+#[tauri::command]
+pub async fn cmd_clear_unfavorited_history(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let mut lock = state
+        .history
+        .lock()
+        .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let before_len = lock.len();
+    lock.retain(|item| item.is_favorite);
+    let removed = before_len - lock.len();
+    save_history_file(&app_handle, &lock);
+    Ok(removed)
+}
+
+/// 批量删除指定 ID 列表的历史/生词条目（原子写盘）
+#[tauri::command]
+pub async fn cmd_delete_history_entries(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<usize, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let id_set: std::collections::HashSet<String> = ids.into_iter().collect();
+    let mut lock = state
+        .history
+        .lock()
+        .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let before_len = lock.len();
+    lock.retain(|item| !id_set.contains(&item.id));
+    let removed = before_len - lock.len();
+    save_history_file(&app_handle, &lock);
+    Ok(removed)
+}
+
+/// 批量修改指定 ID 列表的收藏状态 (is_favorite)
+#[tauri::command]
+pub async fn cmd_batch_set_favorite(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    is_favorite: bool,
+) -> Result<usize, String> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let id_set: std::collections::HashSet<String> = ids.into_iter().collect();
+    let mut lock = state
+        .history
+        .lock()
+        .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let mut count = 0;
+    for item in lock.iter_mut() {
+        if id_set.contains(&item.id) {
+            item.is_favorite = is_favorite;
+            count += 1;
+        }
+    }
+    save_history_file(&app_handle, &lock);
+    Ok(count)
+}
+
 #[tauri::command]
 pub async fn cmd_export_anki(items: Vec<HistoryItem>) -> Result<String, String> {
     let mut csv_content = String::from("Front,Back,Tag\n");
@@ -160,4 +226,65 @@ pub async fn cmd_export_anki(items: Vec<HistoryItem>) -> Result<String, String> 
         ));
     }
     Ok(csv_content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_batch_delete_and_favorite_logic() {
+        let mut items = vec![
+            HistoryItem {
+                id: "1".into(),
+                original: "hello".into(),
+                translated: "你好".into(),
+                source_tier: "dict".into(),
+                timestamp: "12:00".into(),
+                is_favorite: true,
+            },
+            HistoryItem {
+                id: "2".into(),
+                original: "world".into(),
+                translated: "世界".into(),
+                source_tier: "dict".into(),
+                timestamp: "12:01".into(),
+                is_favorite: true,
+            },
+            HistoryItem {
+                id: "3".into(),
+                original: "rust".into(),
+                translated: "锈".into(),
+                source_tier: "dict".into(),
+                timestamp: "12:02".into(),
+                is_favorite: false,
+            },
+        ];
+
+        // Batch unfavorite [1, 2]
+        let id_set: std::collections::HashSet<String> = vec!["1".into(), "2".into()].into_iter().collect();
+        for item in items.iter_mut() {
+            if id_set.contains(&item.id) {
+                item.is_favorite = false;
+            }
+        }
+        assert!(!items[0].is_favorite);
+        assert!(!items[1].is_favorite);
+
+        // Batch favorite [3]
+        let id_set_3: std::collections::HashSet<String> = vec!["3".into()].into_iter().collect();
+        for item in items.iter_mut() {
+            if id_set_3.contains(&item.id) {
+                item.is_favorite = true;
+            }
+        }
+        assert!(items[2].is_favorite);
+
+        // Batch delete [1, 3]
+        let del_set: std::collections::HashSet<String> = vec!["1".into(), "3".into()].into_iter().collect();
+        items.retain(|i| !del_set.contains(&i.id));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "2");
+        assert!(!items[0].is_favorite);
+    }
 }

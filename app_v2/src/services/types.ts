@@ -73,6 +73,7 @@ export interface OverlayResult {
 
 export interface LlmConfig {
   id?: string;
+  name?: string;
   provider: string;
   apiKey: string;
   model: string;
@@ -113,6 +114,46 @@ export interface PresetDicts {
   houdini: boolean;
 }
 
+export interface AiExampleSentence {
+  en: string;
+  zh: string;
+}
+
+export interface AiCollocation {
+  phrase: string;
+  trans: string;
+}
+
+export interface AiWordContext {
+  examples: AiExampleSentence[];
+  collocations: AiCollocation[];
+  usageTip?: string;
+  modelUsed?: string;
+  timestamp?: number;
+}
+
+export interface AiStyleRewrite {
+  style: 'formal' | 'technical' | 'casual';
+  styleLabel: string;
+  iconName: string;
+  text: string;
+}
+
+export interface AiVocabularyItem {
+  word: string;
+  phonetic?: string;
+  pos?: string;
+  meaning: string;
+}
+
+export interface AiDeepTranslationAnalysis {
+  rewrites: AiStyleRewrite[];
+  vocabulary: AiVocabularyItem[];
+  examples: AiExampleSentence[];
+  modelUsed?: string;
+  timestamp?: number;
+}
+
 export interface WordDetail {
   phoneticUs: string;
   phoneticUk: string;
@@ -120,6 +161,7 @@ export interface WordDetail {
   definition: string;
   examples: string[];
   cgDomainNote: string;
+  aiContext?: AiWordContext | null;
 }
 
 export interface MultiEngineTranslation {
@@ -256,10 +298,12 @@ export interface AppSettings {
   spotlightHotkey?: string;
   clipboardHotkey?: string;
   toggleWindowHotkey?: string;
+  quickWindowHotkey?: string;
   captureHotkeyEnabled?: boolean;
   spotlightHotkeyEnabled?: boolean;
   clipboardHotkeyEnabled?: boolean;
   toggleWindowHotkeyEnabled?: boolean;
+  quickWindowHotkeyEnabled?: boolean;
   defaultPreset: string;
   captureEngine?: string;
   llmConfig: LlmConfig | null;
@@ -291,8 +335,12 @@ export interface AppSettings {
   primaryTranslationEngine?: 'auto' | 'dict' | 'llm' | 'online';
   /** 百度翻译开放平台 AppID（免费注册，每月 100 万字符）*/
   baiduAppId?: string;
-  /** 百度翻译开放平台密钥 */
+  /** 百度翻译开放平台通用版密钥 */
   baiduSecret?: string;
+  /** 百度翻译开放平台大模型版专用 API Key (Bearer Token)，留空则使用 baiduSecret */
+  baiduLlmApiKey?: string;
+  /** 是否通用版与大模型版使用相同密钥 */
+  useBaiduSameSecret?: boolean;
   /** DeepL 官方免费 API Key（每月 50 万字符）*/
   deeplApiKey?: string;
   /** 自定义 DeepLX 自建服务地址，如 http://localhost:1188/translate */
@@ -337,7 +385,60 @@ export interface AppSettings {
   backupSettings?: BackupSettings;
   /** WebDAV 云同步配置 */
   webdavConfig?: WebdavConfig;
+  /** AnkiConnect 本地同步配置 */
+  ankiSettings?: AnkiSettings;
 }
+
+export interface AnkiSettings {
+  enabled?: boolean;
+  endpoint?: string;
+  deckName?: string;
+  modelName?: string;
+  autoSyncOnStar?: boolean;
+  tags?: string[];
+}
+
+export interface AnkiCheckResult {
+  connected: boolean;
+  version: number;
+  decks: string[];
+  models: string[];
+  message: string;
+}
+
+export interface AnkiNotePayload {
+  original: string;
+  translated: string;
+  phonetic?: string;
+  context?: string;
+  category?: string;
+  tags?: string[];
+}
+
+export interface AnkiSyncResult {
+  total: number;
+  added: number;
+  skipped: number;
+  errors: string[];
+}
+
+export interface UserGlossaryEntry {
+  id: string;
+  source: string;
+  target: string;
+  category: string;
+  note?: string;
+  createdAt: number;
+}
+
+export interface GlossaryImportSummary {
+  totalParsed: number;
+  added: number;
+  updated: number;
+  skipped: number;
+  totalAfter: number;
+}
+
 
 export interface OfflineModelStatus {
   id: string;
@@ -424,6 +525,7 @@ export interface UniversalTranslationRequest {
   forcedEngine?: string;
   baiduAppId?: string;
   baiduSecret?: string;
+  baiduLlmApiKey?: string;
   deeplApiKey?: string;
   deeplCustomUrl?: string;
   volcengineAccessKey?: string;
@@ -450,11 +552,24 @@ export interface OcrEngineStatus {
 }
 
 
+/** 贴图卡片中的多引擎对比项 */
+export interface PinEngineOption {
+  engineName: string;
+  translated: string;
+  sourceTier: string;
+  isError?: boolean;
+}
+
 /** 贴图卡片中的单个文本块 */
 export interface PinBlock {
   original: string;
   translated: string;
   sourceTier: string;
+  wordDetail?: WordDetail | null;
+  deepAnalysis?: AiDeepTranslationAnalysis | null;
+  engineOptions?: PinEngineOption[];
+  selectedEngineName?: string;
+  alternatives?: string[];
 }
 
 /** 贴图（Pin）窗口内容：位置尺寸为逻辑像素（CSS px） */

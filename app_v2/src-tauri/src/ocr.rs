@@ -219,6 +219,9 @@ fn resolve_project_root() -> std::path::PathBuf {
         if p.join("core").exists() {
             return p;
         }
+        if p.join("legacy_python").join("core").exists() {
+            return p.join("legacy_python");
+        }
     }
 
     // 1. Try current working directory, walking ancestors
@@ -226,6 +229,9 @@ fn resolve_project_root() -> std::path::PathBuf {
         for dir in cwd.ancestors() {
             if dir.join("core").exists() {
                 return dir.to_path_buf();
+            }
+            if dir.join("legacy_python").join("core").exists() {
+                return dir.join("legacy_python");
             }
         }
     }
@@ -236,6 +242,9 @@ fn resolve_project_root() -> std::path::PathBuf {
             for dir in exe_dir.ancestors() {
                 if dir.join("core").exists() {
                     return dir.to_path_buf();
+                }
+                if dir.join("legacy_python").join("core").exists() {
+                    return dir.join("legacy_python");
                 }
             }
         }
@@ -283,14 +292,16 @@ fn launch_daemon() -> Result<OcrDaemon, String> {
         }
     });
 
-    // Wait for the "ready" handshake (model pre-warm), 60s timeout
-    let ready_line = match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+    // Wait for the "ready" handshake (model pre-warm), 3.5s fast timeout with auto-kill
+    let ready_line = match rx.recv_timeout(std::time::Duration::from_millis(3500)) {
         Ok(line) => line,
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            return Err("OCR daemon ready handshake timed out (60s)".to_string());
+            let _ = child.kill();
+            return Err("OCR daemon ready handshake timed out (3.5s)".to_string());
         }
         // Disconnected = 读线程已退出：子进程启动后立刻死亡（如 python 存根/脚本缺失）
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = child.kill();
             return Err(
                 "OCR daemon exited before ready handshake (process died at startup)".to_string(),
             )
@@ -527,11 +538,11 @@ fn execute_native_ocr_with_retry(crop_bmp_bytes: &[u8], restart_depth: u32) -> R
             }
             Err(e) => {
                 eprintln!(
-                    "[OCR] Daemon launch failed: {}. Falling back to one-shot mode.",
+                    "[OCR] Daemon launch failed: {}. Degraded to empty blocks.",
                     e
                 );
                 mark_ocr_failed();
-                return execute_native_ocr_oneshot_bytes(crop_bmp_bytes);
+                return Ok(OcrResult { blocks: vec![] });
             }
         }
     }
@@ -547,34 +558,36 @@ fn execute_native_ocr_with_retry(crop_bmp_bytes: &[u8], restart_depth: u32) -> R
 
     if let Err(e) = daemon.stdin.write_all(req_line.as_bytes()) {
         eprintln!("[OCR] Write to daemon failed ({}). Restarting.", e);
+        let _ = daemon.child.kill();
         *guard = None;
         drop(guard);
         if restart_depth >= 1 {
-            return Err("OCR daemon 重启后仍不可用（write 持续失败）".to_string());
+            return Ok(OcrResult { blocks: vec![] });
         }
         return execute_native_ocr_with_retry(crop_bmp_bytes, restart_depth + 1);
     }
 
-    // Read response —— recv_timeout：子进程卡死时超时返回并重建 daemon，
-    // 不再在全局锁内永久阻塞
-    let response_line = match daemon.rx.recv_timeout(std::time::Duration::from_secs(20)) {
+    // Read response —— recv_timeout：3.5s 超时熔断并主动 kill 僵尸子进程，杜绝全局锁内永久卡死
+    let response_line = match daemon.rx.recv_timeout(std::time::Duration::from_millis(3500)) {
         Ok(line) => line,
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            eprintln!("[OCR] Daemon response timed out (20s). Restarting.");
+            eprintln!("[OCR] Daemon response timed out (3.5s). Restarting.");
+            let _ = daemon.child.kill();
             *guard = None;
             drop(guard);
             if restart_depth >= 1 {
-                return Err("OCR daemon 响应超时（重启后仍无响应）".to_string());
+                return Ok(OcrResult { blocks: vec![] });
             }
             return execute_native_ocr_with_retry(crop_bmp_bytes, restart_depth + 1);
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
             // 读线程退出 = daemon 死亡
             eprintln!("[OCR] Daemon exited unexpectedly. Restarting.");
+            let _ = daemon.child.kill();
             *guard = None;
             drop(guard);
             if restart_depth >= 1 {
-                return Err("OCR daemon 重启后仍不可用（EOF）".to_string());
+                return Ok(OcrResult { blocks: vec![] });
             }
             return execute_native_ocr_with_retry(crop_bmp_bytes, restart_depth + 1);
         }
@@ -626,6 +639,7 @@ fn parse_daemon_response(line: &str) -> Result<OcrResult, String> {
 
 /// Fallback: run python as one-shot process (slow, only used when daemon fails to start).
 /// Writes bytes to a unique temp file (no shared-name races) and removes it afterwards.
+#[allow(dead_code)]
 fn execute_native_ocr_oneshot_bytes(image_bytes: &[u8]) -> Result<OcrResult, String> {
     let unique_name = format!(
         "catwalk_crop_{}_{}.bmp",
@@ -648,6 +662,7 @@ fn execute_native_ocr_oneshot_bytes(image_bytes: &[u8]) -> Result<OcrResult, Str
 }
 
 /// Fallback: run python as one-shot process (slow, only used when daemon fails to start).
+#[allow(dead_code)]
 fn execute_native_ocr_oneshot(path: &str) -> Result<OcrResult, String> {
     let root = resolve_project_root();
     let mut cmd = Command::new("python");

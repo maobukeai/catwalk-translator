@@ -466,19 +466,29 @@ fn extract_chat_reply(json: &serde_json::Value) -> Option<String> {
         }
     }
 
-    if let Some(text) = json
-        .get("candidates")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|first| first.get("content"))
-        .and_then(|cnt| cnt.get("parts"))
-        .and_then(|parts| parts.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|part| part.get("text"))
-        .and_then(|val| val.as_str())
-    {
-        if !text.trim().is_empty() {
-            return Some(text.to_string());
+    if let Some(candidates) = json.get("candidates").and_then(|c| c.as_array()).and_then(|arr| arr.first()) {
+        if let Some(parts) = candidates.get("content").and_then(|cnt| cnt.get("parts")).and_then(|p| p.as_array()) {
+            let mut thought_str = String::new();
+            let mut text_str = String::new();
+            for part in parts {
+                if let Some(t) = part.get("text").and_then(|val| val.as_str()) {
+                    if !t.is_empty() {
+                        let is_thought = part.get("thought").and_then(|val| val.as_bool()).unwrap_or(false);
+                        if is_thought {
+                            thought_str.push_str(t);
+                        } else {
+                            text_str.push_str(t);
+                        }
+                    }
+                }
+            }
+            if !thought_str.is_empty() && !text_str.is_empty() {
+                return Some(format!("<think>\n{}\n</think>\n\n{}", thought_str.trim(), text_str.trim()));
+            } else if !text_str.is_empty() {
+                return Some(text_str);
+            } else if !thought_str.is_empty() {
+                return Some(format!("<think>\n{}\n</think>", thought_str.trim()));
+            }
         }
     }
 
@@ -585,16 +595,31 @@ pub async fn cmd_chat_llm_stream(
     for target_url in &plan.candidate_urls {
         let final_url = finalize_chat_url(&plan, target_url);
         let is_native_gemini_endpoint = final_url.contains(":generateContent");
+
+        let req_url = if is_native_gemini_endpoint {
+            let mut u = final_url.replace(":generateContent", ":streamGenerateContent");
+            if !u.contains("alt=sse") {
+                if u.contains('?') {
+                    u = format!("{}&alt=sse", u);
+                } else {
+                    u = format!("{}?alt=sse", u);
+                }
+            }
+            u
+        } else {
+            final_url.clone()
+        };
+
         let body = build_chat_body(&plan, &messages, is_native_gemini_endpoint, !is_native_gemini_endpoint);
 
-        let req = apply_chat_auth(client.post(&final_url), &plan);
+        let req = apply_chat_auth(client.post(&req_url), &plan);
 
         let res = match req.json(&body).send().await {
             Ok(r) => r,
             Err(e) => {
                 last_err = format!(
                     "网络连接失败 (无法连接到 {}): {}",
-                    redact_secret(&final_url, &plan.api_key),
+                    redact_secret(&req_url, &plan.api_key),
                     e
                 );
                 continue;
@@ -610,17 +635,17 @@ pub async fn cmd_chat_llm_stream(
                 "HTTP {} 错误: {} (路径: {})",
                 status_code,
                 short_body,
-                redact_secret(&final_url, &plan.api_key)
+                redact_secret(&req_url, &plan.api_key)
             );
             continue;
         }
 
-        let is_sse = !is_native_gemini_endpoint
-            && res
+        let is_sse = is_native_gemini_endpoint
+            || res
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
-                .map(|v| v.contains("text/event-stream"))
+                .map(|v| v.contains("text/event-stream") || v.contains("stream"))
                 .unwrap_or(false);
 
         if is_sse {
@@ -652,35 +677,67 @@ pub async fn cmd_chat_llm_stream(
                         continue;
                     }
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                        // 1. OpenAI 兼容流式解析 (choices[0].delta)
                         let delta_obj = v
                             .get("choices")
                             .and_then(|c| c.as_array())
                             .and_then(|arr| arr.first())
                             .and_then(|first| first.get("delta"));
 
-                        let content_opt = delta_obj
+                        let mut content_opt = delta_obj
                             .and_then(|delta| delta.get("content").and_then(|c| c.as_str()))
-                            .filter(|s| !s.is_empty());
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string());
 
-                        let reasoning_opt = delta_obj
+                        let mut reasoning_opt = delta_obj
                             .and_then(|delta| {
                                 delta.get("reasoning_content")
                                     .or_else(|| delta.get("reasoning"))
                                     .and_then(|c| c.as_str())
                             })
-                            .filter(|s| !s.is_empty());
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string());
+
+                        // 2. Gemini 原生 SSE 流式解析 (candidates[0].content.parts[*])
+                        if content_opt.is_none() && reasoning_opt.is_none() {
+                            if let Some(candidate) = v.get("candidates").and_then(|c| c.as_array()).and_then(|arr| arr.first()) {
+                                if let Some(parts) = candidate.get("content").and_then(|cnt| cnt.get("parts")).and_then(|p| p.as_array()) {
+                                    let mut g_content = String::new();
+                                    let mut g_reasoning = String::new();
+                                    for part in parts {
+                                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                                            if !text.is_empty() {
+                                                let is_thought = part.get("thought").and_then(|val| val.as_bool()).unwrap_or(false);
+                                                if is_thought {
+                                                    g_reasoning.push_str(text);
+                                                } else {
+                                                    g_content.push_str(text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if !g_content.is_empty() {
+                                        content_opt = Some(g_content);
+                                    }
+                                    if !g_reasoning.is_empty() {
+                                        reasoning_opt = Some(g_reasoning);
+                                    }
+                                }
+                            }
+                        }
 
                         if content_opt.is_some() || reasoning_opt.is_some() {
+                            let c_str = content_opt.unwrap_or_default();
                             let _ = on_delta.send(ChatStreamDelta {
-                                delta: content_opt.unwrap_or("").to_string(),
-                                reasoning: reasoning_opt.map(|s| s.to_string()),
+                                delta: c_str.clone(),
+                                reasoning: reasoning_opt.clone(),
                                 done: false,
                             });
-                            if let Some(c) = content_opt {
-                                full.push_str(c);
+                            if !c_str.is_empty() {
+                                full.push_str(&c_str);
                             }
                             if let Some(r) = reasoning_opt {
-                                full_reasoning.push_str(r);
+                                full_reasoning.push_str(&r);
                             }
                         }
                     }

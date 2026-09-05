@@ -12,11 +12,12 @@ describe('HotkeyPanel 快捷键控制中心渲染与交互测试', () => {
     });
   });
 
-  it('完整渲染全部 4 个全局快捷键项（包含按键胶囊、重新录制、测试与开关）', () => {
+  it('完整渲染全部 5 个全局快捷键项（包含按键胶囊、重新录制、测试与开关）', () => {
     const onStartCapture = vi.fn();
     const onTriggerSpotlight = vi.fn();
     const onTriggerClipboard = vi.fn();
     const onToggleWindow = vi.fn();
+    const onTriggerQuickWindow = vi.fn();
 
     render(
       <HotkeyPanel
@@ -24,27 +25,29 @@ describe('HotkeyPanel 快捷键控制中心渲染与交互测试', () => {
         onTriggerSpotlight={onTriggerSpotlight}
         onTriggerClipboard={onTriggerClipboard}
         onToggleWindow={onToggleWindow}
+        onTriggerQuickWindow={onTriggerQuickWindow}
       />
     );
 
-    // 验证 4 个功能名称全部存在
+    // 验证 5 个功能名称全部存在
     expect(screen.getByText('全局划词选区')).toBeInTheDocument();
     expect(screen.getByText('Spotlight 居中查词')).toBeInTheDocument();
     expect(screen.getByText('剪贴板静默翻译')).toBeInTheDocument();
     expect(screen.getByText('唤醒 / 隐藏主程序')).toBeInTheDocument();
+    expect(screen.getByText('桌面贴图悬浮窗')).toBeInTheDocument();
 
-    // 验证 4 个快捷键按键胶囊文本
+    // 验证 5 个快捷键按键胶囊文本
     expect(screen.getByText('F4')).toBeInTheDocument();
     expect(screen.getByText('Alt+Space')).toBeInTheDocument();
     expect(screen.getByText('Ctrl+Shift+C')).toBeInTheDocument();
-    expect(screen.getByText('Alt+Q')).toBeInTheDocument();
+    expect(screen.getAllByText('Alt+W')).toHaveLength(2);
 
-    // 验证 4 个重新录制按钮与 4 个测试按钮
+    // 验证 5 个重新录制按钮与 5 个测试按钮
     const recordButtons = screen.getAllByRole('button', { name: /重新录制/i });
-    expect(recordButtons).toHaveLength(4);
+    expect(recordButtons).toHaveLength(5);
 
     const testButtons = screen.getAllByRole('button', { name: /🚀 测试/i });
-    expect(testButtons).toHaveLength(4);
+    expect(testButtons).toHaveLength(5);
 
     // 点击剪贴板测试按钮
     fireEvent.click(testButtons[2]);
@@ -53,6 +56,10 @@ describe('HotkeyPanel 快捷键控制中心渲染与交互测试', () => {
     // 点击唤醒隐藏测试按钮
     fireEvent.click(testButtons[3]);
     expect(onToggleWindow).toHaveBeenCalledTimes(1);
+
+    // 点击快捷查词测试按钮
+    fireEvent.click(testButtons[4]);
+    expect(onTriggerQuickWindow).toHaveBeenCalledTimes(1);
   });
 
   it('点击剪贴板重新录制并录制新快捷键', () => {
@@ -141,11 +148,12 @@ describe('HotkeyPanel 快捷键控制中心渲染与交互测试', () => {
     expect(screen.getByText('⚙️ deepseek（旧版通道，重新选择即更新）')).toBeInTheDocument();
   });
 
-  it('默认状态下仅开启「全局划词选区」，其余三个快捷键默认关闭', () => {
+  it('默认状态下仅开启「全局划词选区」，其余快捷键（含快捷查词悬浮窗）默认关闭', () => {
     expect(DEFAULT_SETTINGS.captureHotkeyEnabled).toBe(true);
     expect(DEFAULT_SETTINGS.spotlightHotkeyEnabled).toBe(false);
     expect(DEFAULT_SETTINGS.clipboardHotkeyEnabled).toBe(false);
     expect(DEFAULT_SETTINGS.toggleWindowHotkeyEnabled).toBe(false);
+    expect(DEFAULT_SETTINGS.quickWindowHotkeyEnabled).toBe(false);
 
     useSettingsStore.setState({
       settings: { ...DEFAULT_SETTINGS },
@@ -153,12 +161,14 @@ describe('HotkeyPanel 快捷键控制中心渲染与交互测试', () => {
     render(<HotkeyPanel />);
 
     const toggles = screen.getAllByTitle('开启或关闭该快捷键');
-    expect(toggles).toHaveLength(4);
+    expect(toggles).toHaveLength(5);
     // 第 1 个是划词选区：激活高亮 bg-blue-600
     expect(toggles[0].className).toContain('bg-blue-600');
-    // 其余 3 个默认关闭：未激活
+    // 其余 4 个默认关闭：未激活
     expect(toggles[1].className).not.toContain('bg-purple-600');
     expect(toggles[2].className).not.toContain('bg-emerald-600');
     expect(toggles[3].className).not.toContain('bg-amber-600');
+    // 第 5 个快捷查词悬浮窗：默认关闭
+    expect(toggles[4].className).not.toContain('bg-indigo-600');
   });
 });

@@ -250,14 +250,14 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                       </span>
                     </div>
                     <p className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
-                      划词或查词时自动识别 3D/CG 专业术语与 AI 精翻优质短语并标星加入生词本，自动过滤纯数字与操作杂词
+                      划词或查词时自动识别专业术语并标星入生词本（默认关闭，由您手动点击 ⭐ 精准收藏）
                     </p>
                   </div>
                 </div>
                 <label className="relative inline-flex cursor-pointer items-center shrink-0">
                   <input
                     type="checkbox"
-                    checked={settings.autoFavoriteQualityTerms !== false}
+                    checked={!!settings.autoFavoriteQualityTerms}
                     onChange={(e) => setAutoFavoriteQualityTerms(e.target.checked)}
                     className="peer sr-only"
                   />

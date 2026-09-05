@@ -25,8 +25,8 @@ def main():
         from PIL import Image
         from rapidocr_onnxruntime import RapidOCR
         
-        # 参数调优：将划词选区的检框限制边长调整为 480，大幅提升小图/短语截取的推理速度
-        engine = RapidOCR(det_limit_side_len=480, det_db_thresh=0.3)
+        # 参数调优：初始化采用无参默认构造防 KeyError('model_path')，在调用处传入 det 选项
+        engine = RapidOCR()
         
         # 发送就绪信号
         sys.stdout.write(json.dumps({"status": "ready"}) + "\n")
@@ -67,7 +67,7 @@ def main():
                 img_np = np.array(img)
                 img_bgr = img_np[:, :, ::-1]
 
-                result, _ = engine(img_bgr)
+                result, _ = engine(img_bgr, det_limit_side_len=480, det_db_thresh=0.3)
                 blocks = []
 
                 if result:

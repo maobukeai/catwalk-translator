@@ -22,6 +22,10 @@ import {
   Pencil,
   Square,
   ArrowDown,
+  Minimize2,
+  Maximize2,
+  ChevronsUp,
+  ChevronsDown,
 } from 'lucide-react';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { useAppTheme } from '../../hooks/useAppTheme';
@@ -100,7 +104,7 @@ const PROMPT_PRESETS = [
   },
 ] as const;
 
-/* ── 会话持久化（localStorage，轻量不侵入 Rust 状态） ──────────────────── */
+/* ── 会话持久化与排版设置（localStorage） ──────────────────────────────── */
 
 interface ChatSession {
   id: string;
@@ -112,6 +116,9 @@ interface ChatSession {
 
 const SESSIONS_KEY = 'maobu_chat_sessions_v1';
 const MAX_SESSIONS = 30;
+const CHAT_FONT_SIZE_KEY = 'maobu_chat_fontsize_v1';
+const CHAT_DENSITY_KEY = 'maobu_chat_density_v1';
+const CHAT_SHOW_PRESETS_KEY = 'maobu_chat_show_presets_v1';
 
 function loadSessions(): ChatSession[] {
   try {
@@ -154,14 +161,27 @@ const FormattedContent = React.memo(function FormattedContent({
   text,
   isLight,
   streaming,
+  fontSize = 'medium',
+  isCompact = false,
 }: {
   text: string;
   isLight: boolean;
   streaming: boolean;
+  fontSize?: 'small' | 'medium' | 'large';
+  isCompact?: boolean;
 }) {
   const lines = text.split('\n');
+  const sizeClass =
+    fontSize === 'small'
+      ? 'text-[12px] leading-snug'
+      : fontSize === 'large'
+      ? 'text-[17.5px] leading-relaxed'
+      : 'text-[14.5px] leading-normal';
+
+  const spacingClass = isCompact ? 'space-y-1' : 'space-y-1.5';
+
   const nodes = (
-    <div className="space-y-1.5 select-text text-[14.5px] leading-relaxed">
+    <div className={`${spacingClass} select-text ${sizeClass}`}>
       {lines.map((line, idx) => {
         const trimmed = line.trim();
         const isBullet = trimmed.startsWith('- ') || trimmed.startsWith('* ');
@@ -173,7 +193,7 @@ const FormattedContent = React.memo(function FormattedContent({
             return (
               <span
                 key={pIdx}
-                className={`font-bold px-1.5 py-0.5 rounded font-mono mx-0.5 ${
+                className={`font-bold px-1.5 py-0.5 rounded font-mono mx-0.5 text-[0.92em] ${
                   isLight
                     ? 'text-blue-700 bg-blue-500/10 border border-blue-300/50'
                     : 'text-sky-300 bg-sky-500/15 border border-sky-400/30'
@@ -188,15 +208,26 @@ const FormattedContent = React.memo(function FormattedContent({
 
         if (isBullet) {
           return (
-            <div key={idx} className="flex items-start space-x-2 my-1 pl-1">
-              <span className="shrink-0 mt-0.5 text-xs" style={{ color: 'var(--accent-text)' }}>•</span>
+            <div key={idx} className={`flex items-start ${isCompact ? 'space-x-1.5 my-0.5' : 'space-x-2 my-1'} pl-1`}>
+              <span className="shrink-0 mt-0.5 text-[0.85em]" style={{ color: 'var(--accent-text)' }}>•</span>
               <span className="flex-1">{lineNodes}</span>
             </div>
           );
         }
 
         return (
-          <div key={idx} className={trimmed === '' ? 'h-2' : 'min-h-[1.35rem]'}>
+          <div
+            key={idx}
+            className={
+              trimmed === ''
+                ? isCompact ? 'h-1.5' : 'h-2'
+                : fontSize === 'small'
+                ? 'min-h-[1.15rem]'
+                : fontSize === 'large'
+                ? 'min-h-[1.65rem]'
+                : 'min-h-[1.35rem]'
+            }
+          >
             {lineNodes}
           </div>
         );
@@ -237,6 +268,52 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
   const [editingSessionTitle, setEditingSessionTitle] = useState('');
   const [enableContext, setEnableContext] = useState(true);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+
+  // 聊天文字字号（小 12px / 中 14.5px / 大 17.5px）与紧凑排版状态
+  const [chatFontSize, setChatFontSize] = useState<'small' | 'medium' | 'large'>(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_FONT_SIZE_KEY);
+      if (saved === 'small' || saved === 'medium' || saved === 'large') return saved;
+    } catch {}
+    return 'medium';
+  });
+
+  const [chatDensity, setChatDensity] = useState<'compact' | 'normal'>(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_DENSITY_KEY);
+      if (saved === 'compact' || saved === 'normal') return saved;
+    } catch {}
+    return 'normal';
+  });
+
+  const [showPresets, setShowPresets] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_SHOW_PRESETS_KEY);
+      if (saved !== null) return saved === 'true';
+    } catch {}
+    return true;
+  });
+
+  const updateChatFontSize = (size: 'small' | 'medium' | 'large') => {
+    setChatFontSize(size);
+    try {
+      localStorage.setItem(CHAT_FONT_SIZE_KEY, size);
+    } catch {}
+  };
+
+  const updateChatDensity = (density: 'compact' | 'normal') => {
+    setChatDensity(density);
+    try {
+      localStorage.setItem(CHAT_DENSITY_KEY, density);
+    } catch {}
+  };
+
+  const updateShowPresets = (show: boolean) => {
+    setShowPresets(show);
+    try {
+      localStorage.setItem(CHAT_SHOW_PRESETS_KEY, String(show));
+    } catch {}
+  };
 
   const abortRef = useRef(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -927,6 +1004,93 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
           </div>
 
           <div className="flex items-center space-x-1 flex-wrap gap-y-1">
+            {/* 字号大小调节 */}
+            <div
+              className="flex items-center rounded-lg border border-[var(--g-border)] bg-[var(--g-surface-2)] p-0.5 text-[10.5px] select-none"
+              title="调节聊天文字大小 (小: 12px 紧凑展示更多内容, 中: 14.5px 标准, 大: 17.5px 明显放大护眼)"
+            >
+              <span className="px-1 text-[10px] opacity-60 font-mono">字号</span>
+              <button
+                type="button"
+                onClick={() => updateChatFontSize('small')}
+                className={`px-1.5 py-0.5 rounded cursor-pointer transition ${
+                  chatFontSize === 'small'
+                    ? 'bg-[var(--accent)] text-white font-bold shadow-xs'
+                    : 'hover:bg-[var(--g-surface-3)] text-[var(--g-text-2)]'
+                }`}
+                title="紧凑小字 (12px，展示最多内容)"
+              >
+                小
+              </button>
+              <button
+                type="button"
+                onClick={() => updateChatFontSize('medium')}
+                className={`px-1.5 py-0.5 rounded cursor-pointer transition ${
+                  chatFontSize === 'medium'
+                    ? 'bg-[var(--accent)] text-white font-bold shadow-xs'
+                    : 'hover:bg-[var(--g-surface-3)] text-[var(--g-text-2)]'
+                }`}
+                title="标准字号 (14.5px)"
+              >
+                中
+              </button>
+              <button
+                type="button"
+                onClick={() => updateChatFontSize('large')}
+                className={`px-1.5 py-0.5 rounded cursor-pointer transition ${
+                  chatFontSize === 'large'
+                    ? 'bg-[var(--accent)] text-white font-bold shadow-xs'
+                    : 'hover:bg-[var(--g-surface-3)] text-[var(--g-text-2)]'
+                }`}
+                title="舒适大字 (17.5px，明显放大护眼)"
+              >
+                大
+              </button>
+            </div>
+
+            {/* 紧凑排版开关 */}
+            <button
+              type="button"
+              onClick={() => updateChatDensity(chatDensity === 'compact' ? 'normal' : 'compact')}
+              className={`lg-btn !px-2 !py-1 !text-[11px] font-medium transition ${
+                chatDensity === 'compact' ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent-text)] font-semibold shadow-xs' : ''
+              }`}
+              title={chatDensity === 'compact' ? '当前为紧凑高密度模式（点击切换为舒适宽敞模式）' : '当前为标准舒适模式（点击切换为紧凑高密度模式，单屏展示更多对话内容）'}
+            >
+              {chatDensity === 'compact' ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+              <span>{chatDensity === 'compact' ? '紧凑' : '舒适'}</span>
+            </button>
+
+            {/* 快捷预设栏折叠 */}
+            <button
+              type="button"
+              onClick={() => updateShowPresets(!showPresets)}
+              className={`lg-btn !px-2 !py-1 !text-[11px] font-medium transition ${
+                !showPresets ? 'opacity-70' : ''
+              }`}
+              title={showPresets ? '折叠快捷翻译与润色预设栏，释放更多垂直阅读高度' : '展开快捷预设栏'}
+            >
+              {showPresets ? <ChevronsUp className="h-3 w-3" /> : <ChevronsDown className="h-3 w-3" />}
+              <span>{showPresets ? '收起预设' : '快捷预设'}</span>
+            </button>
+
+            {/* 连续上下文记忆开关（当预设栏折叠时在 Header 保持显示） */}
+            {!showPresets && (
+              <button
+                type="button"
+                onClick={() => setEnableContext(!enableContext)}
+                className={`lg-btn !px-2 !py-1 !text-[11px] font-semibold transition ${
+                  enableContext
+                    ? 'border-blue-500/50 bg-blue-500/10 text-blue-500'
+                    : 'opacity-70'
+                }`}
+                title={enableContext ? '已开启连续上下文记忆' : '已关闭上下文记忆'}
+              >
+                <BrainCircuit className="h-3 w-3" />
+                <span>{enableContext ? '连续' : '单轮'}</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setIsHistoryOpen(!isHistoryOpen)}
@@ -972,54 +1136,58 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
           </div>
         </div>
 
-        {/* 快捷 Prompt 模板 Pills 与上下文记忆开关（紧凑排布） */}
-        <div className="flex items-center justify-between gap-1.5 overflow-x-auto scrollbar-none shrink-0 py-0.5">
-          <div className="flex items-center space-x-1.5 shrink-0">
-            {PROMPT_PRESETS.map((preset) => {
-              const Icon = preset.icon;
-              const isActive = activePresetLabel === preset.label;
-              const selectedLang = AI_TRANSLATE_LANGUAGES.find((l) => l.code === translateTargetLang);
-              const pillLabel = preset.id === 'ai_translate' && isActive && translateTargetLang !== 'auto'
-                ? `AI 翻译 (${selectedLang?.shortName || translateTargetLang})`
-                : preset.label;
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => applyPresetPrompt(preset.label)}
-                  className={`lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 whitespace-nowrap transition-all ${
-                    isActive ? 'lg-btn-primary font-semibold shadow-xs' : ''
-                  }`}
-                  title={preset.id === 'ai_translate' ? '点击开启 AI 对话翻译模式，支持 30+ 语种自由互译' : undefined}
-                >
-                  <Icon className="h-3 w-3" />
-                  <span>{pillLabel}</span>
-                </button>
-              );
-            })}
-          </div>
+        {/* 快捷 Prompt 模板 Pills 与上下文记忆开关（紧凑排布，支持一键折叠） */}
+        {showPresets && (
+          <div className="flex items-center justify-between gap-1.5 overflow-x-auto scrollbar-none shrink-0 py-0.5 animate-in fade-in slide-in-from-top-1 duration-150">
+            <div className="flex items-center space-x-1.5 shrink-0">
+              {PROMPT_PRESETS.map((preset) => {
+                const Icon = preset.icon;
+                const isActive = activePresetLabel === preset.label;
+                const selectedLang = AI_TRANSLATE_LANGUAGES.find((l) => l.code === translateTargetLang);
+                const pillLabel = preset.id === 'ai_translate' && isActive && translateTargetLang !== 'auto'
+                  ? `AI 翻译 (${selectedLang?.shortName || translateTargetLang})`
+                  : preset.label;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applyPresetPrompt(preset.label)}
+                    className={`lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 whitespace-nowrap transition-all ${
+                      isActive ? 'lg-btn-primary font-semibold shadow-xs' : ''
+                    }`}
+                    title={preset.id === 'ai_translate' ? '点击开启 AI 对话翻译模式，支持 30+ 语种自由互译' : undefined}
+                  >
+                    <Icon className="h-3 w-3" />
+                    <span>{pillLabel}</span>
+                  </button>
+                );
+              })}
+            </div>
 
-          {/* 连续上下文记忆开关 */}
-          <button
-            type="button"
-            onClick={() => setEnableContext(!enableContext)}
-            className={`lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 flex items-center space-x-1 transition ${
-              enableContext
-                ? 'border-blue-500/50 bg-blue-500/10 text-blue-500 font-semibold'
-                : 'opacity-70'
-            }`}
-            title={enableContext ? '已开启连续上下文记忆（提问时自动携带上文对话）' : '已关闭上下文记忆（单轮独立提问，更省 Token，速度更快）'}
-          >
-            <BrainCircuit className="h-3 w-3" />
-            <span>{enableContext ? '连续对话' : '单轮问答'}</span>
-          </button>
-        </div>
+            {/* 连续上下文记忆开关 */}
+            <button
+              type="button"
+              onClick={() => setEnableContext(!enableContext)}
+              className={`lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 flex items-center space-x-1 transition ${
+                enableContext
+                  ? 'border-blue-500/50 bg-blue-500/10 text-blue-500 font-semibold'
+                  : 'opacity-70'
+              }`}
+              title={enableContext ? '已开启连续上下文记忆（提问时自动携带上文对话）' : '已关闭上下文记忆（单轮独立提问，更省 Token，速度更快）'}
+            >
+              <BrainCircuit className="h-3 w-3" />
+              <span>{enableContext ? '连续对话' : '单轮问答'}</span>
+            </button>
+          </div>
+        )}
 
         {/* 聊天消息流主视图 */}
         <div
           ref={messagesContainerRef}
           onScroll={handleScroll}
-          className="lg-panel flex-1 min-h-0 p-3 sm:p-4 overflow-y-auto space-y-3 scrollbar-thin relative"
+          className={`lg-panel flex-1 min-h-0 ${
+            chatDensity === 'compact' ? 'p-2 sm:p-2.5 space-y-2' : 'p-3 sm:p-4 space-y-3'
+          } overflow-y-auto scrollbar-thin relative`}
         >
           {/* Error Alert */}
           {errorMsg && (
@@ -1109,14 +1277,17 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
             messages.map((msg) => {
               const isUser = msg.role === 'user';
               const isStreaming = streamingId === msg.id;
+              const isCompact = chatDensity === 'compact';
               return (
                 <div
                   key={msg.id}
-                  className={`flex items-start space-x-3 ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}
+                  className={`flex items-start ${isCompact ? 'space-x-2' : 'space-x-3'} ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}
                 >
                   {/* Avatar */}
                   <div
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold shadow-md"
+                    className={`flex shrink-0 items-center justify-center rounded-full font-bold shadow-md transition-all ${
+                      isCompact ? 'h-7 w-7 text-[10px]' : 'h-9 w-9 text-xs'
+                    }`}
                     style={
                       isUser
                         ? { background: 'var(--accent)', color: '#fff' }
@@ -1127,11 +1298,11 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                   </div>
 
                   {/* Message Bubble */}
-                  <div className={`space-y-1.5 max-w-[88%] ${isUser ? 'items-end' : 'items-start'}`}>
-                    <div className={`flex items-center space-x-2 text-[11px] px-1 ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`} style={{ color: 'var(--g-text-3)' }}>
+                  <div className={`space-y-1 ${isCompact ? 'max-w-[95%]' : 'max-w-[88%]'} ${isUser ? 'items-end' : 'items-start'}`}>
+                    <div className={`flex items-center space-x-1.5 text-[10.5px] px-1 ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`} style={{ color: 'var(--g-text-3)' }}>
                       <span className="font-medium">{isUser ? '我' : msg.model || llm.provider}</span>
                       {isUser && msg.mode && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}>
+                        <span className="px-1.5 py-0.2 text-[9.5px] rounded font-semibold" style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}>
                           {msg.mode}
                         </span>
                       )}
@@ -1140,7 +1311,15 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                     </div>
 
                     <div
-                      className={`rounded-2xl px-5 py-3.5 text-[14.5px] leading-relaxed transition-all shadow-xs ${
+                      className={`rounded-2xl transition-all shadow-xs ${
+                        isCompact ? 'px-3.5 py-2' : 'px-5 py-3.5'
+                      } ${
+                        chatFontSize === 'small'
+                          ? 'text-[12px] leading-snug'
+                          : chatFontSize === 'large'
+                          ? 'text-[17.5px] leading-relaxed'
+                          : 'text-[14.5px] leading-normal'
+                      } ${
                         isUser ? 'rounded-tr-xs' : 'lg-inset !rounded-2xl rounded-tl-xs'
                       }`}
                       style={
@@ -1152,7 +1331,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                       {isUser ? (
                         <p className="whitespace-pre-wrap select-text">{msg.content}</p>
                       ) : (
-                        <div className="space-y-3">
+                        <div className={isCompact ? 'space-y-2' : 'space-y-3'}>
                           {/* 深度思考过程 / 思路文字折叠卡片：回复完默认闭合，限高紧凑不遮挡上下文 */}
                           {(msg.reasoning || (isStreaming && !msg.content)) && (() => {
                             const isCollapsed = msg.isReasoningCollapsed !== undefined
@@ -1169,7 +1348,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                                 <button
                                   type="button"
                                   onClick={() => toggleReasoningCollapse(msg.id)}
-                                  className="w-full flex items-center justify-between px-3 py-1.5 text-left font-medium transition cursor-pointer select-none group hover:bg-[var(--g-surface-2)]"
+                                  className={`w-full flex items-center justify-between ${isCompact ? 'px-2.5 py-1' : 'px-3 py-1.5'} text-left font-medium transition cursor-pointer select-none group hover:bg-[var(--g-surface-2)]`}
                                   style={{ color: 'var(--g-text-2)' }}
                                 >
                                   <div className="flex items-center space-x-2 min-w-0">
@@ -1179,22 +1358,22 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                                       }`}
                                       style={{ color: 'var(--accent-text)' }}
                                     />
-                                    <span className="font-semibold text-xs flex items-center gap-1.5">
+                                    <span className={`font-semibold ${isCompact ? 'text-[11px]' : 'text-xs'} flex items-center gap-1.5`}>
                                       <span>💭 思考过程</span>
                                       {isStreaming && !msg.content ? (
-                                        <span className="text-[10.5px] font-normal font-mono" style={{ color: 'var(--accent-text)' }}>
+                                        <span className="text-[10px] font-normal font-mono" style={{ color: 'var(--accent-text)' }}>
                                           {waitingSeconds < 3
                                             ? '(正在构建思维链...)'
                                             : `(正在推导 ${waitingSeconds}s...)`}
                                         </span>
                                       ) : msg.reasoning ? (
-                                        <span className="text-[10.5px] font-normal text-emerald-500 font-sans">
+                                        <span className="text-[10px] font-normal text-emerald-500 font-sans">
                                           · 思考完毕 {msg.reasoning.length > 0 ? `(${msg.reasoning.length} 字)` : ''}
                                         </span>
                                       ) : null}
                                     </span>
                                   </div>
-                                  <div className="flex items-center space-x-1.5 text-[11px]" style={{ color: 'var(--g-text-3)' }}>
+                                  <div className="flex items-center space-x-1.5 text-[10.5px]" style={{ color: 'var(--g-text-3)' }}>
                                     <span>{isCollapsed ? '展开思路' : '收起思路'}</span>
                                     <ChevronDown
                                       className={`h-3.5 w-3.5 transition-transform duration-200 ${
@@ -1206,7 +1385,11 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
 
                                 {!isCollapsed && (
                                   <div
-                                    className="px-3 pb-2.5 pt-1 border-t border-[var(--g-border)]/30 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap select-text max-h-36 overflow-y-auto scrollbar-thin"
+                                    className={`${
+                                      isCompact ? 'px-2.5 pb-2 pt-1 max-h-28' : 'px-3 pb-2.5 pt-1 max-h-36'
+                                    } ${
+                                      chatFontSize === 'small' ? 'text-[11px]' : chatFontSize === 'large' ? 'text-[13.5px]' : 'text-[12px]'
+                                    } border-t border-[var(--g-border)]/30 font-mono leading-relaxed whitespace-pre-wrap select-text overflow-y-auto scrollbar-thin`}
                                     style={{ color: isLight ? '#475569' : '#94a3b8' }}
                                   >
                                     {msg.reasoning ? (
@@ -1238,7 +1421,13 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
 
                           {/* 正式回答内容 */}
                           {msg.content ? (
-                            <FormattedContent text={msg.content} isLight={isLight} streaming={isStreaming} />
+                            <FormattedContent
+                              text={msg.content}
+                              isLight={isLight}
+                              streaming={isStreaming}
+                              fontSize={chatFontSize}
+                              isCompact={isCompact}
+                            />
                           ) : null}
                         </div>
                       )}
@@ -1246,7 +1435,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
 
                     {/* Actions bar for AI messages */}
                     {!isUser && (
-                      <div className="flex items-center space-x-3 pt-1 px-1 text-xs select-none">
+                      <div className={`flex items-center ${isCompact ? 'space-x-2.5 pt-0.5 text-[11px]' : 'space-x-3 pt-1 text-xs'} px-1 select-none`}>
                         {msg.content && (
                           <button
                             type="button"
@@ -1318,7 +1507,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
 
                     {/* Actions bar for User messages */}
                     {isUser && (
-                      <div className="flex items-center space-x-2.5 pt-0.5 px-1 text-xs select-none justify-end">
+                      <div className={`flex items-center ${isCompact ? 'space-x-2 text-[11px]' : 'space-x-2.5 text-xs'} pt-0.5 px-1 select-none justify-end`}>
                         <button
                           type="button"
                           onClick={() => handleCopy(msg.id, msg.content)}
@@ -1451,7 +1640,13 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                   : '输入翻译需求、多语种润色或任意问题 (Enter 发送，Shift+Enter 换行)...'
               }
               rows={1}
-              className="w-full bg-transparent border-0 focus:outline-none focus:ring-0 px-2 py-1 text-xs sm:text-[13px] leading-relaxed resize-none scrollbar-thin max-h-[120px] min-h-[36px]"
+              className={`w-full bg-transparent border-0 focus:outline-none focus:ring-0 px-2 py-1 leading-relaxed resize-none scrollbar-thin max-h-[140px] min-h-[36px] transition-all ${
+                chatFontSize === 'small'
+                  ? 'text-xs'
+                  : chatFontSize === 'large'
+                  ? 'text-[15.5px]'
+                  : 'text-xs sm:text-[13.5px]'
+              }`}
               style={{ color: 'var(--g-text)' }}
             />
 

@@ -14,7 +14,7 @@ import { OnboardingModal } from "./components/OnboardingModal";
 import { OcrModelGuideModal } from "./components/OcrModelGuideModal";
 import { ClipboardToast, type ClipboardPayload } from "./components/ClipboardToast";
 import { CloseConfirmModal } from "./components/CloseConfirmModal";
-import { isTauri, cmdQueryText, cmdSetWindowBlur, cmdExitApp, cmdGetAutoStart, cmdSetAutoStart } from "./services/tauri";
+import { isTauri, cmdQueryText, cmdSetWindowBlur, cmdExitApp, cmdGetAutoStart, cmdSetAutoStart, cmdOpenQuickWindow } from "./services/tauri";
 import { matchesHotkey } from "./services/hotkeys";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useAppTheme } from "./hooks/useAppTheme";
@@ -150,12 +150,12 @@ function App() {
     });
   }, []);
 
-  const handleRequestClose = useCallback(async () => {
-    const curCloseAction = useSettingsStore.getState().settings.closeAction || 'ask';
+  const handleRequestClose = useCallback(() => {
+    const curCloseAction = useSettingsStore.getState().settings.closeAction;
     if (curCloseAction === 'exit') {
       if (isTauri()) {
         try {
-          await cmdExitApp();
+          cmdExitApp();
         } catch {
           import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().close().catch(() => {}));
         }
@@ -169,6 +169,15 @@ function App() {
     }
   }, []);
 
+  const handleOpenQuickWindow = useCallback(async () => {
+    if (isTauri()) {
+      await cmdOpenQuickWindow();
+    } else {
+      setTriggerToast("快捷查词小窗 (仅在桌面端独立运行)");
+      setTimeout(() => setTriggerToast(null), 2000);
+    }
+  }, []);
+
   // Browser-level hotkey listener fallback (matches exact configured hotkey strings)
   // 依赖数组只登记 handler 实际读取的快捷键标量，避免 settings 任意字段
   // 变化（如拖动模糊滑杆）都重挂 window 级监听器。
@@ -178,6 +187,8 @@ function App() {
   const spotlightHotkey = settings.spotlightHotkey || 'Alt+Space';
   const clipboardHotkeyEnabled = settings.clipboardHotkeyEnabled ?? false;
   const clipboardHotkey = settings.clipboardHotkey || 'Ctrl+Shift+C';
+  const quickWindowHotkeyEnabled = settings.quickWindowHotkeyEnabled ?? false;
+  const quickWindowHotkey = settings.quickWindowHotkey || 'Alt+W';
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -215,6 +226,13 @@ function App() {
         return;
       }
 
+      // Quick Window hotkey (browser/dev fallback parity when not in Tauri)
+      if (!isTauri() && quickWindowHotkeyEnabled && matchesHotkey(e, quickWindowHotkey)) {
+        e.preventDefault();
+        void cmdOpenQuickWindow();
+        return;
+      }
+
       // Hover-lookup hotkey (fixed Ctrl+Alt+H, browser/dev fallback parity)
       if (matchesHotkey(e, 'Ctrl+Alt+H')) {
         e.preventDefault();
@@ -227,7 +245,7 @@ function App() {
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [captureHotkeyEnabled, captureHotkey, spotlightHotkeyEnabled, spotlightHotkey, clipboardHotkeyEnabled, clipboardHotkey, isCheatSheetOpen, triggerClipboard]);
+  }, [captureHotkeyEnabled, captureHotkey, spotlightHotkeyEnabled, spotlightHotkey, clipboardHotkeyEnabled, clipboardHotkey, quickWindowHotkeyEnabled, quickWindowHotkey, isCheatSheetOpen, triggerClipboard]);
 
   // OS-level Tauri global shortcut and DOM CustomEvent listeners (dual insurance for wakeup from tray/sleep)
   useEffect(() => {
@@ -236,11 +254,13 @@ function App() {
     const onDomSpotlight = () => triggerSpotlight();
     const onDomClipboard = () => triggerClipboard();
     const onDomHover = () => triggerHover();
+    const onDomQuickWindow = () => void cmdOpenQuickWindow();
 
     window.addEventListener('trigger-capture', onDomCapture);
     window.addEventListener('trigger-spotlight', onDomSpotlight);
     window.addEventListener('trigger-clipboard', onDomClipboard);
     window.addEventListener('trigger-hover', onDomHover);
+    window.addEventListener('trigger-quick-window', onDomQuickWindow);
 
     // 2. Tauri event listeners
     // listen() 异步 resolve；若 effect 在 resolve 前被清理（StrictMode 双挂载必现），
@@ -260,6 +280,7 @@ function App() {
         listen('trigger-spotlight', () => triggerSpotlight()).then(trackUnlisten);
         listen('trigger-clipboard', () => triggerClipboard()).then(trackUnlisten);
         listen('trigger-hover', () => triggerHover()).then(trackUnlisten);
+        listen('trigger-quick-window', () => void cmdOpenQuickWindow()).then(trackUnlisten);
 
         // Passive clipboard watch: Rust translated a freshly copied text.
         // Suppressed while the capture overlay is open (its own copy actions
@@ -285,6 +306,7 @@ function App() {
       window.removeEventListener('trigger-spotlight', onDomSpotlight);
       window.removeEventListener('trigger-clipboard', onDomClipboard);
       window.removeEventListener('trigger-hover', onDomHover);
+      window.removeEventListener('trigger-quick-window', onDomQuickWindow);
       unlistens.forEach((u) => u());
     };
   }, [triggerCapture, triggerSpotlight, triggerClipboard, triggerHover]);
@@ -448,11 +470,13 @@ function App() {
             onQuickSearch={() => setIsSpotlightOpen((v) => !v)}
             onOpenAbout={() => setActiveTab("about")}
             onRequestClose={handleRequestClose}
+            onOpenQuickWindow={handleOpenQuickWindow}
+            quickWindowHotkey={quickWindowHotkey}
           />
 
           {/* Global Hotkey Trigger Toast */}
           {triggerToast && (
-            <div className="fixed top-12 left-1/2 z-[90] flex items-center space-x-2.5 rounded-full px-5 py-2 text-sm font-semibold shadow-xl shadow-black/15 border animate-fade-in lg-panel"
+            <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[90] flex items-center space-x-2.5 rounded-full px-5 py-2 text-sm font-semibold shadow-xl shadow-black/15 border animate-toast-in lg-panel"
               style={{ background: 'var(--g-surface-solid)', color: 'var(--g-text-1)' }}>
               <Camera className="h-4 w-4" style={{ color: 'var(--accent-text)' }} />
               <span>{triggerToast}</span>
@@ -483,7 +507,9 @@ function App() {
               )}
               {activeTab === "ai" && <AiChatPanel onOpenSettings={() => setActiveTab("settings")} />}
               {activeTab === "vocabulary" && <HistoryPanel />}
-              {activeTab === "search" && <SearchPanel settings={settings} />}
+              {activeTab === "search" && (
+                <SearchPanel settings={settings} onOpenSettings={() => setActiveTab("settings")} />
+              )}
               {activeTab === "about" && (
                 <AboutPanel onOpenSettings={() => setActiveTab("settings")} />
               )}

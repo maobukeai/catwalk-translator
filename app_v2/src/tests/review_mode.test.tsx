@@ -146,10 +146,15 @@ describe('vocabulary review mode (Leitner flashcards)', () => {
   it('no favourites → review disabled with guidance', async () => {
     wirePanel(ITEMS.map((i) => ({ ...i, isFavorite: false })));
     render(<HistoryPanel />);
-    await screen.findByText('Transient Lookup');
+    await screen.findByText(/生词本暂无收藏/);
 
     const startBtn = screen.getByText('开始复习').closest('button') as HTMLElement;
     expect(startBtn).toBeDisabled();
     expect(startBtn.getAttribute('title')).toContain('收藏');
+
+    // Switch to 查询历史 sub-tab to see non-favourited history entries
+    const historyTabBtn = screen.getByText('🕒 查询历史').closest('button') as HTMLElement;
+    fireEvent.click(historyTabBtn);
+    await screen.findByText('Transient Lookup');
   });
 });

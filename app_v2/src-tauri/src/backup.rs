@@ -185,6 +185,7 @@ pub fn sanitize_settings_for_backup(
     if !has_keys {
         s.baidu_app_id = None;
         s.baidu_secret = None;
+        s.baidu_llm_api_key = None;
         s.deepl_api_key = None;
         s.deepl_custom_url = None;
         if let Some(ref mut llm) = s.llm_config {
@@ -554,10 +555,12 @@ pub fn restore_from_bytes(
             current_settings.spotlight_hotkey = zip_settings.spotlight_hotkey;
             current_settings.clipboard_hotkey = zip_settings.clipboard_hotkey;
             current_settings.toggle_window_hotkey = zip_settings.toggle_window_hotkey;
+            current_settings.quick_window_hotkey = zip_settings.quick_window_hotkey;
             current_settings.capture_hotkey_enabled = zip_settings.capture_hotkey_enabled;
             current_settings.spotlight_hotkey_enabled = zip_settings.spotlight_hotkey_enabled;
             current_settings.clipboard_hotkey_enabled = zip_settings.clipboard_hotkey_enabled;
             current_settings.toggle_window_hotkey_enabled = zip_settings.toggle_window_hotkey_enabled;
+            current_settings.quick_window_hotkey_enabled = zip_settings.quick_window_hotkey_enabled;
             current_settings.default_preset = zip_settings.default_preset;
             current_settings.translation_tiers = zip_settings.translation_tiers;
             current_settings.preset_dicts = zip_settings.preset_dicts;
@@ -640,6 +643,7 @@ pub fn restore_from_bytes(
         if included_items.iter().any(|i| i == ITEM_API_KEYS) {
             current_settings.baidu_app_id = zip_settings.baidu_app_id;
             current_settings.baidu_secret = zip_settings.baidu_secret;
+            current_settings.baidu_llm_api_key = zip_settings.baidu_llm_api_key;
             current_settings.deepl_api_key = zip_settings.deepl_api_key;
             current_settings.deepl_custom_url = zip_settings.deepl_custom_url;
             current_settings.llm_config = zip_settings.llm_config;
@@ -855,10 +859,12 @@ mod tests {
             spotlight_hotkey: Some("Alt+Space".to_string()),
             clipboard_hotkey: None,
             toggle_window_hotkey: None,
+            quick_window_hotkey: Some("Alt+W".to_string()),
             capture_hotkey_enabled: Some(true),
             spotlight_hotkey_enabled: Some(true),
             clipboard_hotkey_enabled: Some(false),
             toggle_window_hotkey_enabled: Some(false),
+            quick_window_hotkey_enabled: Some(false),
             default_preset: "blender".to_string(),
             llm_config: Some(LlmConfig::new("OpenAI", "sk-secret-key-12345", "gpt-4o", "https://api.openai.com/v1")),
             llm_configs: vec![LlmConfig::new("Claude", "sk-ant-secret-67890", "claude-3-5-sonnet", "https://api.anthropic.com/v1")],
@@ -879,6 +885,8 @@ mod tests {
             primary_translation_engine: Some("llm".to_string()),
             baidu_app_id: Some("baidu_app_123".to_string()),
             baidu_secret: Some("baidu_sec_456".to_string()),
+            baidu_llm_api_key: None,
+            use_baidu_same_secret: Some(true),
             deepl_api_key: Some("deepl_key_789".to_string()),
             deepl_custom_url: Some("http://localhost:1188/translate".to_string()),
             volcengine_access_key: Some("volc_ak_123".to_string()),
@@ -916,6 +924,7 @@ mod tests {
                 note: None,
                 created_at: "2026-09-02".to_string(),
             }],
+            anki_settings: Some(crate::models::AnkiSettings::default()),
         }
     }
 

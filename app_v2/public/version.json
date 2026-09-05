@@ -1,0 +1,15 @@
+{
+  "version": "0.3.0",
+  "name": "猫步翻译",
+  "release_date": "2026-09-05",
+  "download_url": "https://github.com/maobukeai/catwalk-translator/releases",
+  "release_notes": "1. 升级高清大图模态框原位覆写与双语对照；\n2. 新增纯文通读排版与单句一键复制；\n3. 优化多行密集段落防重叠碰撞保护；\n4. 新增免限流 CDN 极速更新通道，彻底解决 GitHub 403 限流。",
+  "assets": [
+    {
+      "name": "猫步翻译_0.3.0_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.0/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.0_x64-setup.exe",
+      "size": 0,
+      "sha256": null
+    }
+  ]
+}

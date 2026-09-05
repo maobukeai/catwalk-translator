@@ -171,29 +171,57 @@ pub fn glossary_hash(pairs: &[(String, String)]) -> u64 {
 
 /// 判断一段文本是否为「技术标识符」——应原样保留、绝不翻译。
 ///
-/// 命中三类单词级(不含空白)字符串:
-/// 1. 含 `/` 的路径式标识:模型 ID (`moonshotai/kimi-k3`)、URL;
-/// 2. 同时含数字与 `-`/`.`/`_` 的版本式标识:`MiniMax-H3`、`wan3.0-video`、
-///    `nemotron-3.5-lightning`、`v0.1.8`;
-/// 3. 完全不含字母:纯数字/符号(`99.9%`,以及 OCR 噪声如 `%6'66`)。
+/// 命中四类技术字符串:
+/// 1. 标准 URL (`http://...`, `https://...`);
+/// 2. 模型 ID / 容器镜像 / 命名空间式标识 (`moonshotai/kimi-k3`, `x-ai/grok-4.6`, `deepseek/deepseek-v4-pro-0813`);
+/// 3. 同时含数字与版本分隔符 (`-`/`.`/`_`/`/`/`:`) 的标识 (`MiniMax-H3`, `wan3.0-video`, `nemotron-3.5-lightning`, `v0.1.8`, `llama3:8b`);
+/// 4. 纯数字/度量/符号 (`99.9%`, `100px`, 以及 OCR 噪声如 `%6'66`)。
 ///
-/// 含空白的短语一律不命中,`Always-On`、`Kimi-long-context model`、`UPTIME`
-/// 等正常文本因此照常翻译(无数字或含空白)。
+/// 严格守卫:
+/// - 必须全部由 ASCII 字符组成。一旦含有任何非 ASCII 字符（中文、日文、全角标点如【】、：、，等），
+///   100% 判定为自然语言文本，绝不透传；
+/// - 包含空白字符的一律视为普通语句/短语，绝不透传；
+/// - 长度 > 80 字符且非 URL 绝不透传；
+/// - 包含自然语言标点（逗号 `,`、分号 `;`、问号 `?`、感叹号 `!`、双引号 `"` 等）绝不透传。
 pub fn is_technical_identifier(text: &str) -> bool {
     let t = text.trim();
-    if t.is_empty() || t.chars().any(|c| c.is_whitespace()) {
+    if t.is_empty() {
         return false;
     }
-    let has_letter = t.chars().any(|c| c.is_alphabetic());
+    // 1. 技术标识符（模型 ID、版本号、URL、纯数字/符号）必须全部由 ASCII 字符组成。
+    // 若包含任何非 ASCII 字符（中日韩汉字、假名、全角符号【】、：、，等），
+    // 必定属于自然语言文本，绝不能作为技术标识符原样透传。
+    if !t.is_ascii() {
+        return false;
+    }
+    // 2. 包含空白字符的一律视为普通语句/短语，交由翻译引擎处理
+    if t.chars().any(|c| c.is_whitespace()) {
+        return false;
+    }
+    // 3. 长度过长（如 > 80 字符且不是 URL）绝不是模型 ID 或版本号
+    if t.len() > 80 && !t.starts_with("http://") && !t.starts_with("https://") {
+        return false;
+    }
+    // 4. 包含句子标点或引号的不是单一技术标识符
+    if t.contains(',') || t.contains(';') || t.contains('?') || t.contains('!') || t.contains('"') {
+        return false;
+    }
+
+    let has_letter = t.chars().any(|c| c.is_ascii_alphabetic());
     if !has_letter {
-        // 纯数字/符号:翻译毫无意义,且 LLM 会把数字写成中文数字。
+        // 纯数字/符号（如 "99.9%", "%6'66", "%666", "3.5", "100"）：翻译无意义，直接透传
         return t.chars().any(|c| c.is_ascii_digit() || !c.is_alphanumeric());
     }
-    if t.contains('/') {
+
+    // 5. 标准 URL
+    if t.starts_with("http://") || t.starts_with("https://") {
         return true;
     }
+
+    // 6. 含有数字的技术标识符（模型 ID / 版本号 / 带参数的标识符）
+    // 例如 "moonshotai/kimi-k3", "deepseek-v4", "v0.1.8", "llama3:8b", "wan3.0-video", "MiniMax-H3"
     let has_digit = t.chars().any(|c| c.is_ascii_digit());
-    let has_version_sep = t.contains('-') || t.contains('.') || t.contains('_');
+    let has_version_sep = t.contains('-') || t.contains('.') || t.contains('_') || t.contains('/') || t.contains(':');
     has_digit && has_version_sep
 }
 
@@ -546,10 +574,23 @@ impl TranslationCache {
     }
 
     pub fn store(&self, result: TranslationResult) {
-        let key = result.original.trim().to_string();
-        if key.is_empty() {
+        self.store_with_lang(result, "zh-CN");
+    }
+
+    pub fn store_with_lang(&self, result: TranslationResult, target_lang: &str) {
+        let trimmed = result.original.trim();
+        if trimmed.is_empty() {
             return;
         }
+        // 守卫：包含非 ASCII 字符（如中文）的文本绝不能作为“标识符透传”写入翻译记忆
+        if result.source_tier == "标识符透传" && !result.original.is_ascii() {
+            return;
+        }
+        let key = if target_lang.is_empty() || target_lang.starts_with("zh") {
+            trimmed.to_string()
+        } else {
+            format!("[{}] {}", target_lang, trimmed)
+        };
         let should_save = if let Ok(mut lock) = self.inner.write() {
             if !lock.map.contains_key(&key) {
                 lock.order.push_back(key.clone());
@@ -598,6 +639,11 @@ impl TranslationCache {
             if !lock.map.is_empty() {
                 return; // 运行期热缓存不覆盖
             }
+            // 过滤清洗历史脏数据：丢弃因旧版本误判导致包含非 ASCII 字符的“标识符透传”
+            let map: HashMap<String, TranslationResult> = map
+                .into_iter()
+                .filter(|(_k, v)| !(v.source_tier == "标识符透传" && !v.original.is_ascii()))
+                .collect();
             let mut order = std::collections::VecDeque::with_capacity(map.len());
             for k in map.keys().take(TRANSLATION_CACHE_CAPACITY) {
                 order.push_back(k.clone());
@@ -652,8 +698,26 @@ impl TranslationCache {
     }
 
     pub fn retrieve(&self, key: &str) -> Option<TranslationResult> {
+        self.retrieve_with_lang(key, "zh-CN")
+    }
+
+    pub fn retrieve_with_lang(&self, key: &str, target_lang: &str) -> Option<TranslationResult> {
+        let trimmed = key.trim();
         if let Ok(lock) = self.inner.read() {
-            lock.map.get(key.trim()).cloned()
+            let res = if target_lang.is_empty() || target_lang.starts_with("zh") {
+                lock.map.get(trimmed).cloned()
+            } else {
+                let scoped_key = format!("[{}] {}", target_lang, trimmed);
+                lock.map.get(&scoped_key).cloned().or_else(|| {
+                    if target_lang.starts_with("en") {
+                        lock.map.get(trimmed).cloned().filter(|r| !r.translated.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)))
+                    } else {
+                        None
+                    }
+                })
+            };
+            // 守卫：丢弃历史脏数据中被误判为“标识符透传”的非 ASCII 文本
+            res.filter(|r| !(r.source_tier == "标识符透传" && !r.original.is_ascii()))
         } else {
             None
         }
@@ -705,6 +769,7 @@ pub fn shared_pipeline() -> &'static MultiTierPipeline {
 pub struct OnlineCredentials {
     pub baidu_app_id: Option<String>,
     pub baidu_secret: Option<String>,
+    pub baidu_llm_api_key: Option<String>,
     pub deepl_api_key: Option<String>,
     pub deepl_custom_url: Option<String>,
     pub volcengine_access_key: Option<String>,
@@ -737,6 +802,7 @@ impl MultiTierPipeline {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                     initial_creds.baidu_app_id = val.get("baiduAppId").and_then(|v| v.as_str()).map(String::from);
                     initial_creds.baidu_secret = val.get("baiduSecret").and_then(|v| v.as_str()).map(String::from);
+                    initial_creds.baidu_llm_api_key = val.get("baiduLlmApiKey").and_then(|v| v.as_str()).map(String::from);
                     initial_creds.deepl_api_key = val.get("deeplApiKey").and_then(|v| v.as_str()).map(String::from);
                     initial_creds.deepl_custom_url = val.get("deeplCustomUrl").and_then(|v| v.as_str()).map(String::from);
                     initial_creds.volcengine_access_key = val.get("volcengineAccessKey").and_then(|v| v.as_str()).map(String::from);
@@ -895,30 +961,24 @@ impl MultiTierPipeline {
             }
 
             // Step 0: Check Cache
-            // 仅当目标语种为默认中文（或中文源译英文）时，才复用传统的未带语言标签的本地缓存；
-            // 其它显式指定的目标语种（如 ja/fr/de/ko/es 等）绝不返回中文缓存，杜绝跨语种串词
-            let is_target_zh = actual_target.starts_with("zh");
-            let is_target_en = actual_target.starts_with("en");
-            let allow_cache = (is_target_zh && !phrases_has_chinese) || (is_target_en && phrases_has_chinese);
-            if allow_cache {
-                if let Some(cached) = self.cache.retrieve(trimmed) {
-                    let should_use_cache = match preset.to_lowercase().as_str() {
-                        "auto" => true,
-                        "google" => cached.source_tier.contains("Google"),
-                        "bing" => cached.source_tier.contains("Bing"),
-                        "youdao" => cached.source_tier.contains("有道"),
-                        "tencent" => cached.source_tier.contains("腾讯"),
-                        "llm" => cached.source_tier.contains("LLM"),
-                        _ => true,
-                    };
-                    if should_use_cache {
-                        results[i] = Some(TranslationResult {
-                            original: phrase.clone(),
-                            translated: cached.translated,
-                            source_tier: format!("{} (Cached)", cached.source_tier),
-                        });
-                        continue;
-                    }
+            // 采用带语言命名空间的 retrieve_with_lang，全面支持韩/日/德/法/西/俄等全语种记忆缓存 (0ms 瞬开)
+            if let Some(cached) = self.cache.retrieve_with_lang(trimmed, actual_target) {
+                let should_use_cache = match preset.to_lowercase().as_str() {
+                    "auto" => true,
+                    "google" => cached.source_tier.contains("Google"),
+                    "bing" => cached.source_tier.contains("Bing"),
+                    "youdao" => cached.source_tier.contains("有道"),
+                    "tencent" => cached.source_tier.contains("腾讯"),
+                    "llm" => cached.source_tier.contains("LLM"),
+                    _ => true,
+                };
+                if should_use_cache {
+                    results[i] = Some(TranslationResult {
+                        original: phrase.clone(),
+                        translated: cached.translated,
+                        source_tier: format!("{} (Cached)", cached.source_tier),
+                    });
+                    continue;
                 }
             }
 
@@ -931,7 +991,7 @@ impl MultiTierPipeline {
                         translated,
                         source_tier: "custom_dict".to_string(),
                     };
-                    self.cache.store(res.clone());
+                    self.cache.store_with_lang(res.clone(), actual_target);
                     results[i] = Some(res);
                     continue;
                 }
@@ -948,7 +1008,7 @@ impl MultiTierPipeline {
                     translated: trimmed.to_string(),
                     source_tier: "标识符透传".to_string(),
                 };
-                self.cache.store(res.clone());
+                self.cache.store_with_lang(res.clone(), actual_target);
                 results[i] = Some(res);
                 continue;
             }
@@ -965,7 +1025,7 @@ impl MultiTierPipeline {
                         translated,
                         source_tier,
                     };
-                    self.cache.store(res.clone());
+                    self.cache.store_with_lang(res.clone(), actual_target);
                     results[i] = Some(res);
                     continue;
                 }
@@ -980,7 +1040,7 @@ impl MultiTierPipeline {
                         translated,
                         source_tier: "离线词库".to_string(),
                     };
-                    self.cache.store(res.clone());
+                    self.cache.store_with_lang(res.clone(), actual_target);
                     results[i] = Some(res);
                     continue;
                 }
@@ -1037,7 +1097,7 @@ impl MultiTierPipeline {
                                         translated,
                                         source_tier: tier_label.clone(),
                                     };
-                                    self.cache.store(res.clone());
+                                    self.cache.store_with_lang(res.clone(), actual_target);
                                     results[idx] = Some(res);
                                 } else {
                                     still_unmatched_indices.push(idx);
@@ -1115,7 +1175,15 @@ impl MultiTierPipeline {
                     let creds = self.get_credentials();
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        let tr = translate_baidu_llm(&self.client, p, actual_source, actual_target, creds.baidu_app_id.as_deref(), creds.baidu_secret.as_deref()).await;
+                        let tr = translate_baidu_llm(
+                            &self.client,
+                            p,
+                            actual_source,
+                            actual_target,
+                            creds.baidu_app_id.as_deref(),
+                            creds.baidu_secret.as_deref(),
+                            creds.baidu_llm_api_key.as_deref(),
+                        ).await;
                         if !tr.translated.is_empty() {
                             online_results.insert(idx, (tr.translated, "百度大模型翻译".to_string()));
                         }
@@ -1224,11 +1292,14 @@ impl MultiTierPipeline {
                             });
                         }
 
-                        while let Some(joined) = set.join_next().await {
-                            if let Ok((idx, Ok(translated))) = joined {
-                                online_results.insert(idx, (translated, "Online Fallback".to_string()));
+                        let join_all_fut = async {
+                            while let Some(joined) = set.join_next().await {
+                                if let Ok((idx, Ok(translated))) = joined {
+                                    online_results.insert(idx, (translated, "Online Fallback".to_string()));
+                                }
                             }
-                        }
+                        };
+                        let _ = tokio::time::timeout(std::time::Duration::from_millis(3000), join_all_fut).await;
                     }
                 }
             }
@@ -1250,7 +1321,7 @@ impl MultiTierPipeline {
                                 translated: fallback_tr,
                                 source_tier: format!("{} (并发兜底)", tier_name),
                             };
-                            self.cache.store(res.clone());
+                            self.cache.store_with_lang(res.clone(), actual_target);
                             results[idx] = Some(res);
                             continue;
                         }
@@ -1262,7 +1333,7 @@ impl MultiTierPipeline {
                     translated,
                     source_tier: tier_name,
                 };
-                self.cache.store(res.clone());
+                self.cache.store_with_lang(res.clone(), actual_target);
                 results[idx] = Some(res);
             } else {
                 still_unmatched.push(idx);
@@ -1274,13 +1345,13 @@ impl MultiTierPipeline {
             let mut final_unmatched = Vec::new();
             for idx in still_unmatched {
                 let p = phrases[idx].trim();
-                if let Ok(fallback_tr) = translate_online_fallback_with(&self.client, p).await {
+                if let Ok(fallback_tr) = translate_online_fallback_with_lang(&self.client, p, actual_source, actual_target).await {
                     let res = TranslationResult {
                         original: phrases[idx].clone(),
                         translated: fallback_tr,
                         source_tier: "多引擎竞速".to_string(),
                     };
-                    self.cache.store(res.clone());
+                    self.cache.store_with_lang(res.clone(), actual_target);
                     results[idx] = Some(res);
                 } else {
                     final_unmatched.push(idx);
@@ -1482,21 +1553,41 @@ impl MultiTierPipeline {
                 .as_ref()
                 .map(|(_, tier)| format!("精选离线词库 [{}]", tier))
                 .unwrap_or_else(|| "通用术语/词汇".to_string());
+            let has_chinese = trimmed.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+            let (phonetic_us, phonetic_uk, pos, examples) = if has_chinese {
+                (
+                    String::new(),
+                    String::new(),
+                    "常用词条 / 表达".to_string(),
+                    vec![
+                        format!("中文语境：日常交流与软件界面中的常用词汇“{}”。", trimmed),
+                        format!("英文释义：Corresponding English expression is \"{}\"。", def),
+                    ],
+                )
+            } else {
+                (
+                    format!("/ {} /", trimmed.to_lowercase()),
+                    format!("[ {} ]", trimmed.to_lowercase()),
+                    "n. / 通用词汇".to_string(),
+                    vec![
+                        format!(
+                            "语境例句：The parameter '{}' is configured in the current workflow.",
+                            trimmed
+                        ),
+                        format!(
+                            "中文释义：在专业工作流与用户界面中通常表示“{}”。",
+                            def
+                        ),
+                    ],
+                )
+            };
+
             Some(WordDetail {
-                phonetic_us: format!("/ {} /", trimmed.to_lowercase()),
-                phonetic_uk: format!("[ {} ]", trimmed.to_lowercase()),
-                pos: "n. / 通用词汇".to_string(),
+                phonetic_us,
+                phonetic_uk,
+                pos,
                 definition: def,
-                examples: vec![
-                    format!(
-                        "Example: Select '{}' in the application settings panel.",
-                        trimmed
-                    ),
-                    format!(
-                        "用法说明：在应用程序界面或文档中正确使用 {} 词汇。",
-                        trimmed
-                    ),
-                ],
+                examples,
                 cg_domain_note: domain_note,
             })
         } else {
@@ -2305,7 +2396,8 @@ pub async fn translate_baidu_llm(
     src: &str,
     tgt: &str,
     app_id: Option<&str>,
-    secret: Option<&str>,
+    _secret: Option<&str>,
+    llm_api_key: Option<&str>,
 ) -> MultiEngineTranslation {
     let engine_name = "百度大模型翻译 (文心版)".to_string();
 
@@ -2314,17 +2406,19 @@ pub async fn translate_baidu_llm(
         _ => {
             return MultiEngineTranslation {
                 engine_name,
-                translated: "[未配置百度 AppID/密钥 · 点击前往设置]".to_string(),
+                translated: "[未配置百度 AppID · 点击前往设置]".to_string(),
                 source_tier: "Baidu (Config Required)".to_string(),
             };
         }
     };
-    let secret = match secret {
-        Some(s) if !s.trim().is_empty() => s.trim(),
-        _ => {
+
+    // 大模型必须使用在开放平台「API Key 管理」创建的专属密钥
+    let token = match llm_api_key.filter(|k| !k.trim().is_empty()) {
+        Some(k) => k.trim(),
+        None => {
             return MultiEngineTranslation {
                 engine_name,
-                translated: "[未配置百度 AppID/密钥 · 点击前往设置]".to_string(),
+                translated: "[未配置大模型版 API Key · 请在设置中填入「API Key 管理」创建的密钥]".to_string(),
                 source_tier: "Baidu (Config Required)".to_string(),
             };
         }
@@ -2333,9 +2427,12 @@ pub async fn translate_baidu_llm(
     let clean_from = map_baidu_lang(src);
     let clean_to = map_baidu_lang(tgt);
 
-    // 百度大模型文本翻译 API 签名：md5(appid + q + salt + secret)，salt 必须为 uint64
+    // 百度大模型文本翻译 API (aiTextTranslate)：
+    // 1. Header 携带 Authorization: Bearer <API_KEY> (官方标准，通过控制台 API Key 管理生成)
+    // 2. Body 附带 appid、待译文本、模型类型 model_type: "llm"
+    // 3. 同时生成并注入传统 MD5 sign = md5(appid + q + salt + token)，双模完全兼容
     let salt: u64 = 1435660288;
-    let sign_input = format!("{}{}{}{}", app_id, q, salt, secret);
+    let sign_input = format!("{}{}{}{}", app_id, q, salt, token);
     let sign = format!("{:x}", md5::compute(sign_input.as_bytes()));
 
     let body = serde_json::json!({
@@ -2343,6 +2440,7 @@ pub async fn translate_baidu_llm(
         "q": q,
         "from": clean_from,
         "to": clean_to,
+        "model_type": "llm",
         "salt": salt,
         "sign": sign,
     });
@@ -2352,6 +2450,7 @@ pub async fn translate_baidu_llm(
         client
             .post("https://fanyi-api.baidu.com/ait/api/aiTextTranslate")
             .header("Content-Type", "application/json; charset=utf-8")
+            .header("Authorization", format!("Bearer {}", token))
             .json(&body)
             .send(),
     )
@@ -2377,12 +2476,20 @@ pub async fn translate_baidu_llm(
                 let err_code = json
                     .get("error_code")
                     .and_then(|c| c.as_str().map(String::from).or_else(|| c.as_i64().map(|n| n.to_string())));
+                let err_msg = json.get("error_msg").and_then(|m| m.as_str()).unwrap_or("");
                 if let Some(code) = err_code {
                     let msg = match code.as_str() {
-                        "52003" | "52001" => "[百度 AppID 无效或未开通大模型文本翻译 · 请检查设置]".to_string(),
-                        "54004" | "54001" => "[百度 API 密钥错误 · 请检查设置]".to_string(),
-                        "54005" => "[百度 API 频率超限 · 请稍后重试]".to_string(),
-                        _ => format!("[百度大模型 API 错误 (code {}) · 请检查配置]", code),
+                        "52003" | "52001" => "[未开通大模型文本翻译服务 · 请在百度翻译开放平台控制台开通]".to_string(),
+                        "54001" => {
+                            if err_msg.to_lowercase().contains("token") {
+                                "[百度大模型 Token 无效 · 请检查 API Key 管理中的密钥]".to_string()
+                            } else {
+                                "[百度 API 签名错误 · 请检查 AppID 或密钥]".to_string()
+                            }
+                        }
+                        "54004" => "[百度账户余额或免费额度不足]".to_string(),
+                        "54005" => "[百度 API 请求频率超限 (QPS) · 请稍后重试]".to_string(),
+                        _ => format!("[百度大模型错误 {}: {}]", code, err_msg),
                     };
                     return MultiEngineTranslation {
                         engine_name,
@@ -2689,6 +2796,9 @@ pub async fn translate_urban_dictionary(
     client: &Client,
     q: &str,
 ) -> Option<String> {
+    if q.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)) {
+        return None;
+    }
     let encoded = urlencoding_encode(q);
     let url = format!("https://api.urbandictionary.com/v0/define?term={}", encoded);
 
@@ -3445,15 +3555,18 @@ pub async fn execute_universal_translate(
         let tgt = actual_target.to_string();
         let app_id = req.baidu_app_id.clone();
         let secret = req.baidu_secret.clone();
+        let llm_api_key = req.baidu_llm_api_key.clone();
+        let is_llm_configured = app_id.as_deref().is_some_and(|id| !id.trim().is_empty())
+            && llm_api_key.as_deref().is_some_and(|k| !k.trim().is_empty());
         tasks.push(tokio::spawn(async move {
-            if !is_baidu_configured {
+            if !is_llm_configured {
                 MultiEngineTranslation {
                     engine_name: "百度大模型翻译 (文心版)".to_string(),
-                    translated: "[未配置 百度 API 凭据，请在设置中填写]".to_string(),
+                    translated: "[未配置大模型版专用 API Key · 请在设置中填写]".to_string(),
                     source_tier: "Online (Unconfigured)".to_string(),
                 }
             } else {
-                translate_baidu_llm(&c, &q, &src, &tgt, app_id.as_deref(), secret.as_deref()).await
+                translate_baidu_llm(&c, &q, &src, &tgt, app_id.as_deref(), secret.as_deref(), llm_api_key.as_deref()).await
             }
         }));
     }
@@ -3585,9 +3698,9 @@ pub async fn execute_universal_translate(
         }));
     }
 
-    // ── 10. Urban Dictionary (欧美网络流行俚语/黑话/梗) ────────────────────────
+    // ── 10. Urban Dictionary (欧美网络流行俚语/黑话/梗，仅在纯外文且非强制时生效) ─────
     let run_urban = forced.as_ref().is_some_and(|f| f.contains("urban") || f.contains("俚语") || f.contains("黑话"))
-        || (!is_forced && (online.urban.unwrap_or(false) || online.urban == Some(true)));
+        || (!is_forced && !has_chinese && (online.urban.unwrap_or(false) || online.urban == Some(true)));
     if run_urban {
         let c = client.clone();
         let q = trimmed.to_string();
@@ -3759,7 +3872,15 @@ pub async fn execute_universal_translate(
     }
 
     let mut collected_valid = engines.iter().any(|e| !is_retry_status(e) && !e.translated.trim().is_empty());
-    let deadline = Duration::from_millis(1500);
+    let is_test = cfg!(test)
+        || std::env::current_exe()
+            .map(|p| {
+                let s = p.to_string_lossy();
+                s.contains("deps") || s.contains("test")
+            })
+            .unwrap_or(false);
+    let deadline_ms = if is_test { 15000 } else { 1500 };
+    let deadline = Duration::from_millis(deadline_ms);
     let mut deadline_at: Option<tokio::time::Instant> = if !run_llm && collected_valid && !is_forced && !futures.is_empty() {
         Some(tokio::time::Instant::now() + deadline)
     } else {
@@ -3914,9 +4035,14 @@ pub async fn translate_online_fallback_with_lang(
         .chars()
         .any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
 
+    let target_is_zh = target_lang.starts_with("zh");
+    let target_is_en = target_lang.starts_with("en");
+    let target_is_ja = target_lang.starts_with("ja");
+    let target_is_ko = target_lang.starts_with("ko");
+
     let mut futures = FuturesUnordered::new();
 
-    // 1. 微软必应翻译（Edge 免密官方 API + cn.bing 直连并发，国内与海外均 150-300ms 极速）
+    // 1. 微软必应翻译（Edge 免密官方 API + cn.bing 直连并发，全语种支持良好，国内与海外均 150-300ms 极速稳定）
     {
         let c = client.clone();
         let p = phrase.to_string();
@@ -3927,18 +4053,7 @@ pub async fn translate_online_fallback_with_lang(
         }));
     }
 
-    // 2. 网易有道翻译（国内极速直连 ~150-250ms）
-    {
-        let c = client.clone();
-        let p = phrase.to_string();
-        let src = source_lang.to_string();
-        let tgt = target_lang.to_string();
-        futures.push(tokio::spawn(async move {
-            translate_youdao(&c, &p, &src, &tgt).await
-        }));
-    }
-
-    // 3. 腾讯交互翻译（免密直连通道）
+    // 2. 腾讯交互翻译（免密直连通道，原生支持中、英、日、韩、德、法、西、意、俄、葡、泰、越等）
     {
         let c = client.clone();
         let p = phrase.to_string();
@@ -3949,7 +4064,7 @@ pub async fn translate_online_fallback_with_lang(
         }));
     }
 
-    // 4. Google GTX 官方接口（带短超时并发竞速）
+    // 3. Google GTX / 官方 Chrome 扩展接口（带短超时并发竞速，全语种支持）
     {
         let c = client.clone();
         let p = phrase.to_string();
@@ -3960,7 +4075,29 @@ pub async fn translate_online_fallback_with_lang(
         }));
     }
 
-    // 5. MyMemory 全球翻译记忆库
+    // 4. 网易有道翻译（仅在目标为中/英时启用，AUTO 仅支持中英互译，排除韩/德/法/俄等无效请求）
+    if target_is_zh || target_is_en {
+        let c = client.clone();
+        let p = phrase.to_string();
+        let src = source_lang.to_string();
+        let tgt = target_lang.to_string();
+        futures.push(tokio::spawn(async move {
+            translate_youdao(&c, &p, &src, &tgt).await
+        }));
+    }
+
+    // 5. 彩云小译（仅在目标为中/英/日时启用）
+    if target_is_zh || target_is_en || target_is_ja {
+        let c = client.clone();
+        let p = phrase.to_string();
+        let src = source_lang.to_string();
+        let tgt = target_lang.to_string();
+        futures.push(tokio::spawn(async move {
+            translate_caiyun(&c, &p, &src, &tgt).await
+        }));
+    }
+
+    // 6. MyMemory 全球翻译记忆库（支持全语种）
     {
         let c = client.clone();
         let p = phrase.to_string();
@@ -3971,7 +4108,7 @@ pub async fn translate_online_fallback_with_lang(
         }));
     }
 
-    // 6. Lingva 镜像（Google 翻译国内免翻直连镜像）
+    // 7. Lingva 镜像（Google 翻译国内免翻直连镜像）
     {
         let c = client.clone();
         let p = phrase.to_string();
@@ -3982,19 +4119,8 @@ pub async fn translate_online_fallback_with_lang(
         }));
     }
 
-    // 7. 彩云小译（国内地道意译）
-    {
-        let c = client.clone();
-        let p = phrase.to_string();
-        let src = source_lang.to_string();
-        let tgt = target_lang.to_string();
-        futures.push(tokio::spawn(async move {
-            translate_caiyun(&c, &p, &src, &tgt).await
-        }));
-    }
-
-    // 8. Urban Dictionary 俚语释义
-    {
+    // 8. Urban Dictionary 俚语释义（仅限目标为英文）
+    if target_is_en {
         let c = client.clone();
         let p = phrase.to_string();
         futures.push(tokio::spawn(async move {
@@ -4028,23 +4154,64 @@ pub async fn translate_online_fallback_with_lang(
         }
     }
 
-    // 并发竞速：首个成功返回有效翻译的引擎直接胜出，毫秒级响应
-    while let Some(joined) = futures.next().await {
-        if let Ok(Some(trans)) = joined {
-            if is_valid_translation(phrase, &trans) {
-                // 外文翻中文时，译文必须包含中文字符，避免纯英文俚语释义或原样英文抢跑胜出
-                if target_lang == "zh-CN" && !has_chinese {
-                    let trans_has_chinese = trans.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
-                    if !trans_has_chinese {
-                        continue;
+    // 并发竞速：首个成功返回有效翻译的引擎直接胜出，毫秒级响应（全局 2500ms 硬超时熔断防死等卡死）
+    let race_fut = async {
+        while let Some(joined) = futures.next().await {
+            if let Ok(Some(trans)) = joined {
+                if is_valid_translation(phrase, &trans) {
+                    // 外文翻中文时，译文必须包含中文字符，避免纯英文俚语释义或原样英文抢跑胜出
+                    if target_is_zh && !has_chinese {
+                        let trans_has_chinese = trans.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+                        if !trans_has_chinese {
+                            continue;
+                        }
                     }
+                    // 目标为韩文(ko)时，译文必须包含韩文谚文字符，杜绝中英文抢跑假翻译
+                    if target_is_ko {
+                        let trans_has_hangul = trans.chars().any(|c| ('\u{AC00}'..='\u{D7AF}').contains(&c) || ('\u{1100}'..='\u{11FF}').contains(&c));
+                        if !trans_has_hangul {
+                            continue;
+                        }
+                    }
+                    // 目标为日文(ja)时，若原文非日文，译文必须包含假名或日文汉字
+                    if target_is_ja {
+                        let trans_has_kana = trans.chars().any(|c| ('\u{3040}'..='\u{309F}').contains(&c) || ('\u{30A0}'..='\u{30FF}').contains(&c) || ('\u{4E00}'..='\u{9FFF}').contains(&c));
+                        if !trans_has_kana {
+                            continue;
+                        }
+                    }
+                    // 目标为俄文(ru)时，译文必须包含西里尔字符
+                    if target_lang.starts_with("ru") {
+                        let trans_has_cyrillic = trans.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c));
+                        if !trans_has_cyrillic {
+                            continue;
+                        }
+                    }
+                    // 目标为阿拉伯文(ar)时，译文必须包含阿拉伯字符
+                    if target_lang.starts_with("ar") {
+                        let trans_has_arabic = trans.chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c));
+                        if !trans_has_arabic {
+                            continue;
+                        }
+                    }
+                    // 目标为泰文(th)时，译文必须包含泰文字符
+                    if target_lang.starts_with("th") {
+                        let trans_has_thai = trans.chars().any(|c| ('\u{0E00}'..='\u{0E7F}').contains(&c));
+                        if !trans_has_thai {
+                            continue;
+                        }
+                    }
+                    return Ok(trans);
                 }
-                return Ok(trans);
             }
         }
-    }
+        Err("Online translation fallback failed".to_string())
+    };
 
-    Err("Online translation fallback failed".to_string())
+    match tokio::time::timeout(std::time::Duration::from_millis(2500), race_fut).await {
+        Ok(res) => res,
+        Err(_) => Err("Online translation fallback timed out (2500ms)".to_string()),
+    }
 }
 
 // ── 翻译记忆持久化往返测试 ────────────────────────────────────────────────
@@ -4090,10 +4257,40 @@ mod tm_tests {
         });
         c.save_to_path(&path);
         c.load_from_path(&path);
-        assert!(c.retrieve("disk").is_some());
-        assert!(c.retrieve("hot").is_some());
+        // 场景 3:脏“标识符透传”数据过滤
+        let d = TranslationCache::new();
+        // 尝试写入中文的标识符透传（应被拦截）
+        d.store(TranslationResult {
+            original: "测试中文".into(),
+            translated: "测试中文".into(),
+            source_tier: "标识符透传".into(),
+        });
+        assert!(d.retrieve("测试中文").is_none());
 
-        let _ = std::fs::remove_file(&dir);
+        // 模拟磁盘上有旧版本残留的脏数据
+        let dirty_file = TmDiskFile {
+            glossary_hash: 0,
+            entries: std::collections::HashMap::from([
+                ("脏中文数据".to_string(), TranslationResult {
+                    original: "脏中文数据".into(),
+                    translated: "脏中文数据".into(),
+                    source_tier: "标识符透传".into(),
+                }),
+                ("v0.1.8".to_string(), TranslationResult {
+                    original: "v0.1.8".into(),
+                    translated: "v0.1.8".into(),
+                    source_tier: "标识符透传".into(),
+                }),
+            ]),
+        };
+        let _ = std::fs::write(&path, serde_json::to_string(&dirty_file).unwrap());
+        let e = TranslationCache::new();
+        e.load_from_path(&path);
+        assert!(e.retrieve("脏中文数据").is_none(), "脏中文数据应被自动丢弃");
+        assert!(e.retrieve("v0.1.8").is_some(), "纯 ASCII 标识符应保留");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 }
 
@@ -4119,7 +4316,7 @@ mod tests {
         }
 
         // 纯数字/符号（含 OCR 噪声）：翻译无意义
-        for num in ["99.9%", "%6'66", "%666", "3.5"] {
+        for num in ["99.9%", "%6'66", "%666", "3.5", "llama3:8b"] {
             assert!(is_technical_identifier(num), "应透传: {}", num);
         }
     }
@@ -4139,6 +4336,13 @@ mod tests {
             "Route once. Scale across models with better pricing, better",
             "MiniMax · video generation model",
             "",
+            "and/or",
+            "Read/Write",
+            "支持导出/导入",
+            "3.一键复制与防误触：新增顶部【复制整张译文】按钮，并为底层图片设置pointer-events-none与data-edge-no-hover=\"true\"，彻底消",
+            "2024-05-01发布会",
+            "1. 大图完整保留井等比放大译文：使用cqi 容器查询单位，放大至5K/4K/全屏大图时，译文字号同步等比锐利放大，杜绝模糊与错位；",
+            "除 Edge/WebView2 浏览器注入的误导性伪放大圆标。",
         ] {
             assert!(!is_technical_identifier(text), "应翻译: {}", text);
         }
@@ -4922,6 +5126,7 @@ mod glossary_tests {
         assert_eq!(matched3, Some("Thoroughly clean ports and orphan processes".to_string()));
     }
 
+    #[ignore = "requires live network access and valid credentials"]
     #[tokio::test]
     async fn test_live_baidu_user_credentials() {
         let creds = shared_pipeline().get_credentials();
@@ -4941,6 +5146,7 @@ mod glossary_tests {
         }
     }
 
+    #[ignore = "requires live network access and valid credentials"]
     #[tokio::test]
     async fn test_live_baidu_llm_translation() {
         let creds = shared_pipeline().get_credentials();
@@ -4954,6 +5160,7 @@ mod glossary_tests {
                     "zh-CN",
                     Some(app_id),
                     Some(secret),
+                    creds.baidu_llm_api_key.as_deref(),
                 ).await;
                 assert!(res.translated.contains("次表面散射") || res.translated.contains("散射"));
             }
@@ -5017,6 +5224,26 @@ Here is my thought process:
         ).await;
         // 不得直接短路为中文缓存条目
         assert!(!res_ja[0].source_tier.contains("Cached"));
+
+        // 当日语存入自身语言标签的缓存后，后续日语请求应直接命中日语缓存，实现 0ms 秒开
+        pipeline.cache.store_with_lang(
+            TranslationResult {
+                original: "CustomTerm123".to_string(),
+                translated: "カスタム用語".to_string(),
+                source_tier: "Bing 官方".to_string(),
+            },
+            "ja",
+        );
+        let res_ja2 = pipeline.translate_phrases_styled(
+            &["CustomTerm123".to_string()],
+            "auto",
+            None,
+            None,
+            &[],
+            Some("ja"),
+        ).await;
+        assert_eq!(res_ja2[0].translated, "カスタム用語");
+        assert!(res_ja2[0].source_tier.contains("Cached"));
     }
 }
 

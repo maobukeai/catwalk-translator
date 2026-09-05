@@ -212,14 +212,25 @@ export const OnlinePanel: React.FC = () => {
   const handleTestBaidu = async (engine: 'baidu' | 'baidu_llm') => {
     const appId = settings.baiduAppId?.trim();
     const secret = settings.baiduSecret?.trim();
-    if (!appId || !secret) {
-      setBaiduTestResult({ success: false, msg: '请先填写 AppID 和密钥' });
+    const llmApiKey = settings.baiduLlmApiKey?.trim();
+
+    if (!appId) {
+      setBaiduTestResult({ success: false, msg: '请先填写 AppID' });
       return;
     }
+    if (engine === 'baidu' && !secret) {
+      setBaiduTestResult({ success: false, msg: '请先填写通用版密钥（Secret Key）' });
+      return;
+    }
+    if (engine === 'baidu_llm' && !llmApiKey) {
+      setBaiduTestResult({ success: false, msg: '请先填写大模型版专用 API Key（在控制台「API Key 管理」中创建）' });
+      return;
+    }
+
     setBaiduTesting(engine === 'baidu' ? 'general' : 'llm');
     setBaiduTestResult(null);
     const t0 = performance.now();
-    const testText = engine === 'baidu_llm' ? 'Subsurface Scattering' : 'apple';
+    const testText = engine === 'baidu_llm' ? 'Artificial Intelligence' : 'apple';
     try {
       const res = await cmdUniversalTranslate({
         text: testText,
@@ -229,6 +240,7 @@ export const OnlinePanel: React.FC = () => {
         forcedEngine: engine,
         baiduAppId: appId,
         baiduSecret: secret,
+        baiduLlmApiKey: llmApiKey,
         skipLlm: true,
       });
       const dur = Math.round(performance.now() - t0);
@@ -426,71 +438,107 @@ export const OnlinePanel: React.FC = () => {
             }`}>
               <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-blue-900' : 'text-blue-300'}`}>
                 <span>🐾</span>
-                <span>百度翻译 API 配置（通用版与文心大模型共用）</span>
+                <span>百度翻译开放平台 API 凭据</span>
                 <span className={`text-[9px] font-normal px-1.5 py-0.5 rounded border ml-1 ${isLight ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>
-                  个人/企业认证各享 100 万字符免费
+                  通用文本翻译 & 大模型文本翻译
                 </span>
                 <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer"
                   className={`ml-auto text-[10px] underline underline-offset-2 ${isLight ? 'text-blue-600' : 'text-blue-400'}`}>
-                  注册免费账号 →
+                  管理控制台 →
                 </a>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className={!online.baidu && online.baiduLlm ? 'sm:col-span-1' : ''}>
                   <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>AppID（应用 ID）</label>
                   <input
                     type="text"
                     value={settings.baiduAppId || ''}
-                    onChange={(e) => setBaiduConfig(e.target.value, settings.baiduSecret || '')}
+                    onChange={(e) => setBaiduConfig(e.target.value, settings.baiduSecret || '', settings.baiduLlmApiKey)}
                     placeholder="例如：20240001234567"
                     className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
                       isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
                     }`}
                   />
                 </div>
-                <div>
-                  <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>密钥（Secret Key）</label>
-                  <input
-                    type="password"
-                    value={settings.baiduSecret || ''}
-                    onChange={(e) => setBaiduConfig(settings.baiduAppId || '', e.target.value)}
-                    placeholder="32 位密钥字符串"
-                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
-                      isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
-                    }`}
-                  />
-                </div>
+
+                {online.baidu && (
+                  <div>
+                    <label className={`block text-[10px] font-medium mb-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>通用版密钥（Secret Key）</label>
+                    <input
+                      type="password"
+                      value={settings.baiduSecret || ''}
+                      onChange={(e) => setBaiduConfig(settings.baiduAppId || '', e.target.value, settings.baiduLlmApiKey)}
+                      placeholder="开发者信息中的 32 位密钥"
+                      className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+                        isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                      }`}
+                    />
+                  </div>
+                )}
+
+                {online.baiduLlm && (
+                  <div className={online.baidu ? 'sm:col-span-2' : ''}>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className={`block text-[10px] font-medium ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                        大模型版专用 API Key（Bearer Token）
+                      </label>
+                      <span className={`text-[9.5px] ${isLight ? 'text-blue-600' : 'text-blue-400'}`}>
+                        在「控制台 - API Key 管理」创建
+                      </span>
+                    </div>
+                    <input
+                      type="password"
+                      value={settings.baiduLlmApiKey || ''}
+                      onChange={(e) => setBaiduConfig(settings.baiduAppId || '', settings.baiduSecret || '', e.target.value)}
+                      placeholder="百度开放平台「API Key 管理」中生成的专用密钥"
+                      className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono transition focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+                        isLight ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-400' : 'bg-zinc-900/60 border-zinc-700 text-zinc-100 placeholder-zinc-500'
+                      }`}
+                    />
+                  </div>
+                )}
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-blue-200/40 dark:border-blue-500/20">
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleTestBaidu('baidu')}
-                    disabled={baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()}
-                    className={`px-3 py-1 text-xs rounded-lg font-medium transition flex items-center gap-1.5 shrink-0 ${
-                      baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()
-                        ? 'opacity-50 cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-zinc-800 dark:text-zinc-500'
-                        : isLight
-                        ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm active:scale-95'
-                        : 'bg-blue-500 hover:bg-blue-600 text-white shadow-sm active:scale-95'
-                    }`}
-                  >
-                    {baiduTesting === 'general' ? '⏳ 测试中...' : '🐯 测试通用版'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleTestBaidu('baidu_llm')}
-                    disabled={baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()}
-                    className={`px-3 py-1 text-xs rounded-lg font-medium transition flex items-center gap-1.5 shrink-0 ${
-                      baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()
-                        ? 'opacity-50 cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-zinc-800 dark:text-zinc-500'
-                        : isLight
-                        ? 'bg-violet-600 hover:bg-violet-700 text-white shadow-sm active:scale-95'
-                        : 'bg-violet-500 hover:bg-violet-600 text-white shadow-sm active:scale-95'
-                    }`}
-                  >
-                    {baiduTesting === 'llm' ? '⏳ 测试中...' : '🧠 测试文心大模型'}
-                  </button>
+                  {online.baidu && (
+                    <button
+                      type="button"
+                      onClick={() => handleTestBaidu('baidu')}
+                      disabled={baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()}
+                      className={`px-3 py-1 text-xs rounded-lg font-medium transition flex items-center gap-1.5 shrink-0 ${
+                        baiduTesting !== null || !settings.baiduAppId?.trim() || !settings.baiduSecret?.trim()
+                          ? 'opacity-50 cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-zinc-800 dark:text-zinc-500'
+                          : isLight
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm active:scale-95'
+                          : 'bg-blue-500 hover:bg-blue-600 text-white shadow-sm active:scale-95'
+                      }`}
+                    >
+                      {baiduTesting === 'general' ? '⏳ 测试中...' : '🐯 测试通用版'}
+                    </button>
+                  )}
+                  {online.baiduLlm && (
+                    <button
+                      type="button"
+                      onClick={() => handleTestBaidu('baidu_llm')}
+                      disabled={
+                        baiduTesting !== null ||
+                        !settings.baiduAppId?.trim() ||
+                        !settings.baiduLlmApiKey?.trim()
+                      }
+                      className={`px-3 py-1 text-xs rounded-lg font-medium transition flex items-center gap-1.5 shrink-0 ${
+                        baiduTesting !== null ||
+                        !settings.baiduAppId?.trim() ||
+                        !settings.baiduLlmApiKey?.trim()
+                          ? 'opacity-50 cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-zinc-800 dark:text-zinc-500'
+                          : isLight
+                          ? 'bg-violet-600 hover:bg-violet-700 text-white shadow-sm active:scale-95'
+                          : 'bg-violet-500 hover:bg-violet-600 text-white shadow-sm active:scale-95'
+                      }`}
+                    >
+                      {baiduTesting === 'llm' ? '⏳ 测试中...' : '🧠 测试文心大模型'}
+                    </button>
+                  )}
                 </div>
                 {baiduTestResult && (
                   <span className={`text-[11px] font-medium px-2.5 py-1 rounded-lg transition animate-in fade-in max-w-full truncate ${
@@ -503,7 +551,7 @@ export const OnlinePanel: React.FC = () => {
                 )}
               </div>
               <p className={`text-[10px] leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
-                前往 <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer" className="underline underline-offset-2">fanyi-api.baidu.com</a> 注册开发者账号。同一组 AppID 与密钥可同时用于「通用翻译」与「大模型文本翻译」，个人/企业认证用户各享 100 万字符免费额度。
+                前往 <a href="https://fanyi-api.baidu.com/" target="_blank" rel="noreferrer" className="underline underline-offset-2">fanyi-api.baidu.com</a> 开通对应服务。注意：「通用翻译」使用开发者信息中的 32 位密钥，而「大模型文本翻译」需在控制台「API Key 管理」中单独创建专用 API Key。如需将文心千帆大模型作为 AI 精翻与会话引擎，可在下方 LLM 模型池中直接添加「百度文心 (千帆)」。
               </p>
             </div>
           )}
@@ -932,9 +980,13 @@ export const OnlinePanel: React.FC = () => {
                   }`}
                 >
                   <option value="DeepSeek">DeepSeek (推荐·高性价比)</option>
+                  <option value="百度文心 (千帆)">百度文心千帆 (ERNIE-Speed / ERNIE-4.0)</option>
+                  <option value="SiliconFlow">SiliconFlow (硅基流动)</option>
+                  <option value="智谱 GLM">智谱 GLM (GLM-4-Flash)</option>
+                  <option value="通义千问">通义千问 (Qwen-Plus)</option>
+                  <option value="Kimi">Moonshot Kimi</option>
                   <option value="OpenAI">OpenAI (GPT-4o / GPT-4o-mini)</option>
                   <option value="Ollama">Ollama (本地私有化大模型)</option>
-                  <option value="智谱 GLM">智谱 GLM (GLM-4-Flash)</option>
                   <option value="Custom">自定义兼容接口 (Custom Endpoint)</option>
                 </select>
               </div>

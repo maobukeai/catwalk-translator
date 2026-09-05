@@ -10,6 +10,7 @@ import {
   Globe,
   Palette,
   CloudUpload,
+  Layers,
 } from 'lucide-react';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { useAppTheme } from '../../hooks/useAppTheme';
@@ -17,11 +18,12 @@ import { BackupSyncPanel } from './BackupSyncPanel';
 import { AppearancePanel } from './panels/AppearancePanel';
 import { HotkeyPanel } from './panels/HotkeyPanel';
 import { OnlinePanel, ONLINE_ENGINE_DEFS } from './panels/OnlinePanel';
+import { GlossaryPanel } from './panels/GlossaryPanel';
 import { DictsPanel } from './panels/DictsPanel';
 import { PreferencePanel } from './panels/PreferencePanel';
 import { APP_VERSION } from '../../version';
 
-type SettingCategory = 'appearance' | 'hotkey' | 'online' | 'dicts' | 'preference' | 'backup';
+type SettingCategory = 'appearance' | 'hotkey' | 'online' | 'glossary' | 'dicts' | 'preference' | 'backup';
 
 export type SettingsCategory = SettingCategory;
 
@@ -134,7 +136,8 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     { id: 'appearance', label: '外观与个性化', icon: Palette },
     { id: 'hotkey', label: '快捷键与 AI 模型', icon: Zap },
     { id: 'online', label: '在线引擎', badge: activeOnlineCount, icon: Globe },
-    { id: 'dicts', label: '专业词库', icon: BookOpen },
+    { id: 'glossary', label: '专属术语库', icon: BookOpen },
+    { id: 'dicts', label: '专业词库', icon: Layers },
     { id: 'preference', label: '优先级', icon: Sliders },
     { id: 'backup', label: '备份与同步', icon: CloudUpload },
   ] as const;
@@ -279,7 +282,10 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
       {/* 分类: 在线引擎 */}
       {activeCategory === 'online' && <OnlinePanel />}
 
-      {/* 分类: 专业词库 */}
+      {/* 分类: 专业术语库 */}
+      {activeCategory === 'glossary' && <GlossaryPanel />}
+
+      {/* 分类: 预设词库 */}
       {activeCategory === 'dicts' && <DictsPanel />}
 
       {/* 分类: 优先级 */}

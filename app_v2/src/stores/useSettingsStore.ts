@@ -13,6 +13,7 @@ import type {
   CustomDictItem,
   BackupSettings,
   WebdavConfig,
+  AnkiSettings,
 } from '../services/types';
 
 interface SettingsState {
@@ -30,10 +31,12 @@ interface SettingsState {
   setSpotlightHotkey: (hotkey: string) => void;
   setClipboardHotkey: (hotkey: string) => void;
   setToggleWindowHotkey: (hotkey: string) => void;
+  setQuickWindowHotkey: (hotkey: string) => void;
   setCaptureHotkeyEnabled: (enabled: boolean) => void;
   setSpotlightHotkeyEnabled: (enabled: boolean) => void;
   setClipboardHotkeyEnabled: (enabled: boolean) => void;
   setToggleWindowHotkeyEnabled: (enabled: boolean) => void;
+  setQuickWindowHotkeyEnabled: (enabled: boolean) => void;
   setDefaultPreset: (preset: string) => void;
   setCaptureEngine: (engine: string) => void;
   setLlmConfig: (updates: Partial<LlmConfig>) => void;
@@ -77,7 +80,7 @@ interface SettingsState {
   setOcrEngine: (engine: 'auto' | 'onnx' | 'winrt') => void;
   setOcrVersion: (version: 'v3' | 'v4' | 'v5' | 'v6' | 'v6t') => void;
   setPrimaryTranslationEngine: (engine: 'auto' | 'dict' | 'llm' | 'online') => void;
-  setBaiduConfig: (appId: string, secret: string) => void;
+  setBaiduConfig: (appId: string, secret: string, llmApiKey?: string, useSameSecret?: boolean) => void;
   setDeeplConfig: (apiKey: string, customUrl: string) => void;
   setVolcengineConfig: (accessKey: string, secretKey: string) => void;
   setYandexConfig: (apiKey: string, folderId: string) => void;
@@ -97,6 +100,7 @@ interface SettingsState {
   setHoverLookupEnabled: (enabled: boolean) => void;
   setHoverLookupModifier: (modifier: 'ctrl' | 'alt' | 'shift') => void;
   setWebdavConfig: (patch: Partial<WebdavConfig>) => void;
+  setAnkiSettings: (patch: Partial<AnkiSettings>) => void;
   resetSettings: () => void;
   clearToast: () => void;
 }
@@ -189,11 +193,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         theme: normalizedTheme,
         spotlightHotkey: fetched.spotlightHotkey || 'Alt+Space',
         clipboardHotkey: fetched.clipboardHotkey || 'Ctrl+Shift+C',
-        toggleWindowHotkey: fetched.toggleWindowHotkey || 'Alt+Q',
+        toggleWindowHotkey: fetched.toggleWindowHotkey || 'Alt+W',
+        quickWindowHotkey: fetched.quickWindowHotkey || 'Alt+W',
         captureHotkeyEnabled: fetched.captureHotkeyEnabled ?? true,
         spotlightHotkeyEnabled: fetched.spotlightHotkeyEnabled ?? false,
         clipboardHotkeyEnabled: fetched.clipboardHotkeyEnabled ?? false,
         toggleWindowHotkeyEnabled: fetched.toggleWindowHotkeyEnabled ?? false,
+        quickWindowHotkeyEnabled: fetched.quickWindowHotkeyEnabled ?? false,
         appearance: initialAppearance,
         llmConfig: fetched.llmConfig || fetchedPool[0] || null,
         llmConfigs: fetchedPool,
@@ -271,6 +277,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   setToggleWindowHotkey: (toggleWindowHotkey: string) => applyPatch({ toggleWindowHotkey }),
 
+  setQuickWindowHotkey: (quickWindowHotkey: string) => applyPatch({ quickWindowHotkey }),
+
   setCaptureHotkeyEnabled: (enabled: boolean) => applyPatch({ captureHotkeyEnabled: enabled }),
 
   setSpotlightHotkeyEnabled: (enabled: boolean) => applyPatch({ spotlightHotkeyEnabled: enabled }),
@@ -278,6 +286,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   setClipboardHotkeyEnabled: (enabled: boolean) => applyPatch({ clipboardHotkeyEnabled: enabled }),
 
   setToggleWindowHotkeyEnabled: (enabled: boolean) => applyPatch({ toggleWindowHotkeyEnabled: enabled }),
+
+  setQuickWindowHotkeyEnabled: (enabled: boolean) => applyPatch({ quickWindowHotkeyEnabled: enabled }),
 
   setLlmConfig: (updates: Partial<LlmConfig>) => {
     const { settings, initialSettings } = get();
@@ -483,9 +493,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     debouncedSaveSettings(get, set);
   },
 
-  setBaiduConfig: (appId: string, secret: string) => {
+  setBaiduConfig: (appId: string, secret: string, llmApiKey?: string, useSameSecret?: boolean) => {
     const { settings, initialSettings } = get();
-    const updated = { ...settings, baiduAppId: appId, baiduSecret: secret };
+    const updated = {
+      ...settings,
+      baiduAppId: appId,
+      baiduSecret: secret,
+      ...(llmApiKey !== undefined ? { baiduLlmApiKey: llmApiKey } : {}),
+      ...(useSameSecret !== undefined ? { useBaiduSameSecret: useSameSecret } : {}),
+    };
     set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
     debouncedSaveSettings(get, set);
   },
@@ -830,6 +846,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   setWebdavConfig: (patch) =>
     applyPatch({ webdavConfig: { ...get().settings.webdavConfig, ...patch } }),
+
+  setAnkiSettings: (patch) =>
+    applyPatch({ ankiSettings: { ...get().settings.ankiSettings, ...patch } }),
 
   clearToast: () => {
     set({ toastMessage: null });

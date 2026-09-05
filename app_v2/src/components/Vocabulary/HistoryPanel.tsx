@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Star, Download, Search, BookMarked, Clock, Volume2, Trash2, Trash, Inbox, Play, X, Copy, Check, Camera, FileText, GraduationCap, Eye, RotateCcw, Library, ClipboardList } from "lucide-react";
-import { cmdGetHistory, cmdToggleFavorite, cmdExportAnki, cmdDeleteHistoryEntry, cmdClearHistory, cmdGetCaptureSessions, cmdClearCaptureSessions, cmdGetClipboardHistory, cmdClearClipboardHistory, type ClipboardHistoryEntry } from "../../services/tauri";
+import { Star, Download, Search, BookMarked, Clock, Volume2, Trash2, Trash, Inbox, Play, X, Copy, Check, Camera, FileText, GraduationCap, Eye, RotateCcw, Library, ClipboardList, CheckSquare, AlertCircle } from "lucide-react";
+import { cmdGetHistory, cmdToggleFavorite, cmdExportAnki, cmdDeleteHistoryEntry, cmdDeleteHistoryEntries, cmdBatchSetFavorite, cmdClearHistory, cmdClearUnfavoritedHistory, cmdGetCaptureSessions, cmdClearCaptureSessions, cmdGetClipboardHistory, cmdClearClipboardHistory, type ClipboardHistoryEntry } from "../../services/tauri";
 import { speakText } from "../../services/tts";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppTheme } from "../../hooks/useAppTheme";
 import { detectSpeechLang } from "../../services/langDetect";
 import type { HistoryItem, CaptureSession } from "../../services/types";
+import { AnkiSyncModal } from "./AnkiSyncModal";
 
 /* ── 复习模式：Leitner 盒子间隔重复（localStorage 轻量持久化） ──────────────── */
 
@@ -62,15 +63,35 @@ export const HistoryPanel: React.FC = () => {
   const { isLight } = useAppTheme();
 
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [filterFavorite, setFilterFavorite] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(30);
   const [visibleClipCount, setVisibleClipCount] = useState(20);
   const [visibleSessionCount, setVisibleSessionCount] = useState(10);
+  // ── 生词本与查询历史彻底解耦（我的生词本 / 查询历史 / 剪贴板 / 划词回放）───────────
+  const [activeSubTab, setActiveSubTab] = useState<'vocabulary' | 'history' | 'clipboard' | 'replay'>('vocabulary');
+  const [showAnkiModal, setShowAnkiModal] = useState(false);
+
+  // ── 批量操作状态 ──────────────────────────────────────────────────────────
+  const [isBatchMode, setIsBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+
+  // ── 跨平台安全确认弹窗状态（消除 window.confirm 在 WebView2 下被阻断的问题） ──
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    body: string;
+    confirmText?: string;
+    danger?: boolean;
+    onConfirm: () => Promise<void> | void;
+  } | null>(null);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [activeSubTab]);
 
   useEffect(() => {
     setVisibleCount(30);
-  }, [searchQuery, filterFavorite]);
+  }, [searchQuery, activeSubTab]);
 
   // ── 划词回放：整场截图翻译会话 ────────────────────────────────────────────
   const [sessions, setSessions] = useState<CaptureSession[]>([]);
@@ -82,8 +103,6 @@ export const HistoryPanel: React.FC = () => {
   }, []);
   const [replay, setReplay] = useState<CaptureSession | null>(null);
   const [replayCopied, setReplayCopied] = useState(false);
-  // ── 历史记录三大子模块切换（生词本 / 剪贴板 / 划词回放 / 全部平铺）───────────
-  const [activeSubTab, setActiveSubTab] = useState<'all' | 'vocabulary' | 'clipboard' | 'replay'>('all');
 
   // ── 复习模式状态 ──────────────────────────────────────────────────────────
   const [reviewProgress, setReviewProgress] = useState<Record<string, ReviewProgress>>({});
@@ -132,16 +151,23 @@ export const HistoryPanel: React.FC = () => {
     setTimeout(() => setReplayCopied(false), 1800);
   };
 
-  const handleClearSessions = async () => {
+  const handleClearSessions = () => {
     if (sessions.length === 0) return;
-    if (!window.confirm(`确定要清空全部 ${sessions.length} 场划词回放记录吗？`)) return;
-    try {
-      await cmdClearCaptureSessions();
-      setSessions([]);
-      setReplay(null);
-    } catch (err) {
-      console.error("Failed to clear capture sessions:", err);
-    }
+    setConfirmModal({
+      title: "清空划词回放记录",
+      body: `确定要清空全部 ${sessions.length} 场划词回放记录吗？`,
+      confirmText: "清空回放",
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await cmdClearCaptureSessions();
+          setSessions([]);
+          setReplay(null);
+        } catch (err) {
+          console.error("Failed to clear capture sessions:", err);
+        }
+      },
+    });
   };
 
   const loadHistory = async () => {
@@ -181,22 +207,48 @@ export const HistoryPanel: React.FC = () => {
     }
   };
 
-  const handleClearAll = async () => {
+  const handleClearUnfavorited = () => {
+    const unfavoritedCount = history.filter((i) => !i.isFavorite).length;
+    if (unfavoritedCount === 0) return;
+    setConfirmModal({
+      title: "清空未收藏历史记录",
+      body: `确定要清空 ${unfavoritedCount} 条未收藏的临时查询历史吗？\n\n您的生词本（${favoriteCount} 条已收藏生词 ⭐）将受到永久完整保护。`,
+      confirmText: `清空 ${unfavoritedCount} 条历史`,
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await cmdClearUnfavoritedHistory();
+          setHistory((prev) => prev.filter((item) => item.isFavorite));
+        } catch (err) {
+          console.error("Failed to clear unfavorited history:", err);
+        }
+      },
+    });
+  };
+
+  const handleClearAll = () => {
     if (history.length === 0) return;
-    const confirmed = window.confirm(
-      `确定要清空全部 ${history.length} 条生词本与历史记录吗？此操作不可撤销。`
-    );
-    if (!confirmed) return;
-    try {
-      await cmdClearHistory();
-      setHistory([]);
-    } catch (err) {
-      console.error("Failed to clear history:", err);
-    }
+    setConfirmModal({
+      title: "清空全部历史与生词本",
+      body: `确定要清空全部 ${history.length} 条记录（包括生词本中收藏的 ${favoriteCount} 个生词）吗？\n\n此操作不可撤销，请谨慎操作。`,
+      confirmText: "全部彻底清空",
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await cmdClearHistory();
+          setHistory([]);
+        } catch (err) {
+          console.error("Failed to clear history:", err);
+        }
+      },
+    });
   };
 
   const handleExportAnki = async () => {
-    const targetItems = filterFavorite ? history.filter((i) => i.isFavorite) : history;
+    const targetItems = activeSubTab === "vocabulary"
+      ? history.filter((i) => i.isFavorite)
+      : history;
+    if (targetItems.length === 0) return;
     try {
       const csv = await cmdExportAnki(targetItems);
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -207,19 +259,102 @@ export const HistoryPanel: React.FC = () => {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Export failed:", err);
     }
   };
 
   const filteredItems = history.filter((item) => {
-    if (filterFavorite && !item.isFavorite) return false;
+    // 生词本视图：100% 严格仅展示用户主动点亮 ⭐ 收藏的生词
+    if (activeSubTab === "vocabulary" && !item.isFavorite) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       return item.original.toLowerCase().includes(q) || item.translated.toLowerCase().includes(q);
     }
     return true;
   });
+
+  /* ── 批量操作逻辑 ────────────────────────────────────────────────────────── */
+  const handleToggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const allVisibleSelected = filteredItems.length > 0 && filteredItems.every((i) => selectedIds.has(i.id));
+
+  const handleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredItems.map((i) => i.id)));
+    }
+  };
+
+  const handleBatchUnfavorite = async () => {
+    if (selectedIds.size === 0) return;
+    setIsBatchProcessing(true);
+    try {
+      await cmdBatchSetFavorite(Array.from(selectedIds), false);
+      setHistory((prev) =>
+        prev.map((item) => (selectedIds.has(item.id) ? { ...item, isFavorite: false } : item))
+      );
+      setSelectedIds(new Set());
+    } catch (err) {
+      console.error("Failed to batch unfavorite:", err);
+    } finally {
+      setIsBatchProcessing(false);
+    }
+  };
+
+  const handleBatchFavorite = async () => {
+    if (selectedIds.size === 0) return;
+    setIsBatchProcessing(true);
+    try {
+      await cmdBatchSetFavorite(Array.from(selectedIds), true);
+      setHistory((prev) =>
+        prev.map((item) => (selectedIds.has(item.id) ? { ...item, isFavorite: true } : item))
+      );
+      setSelectedIds(new Set());
+    } catch (err) {
+      console.error("Failed to batch favorite:", err);
+    } finally {
+      setIsBatchProcessing(false);
+    }
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedIds.size === 0) return;
+    const count = selectedIds.size;
+    setConfirmModal({
+      title: activeSubTab === "vocabulary" ? "彻底删除生词记录" : "彻底删除查询历史",
+      body:
+        activeSubTab === "vocabulary"
+          ? `确定要彻底删除已选中的 ${count} 条生词记录吗？\n\n⚠️ 该操作将同时从查询历史与生词本中永久抹除，不可撤销。\n\n💡 提示：如仅希望不在生词本中显示，建议使用「移出生词本」保留查词历史。`
+          : `确定要彻底删除已选中的 ${count} 条查询历史记录吗？此操作不可撤销。`,
+      confirmText: `彻底删除 (${count})`,
+      danger: true,
+      onConfirm: async () => {
+        setIsBatchProcessing(true);
+        try {
+          await cmdDeleteHistoryEntries(Array.from(selectedIds));
+          setHistory((prev) => prev.filter((item) => !selectedIds.has(item.id)));
+          setSelectedIds(new Set());
+        } catch (err) {
+          console.error("Failed to batch delete:", err);
+        } finally {
+          setIsBatchProcessing(false);
+        }
+      },
+    });
+  };
 
   /* ── 复习模式逻辑 ─────────────────────────────────────────────────────── */
 
@@ -308,10 +443,10 @@ export const HistoryPanel: React.FC = () => {
       {/* 统计卡横排：支持一键点击直达对应功能模块 */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
         {[
-          { tab: "vocabulary" as const, icon: Library, label: "总记录", value: history.length, color: "var(--accent-text)" },
-          { tab: "vocabulary" as const, icon: Star, label: "收藏生词", value: favoriteCount, color: "var(--warn)" },
-          { tab: "replay" as const, icon: Camera, label: "截图场次", value: sessions.length, color: "var(--accent-text)" },
+          { tab: "vocabulary" as const, icon: Star, label: "我的生词", value: favoriteCount, color: "var(--warn)" },
           { tab: "vocabulary" as const, icon: GraduationCap, label: "待复习", value: dueCount, color: dueCount > 0 ? "var(--danger)" : "var(--ok)" },
+          { tab: "history" as const, icon: Clock, label: "查询历史", value: history.length, color: "var(--accent-text)" },
+          { tab: "replay" as const, icon: Camera, label: "划词回放", value: sessions.length, color: "var(--accent-text)" },
         ].map((stat) => {
           const Icon = stat.icon;
           const isActive = activeSubTab === stat.tab;
@@ -322,7 +457,7 @@ export const HistoryPanel: React.FC = () => {
               className={`lg-panel flex items-center gap-3 p-3 cursor-pointer transition-all hover:scale-[1.01] hover:border-[var(--g-border-strong)] ${
                 isActive ? "ring-1 ring-[var(--accent)]/40 shadow-sm" : ""
               }`}
-              title={`点击切换到「${stat.tab === "replay" ? "划词回放" : "生词本"}」`}
+              title={`点击切换到「${stat.tab === "replay" ? "截图划词回放" : stat.tab === "vocabulary" ? "我的生词本" : "查询历史"}」`}
             >
               <div className="lg-inset !p-2 rounded-xl shrink-0">
                 <Icon className="h-4 w-4" style={{ color: stat.color }} />
@@ -336,35 +471,45 @@ export const HistoryPanel: React.FC = () => {
         })}
       </div>
 
-      {/* 模块分类导航栏：解决剪贴板历史与划词回放挤在最底部难翻找难展示的问题 */}
+      {/* 模块分类导航栏 */}
       <div className="flex items-center justify-between gap-3 p-1.5 rounded-2xl lg-panel flex-wrap">
         <div className="flex items-center gap-1.5 flex-wrap">
           <button
             type="button"
-            onClick={() => setActiveSubTab("all")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
-              activeSubTab === "all"
-                ? "bg-[var(--accent)] text-white shadow-sm"
-                : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
-            }`}
-          >
-            <span>📑 全部平铺</span>
-          </button>
-
-          <button
-            type="button"
+            data-testid="subtab-vocabulary"
             onClick={() => setActiveSubTab("vocabulary")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
               activeSubTab === "vocabulary"
                 ? "bg-[var(--accent)] text-white shadow-sm"
                 : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
             }`}
           >
-            <BookMarked className="h-3.5 w-3.5" />
-            <span>查词与生词本</span>
+            <Star className={`h-3.5 w-3.5 ${activeSubTab === "vocabulary" ? "fill-current" : ""}`} />
+            <span>⭐ 我的生词本</span>
             <span
               className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
                 activeSubTab === "vocabulary" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
+              }`}
+            >
+              {favoriteCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="subtab-history"
+            onClick={() => setActiveSubTab("history")}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              activeSubTab === "history"
+                ? "bg-[var(--accent)] text-white shadow-sm"
+                : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
+            }`}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            <span>🕒 查询历史</span>
+            <span
+              className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
+                activeSubTab === "history" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
               }`}
             >
               {history.length}
@@ -373,15 +518,16 @@ export const HistoryPanel: React.FC = () => {
 
           <button
             type="button"
+            data-testid="subtab-clipboard"
             onClick={() => setActiveSubTab("clipboard")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
               activeSubTab === "clipboard"
                 ? "bg-[var(--accent)] text-white shadow-sm"
                 : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
             }`}
           >
             <ClipboardList className="h-3.5 w-3.5" />
-            <span>剪贴板翻译历史</span>
+            <span>📋 剪贴板翻译</span>
             <span
               className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
                 activeSubTab === "clipboard" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
@@ -393,15 +539,16 @@ export const HistoryPanel: React.FC = () => {
 
           <button
             type="button"
+            data-testid="subtab-replay"
             onClick={() => setActiveSubTab("replay")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
               activeSubTab === "replay"
                 ? "bg-[var(--accent)] text-white shadow-sm"
                 : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
             }`}
           >
             <Camera className="h-3.5 w-3.5" />
-            <span>截图划词回放</span>
+            <span>📸 划词回放</span>
             <span
               className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
                 activeSubTab === "replay" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
@@ -414,61 +561,130 @@ export const HistoryPanel: React.FC = () => {
       </div>
 
       {/* Header and Controls */}
-      {(activeSubTab === "all" || activeSubTab === "vocabulary") && (
+      {(activeSubTab === "vocabulary" || activeSubTab === "history") && (
         <>
           <div className="lg-panel p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center space-x-3">
-          <BookMarked className="h-6 w-6" style={{ color: "var(--accent-text)" }} />
-          <div>
-            <h2 className="text-lg font-bold">生词本与历史记录</h2>
-            <p className="text-xs" style={{ color: "var(--g-text-2)" }}>
-              已保存 {history.length} 条查询记录 (收藏 {favoriteCount} 条)
-            </p>
+            <div className="flex items-center space-x-3">
+              {activeSubTab === "vocabulary" ? (
+                <Star className="h-6 w-6 text-amber-500 fill-amber-500 shrink-0" />
+              ) : (
+                <Clock className="h-6 w-6 shrink-0" style={{ color: "var(--accent-text)" }} />
+              )}
+              <div>
+                <h2 className="text-lg font-bold">
+                  {activeSubTab === "vocabulary" ? "我的生词本" : "查询历史记录"}
+                </h2>
+                <p className="text-xs" style={{ color: "var(--g-text-2)" }}>
+                  {activeSubTab === "vocabulary"
+                    ? `已收藏 ${favoriteCount} 条生词${dueCount > 0 ? ` (当前 ${dueCount} 条待复习)` : " · 暂无到期生词"}`
+                    : `已保存 ${history.length} 条查询记录 (收藏 ${favoriteCount} 条)`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-2.5 flex-wrap">
+              {activeSubTab === "vocabulary" ? (
+                <>
+                  <button
+                    onClick={startReview}
+                    disabled={dueCount === 0}
+                    className="lg-btn lg-btn-primary disabled:cursor-not-allowed cursor-pointer"
+                    title={
+                      favoriteCount === 0
+                        ? "先在列表或翻译结果里点亮 ⭐ 收藏生词，才会进入复习队列"
+                        : dueCount > 0
+                          ? `开始复习 ${Math.min(dueCount, MAX_REVIEW_QUEUE)} 个到期生词`
+                          : "当前没有到期生词"
+                    }
+                  >
+                    <GraduationCap className="h-4 w-4" />
+                    <span>开始复习{dueCount > 0 ? ` (${Math.min(dueCount, MAX_REVIEW_QUEUE)})` : ""}</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowAnkiModal(true)}
+                    disabled={favoriteCount === 0}
+                    className="lg-btn lg-btn-primary cursor-pointer disabled:opacity-50"
+                    title="通过 AnkiConnect 直连同步生词，或一键导出 Anki 卡片"
+                  >
+                    <GraduationCap className="h-4 w-4" />
+                    <span>📇 同步至 Anki</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsBatchMode((prev) => {
+                        if (prev) setSelectedIds(new Set());
+                        return !prev;
+                      });
+                    }}
+                    data-testid="header-batch-toggle"
+                    className={`lg-btn cursor-pointer transition ${
+                      isBatchMode
+                        ? "bg-[var(--accent)] text-white shadow-sm"
+                        : "lg-btn-ghost hover:bg-[var(--g-surface-2)]"
+                    }`}
+                    title={isBatchMode ? "退出批量操作" : "开启批量管理"}
+                  >
+                    <CheckSquare className="h-4 w-4" />
+                    <span>{isBatchMode ? "退出批量" : "批量管理"}</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsBatchMode((prev) => {
+                        if (prev) setSelectedIds(new Set());
+                        return !prev;
+                      });
+                    }}
+                    data-testid="header-history-batch-toggle"
+                    className={`lg-btn cursor-pointer transition ${
+                      isBatchMode
+                        ? "bg-[var(--accent)] text-white shadow-sm"
+                        : "lg-btn-ghost hover:bg-[var(--g-surface-2)]"
+                    }`}
+                    title={isBatchMode ? "退出批量操作" : "开启批量管理"}
+                  >
+                    <CheckSquare className="h-4 w-4" />
+                    <span>{isBatchMode ? "退出批量" : "批量管理"}</span>
+                  </button>
+
+                  <button
+                    onClick={handleClearUnfavorited}
+                    disabled={history.filter((i) => !i.isFavorite).length === 0}
+                    className="lg-btn lg-btn-ghost cursor-pointer disabled:opacity-40"
+                    title="仅清空未收藏的临时查询记录，完整保留生词本中的所有收藏"
+                  >
+                    <Trash className="h-4 w-4" />
+                    <span>清空未收藏历史</span>
+                  </button>
+
+                  <button
+                    onClick={handleClearAll}
+                    disabled={history.length === 0}
+                    className="lg-btn lg-btn-ghost text-red-500/80 hover:text-red-500 cursor-pointer disabled:opacity-30 text-[11px]"
+                    title="清空全部历史记录与生词本"
+                  >
+                    <span>清空全部</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowAnkiModal(true)}
+                    disabled={history.length === 0}
+                    className="lg-btn lg-btn-primary cursor-pointer disabled:opacity-50"
+                    title="将查询历史同步至 Anki 或导出文件"
+                  >
+                    <GraduationCap className="h-4 w-4" />
+                    <span>同步至 Anki</span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-
-        <div className="flex items-center space-x-2.5 flex-wrap">
-          <button
-            onClick={startReview}
-            disabled={dueCount === 0}
-            className="lg-btn lg-btn-primary disabled:cursor-not-allowed"
-            title={
-              favoriteCount === 0
-                ? "先在列表里点亮 ⭐ 收藏生词，才会进入复习队列"
-                : dueCount > 0
-                  ? `开始复习 ${Math.min(dueCount, MAX_REVIEW_QUEUE)} 个到期生词`
-                  : "当前没有到期生词"
-            }
-          >
-            <GraduationCap className="h-4 w-4" />
-            <span>开始复习{dueCount > 0 ? ` (${Math.min(dueCount, MAX_REVIEW_QUEUE)})` : ""}</span>
-          </button>
-
-          <button
-            onClick={() => setFilterFavorite((prev) => !prev)}
-            className={`lg-btn ${filterFavorite ? "" : "lg-btn-ghost"}`}
-            style={filterFavorite ? { background: "color-mix(in srgb, var(--warn) 18%, transparent)", borderColor: "color-mix(in srgb, var(--warn) 45%, transparent)", color: "var(--warn)" } : undefined}
-          >
-            <Star className={`h-4 w-4 ${filterFavorite ? "fill-current" : ""}`} />
-            <span>仅看生词本</span>
-          </button>
-
-          <button
-            onClick={handleClearAll}
-            disabled={history.length === 0}
-            className="lg-btn lg-btn-ghost"
-            title="清空全部历史与生词本记录"
-          >
-            <Trash className="h-4 w-4" />
-            <span>清空全部</span>
-          </button>
-
-          <button onClick={handleExportAnki} className="lg-btn lg-btn-primary">
-            <Download className="h-4 w-4" />
-            <span>导出 Anki / CSV</span>
-          </button>
-        </div>
-      </div>
 
       {/* 复习卡片模式（遮住译文自测 + Leitner 评分） */}
       {reviewQueue.length > 0 && (
@@ -589,17 +805,144 @@ export const HistoryPanel: React.FC = () => {
         </div>
       )}
 
-      {/* Filter Search Bar */}
-      <div className="relative">
-        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4" style={{ color: "var(--g-text-3)" }} />
-        <input
-          type="text"
-          placeholder="搜索生词本或历史记录..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="lg-input w-full !rounded-xl pl-10 pr-4 py-2.5 text-xs shadow-sm"
-        />
+      {/* Filter Search Bar & Batch Mode Toggle */}
+      <div className="flex items-center gap-2.5">
+        <div className="relative flex-1">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4" style={{ color: "var(--g-text-3)" }} />
+          <input
+            type="text"
+            placeholder={activeSubTab === "vocabulary" ? "在我的生词本中搜索..." : "在查询历史记录中搜索..."}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="lg-input w-full !rounded-xl pl-10 pr-4 py-2.5 text-xs shadow-sm"
+          />
+        </div>
+        <button
+          type="button"
+          data-testid="batch-mode-toggle"
+          onClick={() => {
+            setIsBatchMode((prev) => {
+              if (prev) setSelectedIds(new Set());
+              return !prev;
+            });
+          }}
+          className={`lg-btn !px-3.5 !py-2.5 !rounded-xl !text-xs cursor-pointer transition shrink-0 ${
+            isBatchMode
+              ? "bg-[var(--accent)] text-white shadow-sm"
+              : "lg-btn-ghost hover:bg-[var(--g-surface-2)]"
+          }`}
+          title={isBatchMode ? "退出批量操作" : "开启批量管理"}
+        >
+          <CheckSquare className="h-4 w-4" />
+          <span>{isBatchMode ? "退出批量" : "批量管理"}</span>
+        </button>
       </div>
+
+      {/* 顶部常驻批量操作栏（批量模式开启时立即显式展开在搜索栏正下方） */}
+      {isBatchMode && (activeSubTab === "vocabulary" || activeSubTab === "history") && (
+        <div className="lg-panel p-3.5 rounded-2xl border-2 border-[var(--accent)]/50 bg-[var(--accent)]/5 flex items-center justify-between gap-3 flex-wrap shadow-md animate-in fade-in slide-in-from-top-2 duration-150">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleSelectAll}
+              data-testid="batch-select-all"
+              className="lg-btn !text-xs !py-1.5 !px-3.5 cursor-pointer border border-[var(--g-border-strong)] hover:border-[var(--accent)] bg-[var(--g-surface)] font-medium shadow-xs"
+            >
+              <CheckSquare className="h-3.5 w-3.5 text-[var(--accent-text)]" />
+              <span>{allVisibleSelected ? "取消全选" : `全选当前 (${filteredItems.length})`}</span>
+            </button>
+
+            <span
+              data-testid="batch-selected-count"
+              className="text-xs font-semibold tabular-nums"
+              style={{ color: "var(--g-text-2)" }}
+            >
+              已选 <span className="font-bold text-[var(--accent-text)] text-sm">{selectedIds.size}</span> / {filteredItems.length} 项
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {activeSubTab === "vocabulary" ? (
+              <>
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || isBatchProcessing}
+                  onClick={() => setShowAnkiModal(true)}
+                  data-testid="batch-anki-btn"
+                  className="lg-btn lg-btn-primary !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold"
+                  title="将选中的生词同步至 Anki"
+                >
+                  <GraduationCap className="h-3.5 w-3.5" />
+                  <span>同步至 Anki{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || isBatchProcessing}
+                  onClick={handleBatchUnfavorite}
+                  data-testid="batch-unfavorite-btn"
+                  className="lg-btn !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold"
+                  title="从生词本中移出（保留在查询历史中，防误删）"
+                >
+                  <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
+                  <span>移出生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || isBatchProcessing}
+                  onClick={handleBatchDelete}
+                  data-testid="batch-delete-btn"
+                  className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold border border-red-500/30"
+                  title="彻底抹除所选记录（从生词本与查询历史中彻底删除）"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || isBatchProcessing}
+                  onClick={handleBatchFavorite}
+                  data-testid="batch-favorite-btn"
+                  className="lg-btn lg-btn-primary !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold"
+                  title="将所选记录批量加入生词本"
+                >
+                  <Star className="h-3.5 w-3.5 fill-current" />
+                  <span>加入生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || isBatchProcessing}
+                  onClick={handleBatchDelete}
+                  data-testid="batch-delete-btn"
+                  className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold border border-red-500/30"
+                  title="从查询历史中彻底删除"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsBatchMode(false);
+                setSelectedIds(new Set());
+              }}
+              className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-3 cursor-pointer ml-1"
+              title="完成并退出批量操作"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span>退出批量</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* History Items List */}
       <div className="space-y-3">
@@ -607,20 +950,59 @@ export const HistoryPanel: React.FC = () => {
           <div className="lg-panel text-center py-14 space-y-3" style={{ color: "var(--g-text-3)" }}>
             <Inbox className="h-10 w-10 mx-auto opacity-60" />
             <p className="text-xs">
-              {history.length === 0 ? "暂无任何记录，去「翻译」或「查词」页进行首次翻译吧" : "暂无匹配的记录或生词"}
+              {activeSubTab === "vocabulary"
+                ? (favoriteCount === 0
+                    ? "生词本暂无收藏。在首页翻译或查询历史中点击 ⭐ 即可加入生词本"
+                    : "生词本中未找到匹配的词条")
+                : (history.length === 0
+                    ? "暂无任何历史记录，去「翻译」或「查词」页进行首次翻译吧"
+                    : "查询历史中未找到匹配的记录")}
             </p>
           </div>
         ) : (
           <>
             {filteredItems.slice(0, visibleCount).map((item) => {
               const box = reviewProgress[item.id]?.box;
+              const isSelected = selectedIds.has(item.id);
               return (
-                <div key={item.id} className="lg-inset p-4 flex items-center justify-between transition hover:bg-[var(--g-surface-2)]">
+                <div
+                  key={item.id}
+                  onClick={isBatchMode ? () => handleToggleSelect(item.id) : undefined}
+                  className={`lg-inset p-4 flex items-center justify-between transition ${
+                    isBatchMode ? "cursor-pointer select-none" : ""
+                  } ${
+                    isSelected
+                      ? "ring-2 ring-[var(--accent)]/60 bg-[var(--accent)]/10 border-[var(--accent)]/40 shadow-sm"
+                      : "hover:bg-[var(--g-surface-2)]"
+                  }`}
+                >
+                  {isBatchMode && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleSelect(item.id);
+                      }}
+                      data-testid={`batch-checkbox-${item.id}`}
+                      className={`w-5 h-5 rounded-md flex items-center justify-center transition-all shrink-0 cursor-pointer mr-3.5 ${
+                        isSelected
+                          ? "bg-[var(--accent)] text-white shadow-xs border border-[var(--accent)]"
+                          : "border-2 border-[var(--g-border-strong)] hover:border-[var(--accent)] bg-[var(--g-surface)]"
+                      }`}
+                      title={isSelected ? "取消选择" : "选择此项"}
+                    >
+                      {isSelected && <Check className="h-3.5 w-3.5 stroke-[3]" />}
+                    </button>
+                  )}
+
                   <div className="space-y-1 flex-1 pr-4 min-w-0">
                     <div className="flex items-center space-x-3 flex-wrap">
                       <span className="font-semibold text-base truncate">{item.original}</span>
                       <button
-                        onClick={() => handleSpeech(item.original)}
+                        onClick={(e) => {
+                          if (isBatchMode) e.stopPropagation();
+                          handleSpeech(item.original);
+                        }}
                         className="transition hover:opacity-70"
                         style={{ color: "var(--g-text-3)" }}
                       >
@@ -653,7 +1035,11 @@ export const HistoryPanel: React.FC = () => {
 
                   <div className="flex items-center space-x-2 shrink-0">
                     <button
-                      onClick={() => handleToggleFav(item.id)}
+                      onClick={(e) => {
+                        if (isBatchMode) e.stopPropagation();
+                        handleToggleFav(item.id);
+                      }}
+                      data-testid={`fav-toggle-${item.id}`}
                       className="lg-btn lg-btn-ghost !p-2"
                       style={item.isFavorite ? { color: "var(--warn)", background: "color-mix(in srgb, var(--warn) 14%, transparent)" } : undefined}
                       title={item.isFavorite ? "从生词本移除" : "加入生词本"}
@@ -662,7 +1048,10 @@ export const HistoryPanel: React.FC = () => {
                     </button>
 
                     <button
-                      onClick={() => handleDelete(item.id)}
+                      onClick={(e) => {
+                        if (isBatchMode) e.stopPropagation();
+                        handleDelete(item.id);
+                      }}
                       className="lg-btn lg-btn-ghost !p-2"
                       style={{ color: "var(--danger)" }}
                       title="删除该条记录"
@@ -688,11 +1077,106 @@ export const HistoryPanel: React.FC = () => {
           </>
         )}
       </div>
+
+      {/* 底部悬浮批量操作栏（使用 React Portal 挂载到 body，突破包含块限制并置于 Dock 之上） */}
+      {isBatchMode && (activeSubTab === "vocabulary" || activeSubTab === "history") && typeof document !== "undefined" && createPortal(
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[100] lg-panel px-5 py-3 shadow-2xl rounded-2xl flex items-center gap-3.5 flex-wrap max-w-[94vw] border-2 border-[var(--accent)]/50 bg-[var(--g-surface)]/95 backdrop-blur-xl">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSelectAll}
+              className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-2.5 cursor-pointer"
+              data-testid="batch-select-all-floating"
+            >
+              <span>{allVisibleSelected ? "取消全选" : "全选当前"}</span>
+            </button>
+            <span
+              data-testid="batch-selected-count-floating"
+              className="text-xs font-semibold tabular-nums"
+              style={{ color: "var(--g-text-2)" }}
+            >
+              已选 <span className="font-bold text-[var(--accent-text)]">{selectedIds.size}</span> / {filteredItems.length} 项
+            </span>
+          </div>
+
+          <div className="h-4 w-[1px] bg-[var(--g-border)] hidden sm:block" />
+
+          <div className="flex items-center gap-2">
+            {activeSubTab === "vocabulary" ? (
+              <>
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || isBatchProcessing}
+                  onClick={handleBatchUnfavorite}
+                  className="lg-btn !text-xs !py-1.5 !px-3 cursor-pointer disabled:opacity-40 font-medium"
+                  data-testid="batch-unfavorite-btn-floating"
+                  title="从生词本中移出（保留在查询历史中）"
+                >
+                  <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
+                  <span>移出生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || isBatchProcessing}
+                  onClick={handleBatchDelete}
+                  className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3 cursor-pointer disabled:opacity-40 font-medium border border-red-500/30"
+                  data-testid="batch-delete-btn-floating"
+                  title="从所有历史记录与生词本中彻底删除"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || isBatchProcessing}
+                  onClick={handleBatchFavorite}
+                  className="lg-btn lg-btn-primary !text-xs !py-1.5 !px-3 cursor-pointer disabled:opacity-40 font-medium"
+                  data-testid="batch-favorite-btn-floating"
+                  title="将所选记录批量加入生词本"
+                >
+                  <Star className="h-3.5 w-3.5 fill-current" />
+                  <span>加入生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || isBatchProcessing}
+                  onClick={handleBatchDelete}
+                  className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3 cursor-pointer disabled:opacity-40 font-medium border border-red-500/30"
+                  data-testid="batch-delete-btn-floating"
+                  title="从查询历史中彻底删除"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsBatchMode(false);
+                setSelectedIds(new Set());
+              }}
+              className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-2.5 cursor-pointer ml-1"
+              title="完成并退出批量操作"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span>退出</span>
+            </button>
+          </div>
+        </div>,
+        document.body
+      )}
         </>
       )}
 
       {/* ── 剪贴板翻译历史 ─────────────────────────────────────────────────── */}
-      {(activeSubTab === "all" || activeSubTab === "clipboard") && (
+      {activeSubTab === "clipboard" && (
         <div className="lg-panel p-5 animate-in fade-in" data-testid="clipboard-history-section">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold flex items-center gap-2">
@@ -771,7 +1255,7 @@ export const HistoryPanel: React.FC = () => {
       )}
 
       {/* ── 划词回放：整场截图翻译会话时间线 ───────────────────────────────── */}
-      {(activeSubTab === "all" || activeSubTab === "replay") && (
+      {activeSubTab === "replay" && (
         <div className="lg-panel p-5 animate-in fade-in">
         <div className="flex items-center justify-between pb-3 border-b" style={{ borderColor: "var(--g-hairline)" }}>
           <div className="flex items-center space-x-2.5">
@@ -971,6 +1455,63 @@ export const HistoryPanel: React.FC = () => {
         </div>,
         document.body
       )}
+
+      {/* 跨平台安全确认弹窗 (彻底解决 Tauri WebView 下原生 window.confirm 被静默拦截或无响应问题) */}
+      {confirmModal && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div
+            className={`w-full max-w-sm rounded-2xl border p-5 space-y-4 shadow-2xl ${
+              isLight ? "bg-white border-slate-200 text-slate-800" : "bg-zinc-900 border-white/10 text-zinc-100"
+            }`}
+          >
+            <div className="flex items-start space-x-3">
+              <div className="p-2 rounded-xl bg-red-500/10 text-red-500 shrink-0">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-bold">{confirmModal.title}</div>
+                <p className={`mt-2 text-xs leading-relaxed whitespace-pre-line ${isLight ? "text-slate-600" : "text-zinc-400"}`}>
+                  {confirmModal.body}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-3.5 cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-dialog-submit"
+                onClick={async () => {
+                  const action = confirmModal.onConfirm;
+                  setConfirmModal(null);
+                  await action();
+                }}
+                className={`flex items-center space-x-1.5 rounded-xl px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition cursor-pointer ${
+                  confirmModal.danger
+                    ? "bg-red-600 hover:bg-red-500 border border-red-400/40"
+                    : "bg-[var(--accent)] hover:opacity-90"
+                }`}
+              >
+                <span>{confirmModal.confirmText || "确定"}</span>
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Anki 同步与导出闭环弹窗 */}
+      <AnkiSyncModal
+        isOpen={showAnkiModal}
+        onClose={() => setShowAnkiModal(false)}
+        items={activeSubTab === "vocabulary" ? history.filter((i) => i.isFavorite) : history}
+        selectedIds={selectedIds.size > 0 ? selectedIds : undefined}
+      />
     </div>
   );
 };

@@ -22,6 +22,8 @@ pub mod sampler;
 pub mod translator;
 pub mod updater;
 pub mod webdav;
+pub mod anki;
+pub mod glossary;
 
 use commands::AppState;
 use std::str::FromStr;
@@ -243,7 +245,30 @@ pub fn register_all_user_shortcuts(
         }
     }
 
-    // 5. Hover lookup hotkey (fixed Ctrl+Alt+H, opens the overlay in hover mode)
+    // 5. Quick lookup window hotkey (default Alt+W, default disabled)
+    if settings.quick_window_hotkey_enabled.unwrap_or(false) {
+        let hk = settings
+            .quick_window_hotkey
+            .as_deref()
+            .unwrap_or("Alt+W");
+        if !hk.trim().is_empty() {
+            match parse_hotkey(hk) {
+                Ok(s) => {
+                    if let Err(err) = app_handle.global_shortcut().register(s) {
+                        eprintln!(
+                            "[Hotkeys] Failed to register quick_window hotkey '{}': {}",
+                            hk, err
+                        );
+                    }
+                }
+                Err(err) => {
+                    eprintln!("[Hotkeys] Could not parse quick_window hotkey '{}': {}", hk, err);
+                }
+            }
+        }
+    }
+
+    // 6. Hover lookup hotkey (fixed Ctrl+Alt+H, opens the overlay in hover mode)
     match parse_hotkey("Ctrl+Alt+H") {
         Ok(s) => {
             if let Err(err) = app_handle.global_shortcut().register(s) {
@@ -420,6 +445,22 @@ pub fn run() {
                                 }
                             }
 
+                            // Match quick lookup window hotkey
+                            if settings.quick_window_hotkey_enabled.unwrap_or(false) {
+                                let hk = settings
+                                    .quick_window_hotkey
+                                    .as_deref()
+                                    .unwrap_or("Alt+W");
+                                if !hk.trim().is_empty() {
+                                    if let Ok(s) = parse_hotkey(hk) {
+                                        if s == *shortcut {
+                                            let _ = pin::open_or_show_quick_window(&app);
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+
                             // Match the fixed hover-lookup hotkey (Ctrl+Alt+H)
                             if let Ok(s) = parse_hotkey("Ctrl+Alt+H") {
                                 if s == *shortcut {
@@ -461,6 +502,7 @@ pub fn run() {
             translator::shared_pipeline().update_credentials(translator::OnlineCredentials {
                 baidu_app_id: current_settings.baidu_app_id.clone(),
                 baidu_secret: current_settings.baidu_secret.clone(),
+                baidu_llm_api_key: current_settings.baidu_llm_api_key.clone(),
                 deepl_api_key: current_settings.deepl_api_key.clone(),
                 deepl_custom_url: current_settings.deepl_custom_url.clone(),
                 volcengine_access_key: current_settings.volcengine_access_key.clone(),
@@ -675,9 +717,22 @@ pub fn run() {
             commands::cmd_add_history,
             commands::cmd_toggle_favorite,
             commands::cmd_delete_history,
+            commands::cmd_delete_history_entries,
+            commands::cmd_batch_set_favorite,
             commands::cmd_clear_history,
+            commands::cmd_clear_unfavorited_history,
             commands::cmd_ocr_engine_status,
             commands::cmd_export_anki,
+            commands::cmd_anki_check_connection,
+            commands::cmd_anki_sync_notes,
+            commands::cmd_anki_export_file,
+            commands::cmd_get_custom_glossary,
+            commands::cmd_import_custom_glossary,
+            commands::cmd_parse_glossary_text,
+            commands::cmd_upsert_custom_glossary_entry,
+            commands::cmd_delete_custom_glossary_entry,
+            commands::cmd_clear_custom_glossary,
+            commands::cmd_export_custom_glossary,
             commands::cmd_fetch_llm_models,
             commands::cmd_chat_llm,
             commands::cmd_chat_llm_stream,
@@ -687,12 +742,16 @@ pub fn run() {
             commands::cmd_image_ocr_translate,
             commands::cmd_exit_app,
             commands::cmd_hide_main_window,
+            commands::cmd_show_main_window,
             commands::cmd_fetch_tts_audio,
             lookup_monitor::cmd_get_lookup_payload,
             lookup_monitor::cmd_hide_lookup_popup,
             pin::cmd_open_pin,
             pin::cmd_get_pin_payload,
             pin::cmd_close_pin,
+            pin::cmd_open_quick_window,
+            pin::cmd_reposition_pin_to_cursor,
+            pin::cmd_set_pin_always_on_top,
             diagnose::cmd_network_diagnose,
             general_dict::cmd_general_dict_status,
             general_dict::cmd_general_dict_install,
@@ -748,6 +807,27 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
                 &dark_mode as *const _ as *const std::ffi::c_void,
                 std::mem::size_of::<u32>() as u32,
             );
+
+            // 34 = DWMWA_BORDER_COLOR: 0xFFFFFFFE = DWMWA_COLOR_NONE (彻底消除 Windows 11 默认的 1px 矩形黑边/灰边)
+            let border_color: u32 = 0xFFFFFFFE;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(34),
+                &border_color as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
+            );
+
+            // 33 = DWMWA_WINDOW_CORNER_PREFERENCE: 1 = DWMWCP_DONOTROUND
+            // 当禁用 DWM 磨砂时（贴图/浮动透明窗），严禁 DWM 绘制任何直角或次级圆角框，由前端 CSS 圆角完全掌控纯净透明边界
+            if !enable {
+                let corner_pref: u32 = 1;
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWINDOWATTRIBUTE(33),
+                    &corner_pref as *const _ as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
+                );
+            }
 
             // 2. Windows 10 SetWindowCompositionAttribute fallback
             if hr_backdrop.is_err() || !enable {

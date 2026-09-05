@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { evaluateTranslationQuality } from '../services/smartQualityFilter';
 import { useSettingsStore } from '../stores/useSettingsStore';
 
@@ -62,16 +62,16 @@ describe('优质生词智能甄选引擎与容量扩容测试', () => {
   });
 
   describe('设置项 autoFavoriteQualityTerms 响应', () => {
-    it('默认启用自动甄选收藏', () => {
-      expect(useSettingsStore.getState().settings.autoFavoriteQualityTerms).toBe(true);
+    it('默认关闭自动甄选收藏（保持生词本纯净，由用户手动点 ⭐ 决定）', () => {
+      expect(useSettingsStore.getState().settings.autoFavoriteQualityTerms).toBe(false);
     });
 
     it('能够成功切换开关状态', () => {
-      useSettingsStore.getState().setAutoFavoriteQualityTerms(false);
-      expect(useSettingsStore.getState().settings.autoFavoriteQualityTerms).toBe(false);
-
       useSettingsStore.getState().setAutoFavoriteQualityTerms(true);
       expect(useSettingsStore.getState().settings.autoFavoriteQualityTerms).toBe(true);
+
+      useSettingsStore.getState().setAutoFavoriteQualityTerms(false);
+      expect(useSettingsStore.getState().settings.autoFavoriteQualityTerms).toBe(false);
     });
   });
 });

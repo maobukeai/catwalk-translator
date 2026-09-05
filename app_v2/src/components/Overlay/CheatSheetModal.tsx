@@ -64,6 +64,7 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
       { label: 'M 原位覆盖/有道面板', keys: ['M'] },
       { label: 'W 区域监控模式', keys: ['W'] },
       { label: 'H 悬停取词（全局 Ctrl+Alt+H）', keys: ['H'] },
+      { label: '快捷查词悬浮窗（全局 Alt+Q）', keys: ['Alt', 'Q'] },
       { label: 'Tab切AI模型', keys: ['Tab'] },
       { label: '1~6切换语种', keys: ['1~6'] },
     ],

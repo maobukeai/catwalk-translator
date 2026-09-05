@@ -1,30 +1,37 @@
 @echo off
-title Ã¨²½·­Òë - ÊµÊ±ÈÈÖØÔØµ÷ÊÔÖÕ¶Ë
+chcp 65001 >nul
+title çŒ«æ­¥ç¿»è¯‘ - å®æ—¶å¼€å‘è°ƒè¯•
 color 0B
 
 echo ===================================================================
-echo             Ã¨²½·­Òë (Catwalk Translator) - ÊµÊ±¿ª·¢µ÷ÊÔ
-echo   * Ç°¶ËÈÈÖØÔØ (Vite HMR): ĞŞ¸Ä React/TSX/CSS ½çÃæÃë¼¶ÊµÊ±Ë¢ĞÂ
-echo   * ºó¶ËÈÈÖØÔØ (Cargo Watch): ĞŞ¸Ä Rust ´úÂë×Ô¶¯ÖØĞÂ±àÒë²¢ÖØÔØ
+echo             çŒ«æ­¥ç¿»è¯‘ [Catwalk Translator] - å®æ—¶å¼€å‘è°ƒè¯•
+echo   * å‰ç«¯çƒ­é‡è½½ [Vite HMR]: ä¿®æ”¹ React/TSX/CSS ç•Œé¢ç§’çº§å®æ—¶åˆ·æ–°
+echo   * åç«¯çƒ­é‡è½½ [Cargo Watch]: ä¿®æ”¹ Rust ä»£ç è‡ªåŠ¨é‡æ–°ç¼–è¯‘å¹¶é‡è½½
 echo ===================================================================
 echo.
 
-cd /d "%~dp0app_v2"
-
-echo [*] ÕıÔÚÆô¶¯ÈÈÖØÔØ¿ª·¢µ÷ÊÔ·şÎñ...
+echo [*] æ­£åœ¨æ£€æµ‹å¹¶é‡Šæ”¾ 1420 ç«¯å£ä¸å†å²è¿›ç¨‹...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\clean_dev.ps1"
 echo.
 
-call pnpm run tauri dev
-if %errorlevel% neq 0 (
-    echo.
-    echo [*] ³¢ÊÔÊ¹ÓÃ npm Æô¶¯...
-    call npm run tauri dev
-)
+cd /d "%~dp0app_v2"
+echo [*] æ­£åœ¨å¯åŠ¨çƒ­é‡è½½å¼€å‘è°ƒè¯•æœåŠ¡...
+echo.
 
-if %errorlevel% neq 0 (
-    color 0C
-    echo.
-    echo [´íÎó] ¿ª·¢·şÎñÒì³£ÍË³ö£¬Çë¼ì²éÉÏ·½±¨´íĞÅÏ¢¡£
-    echo.
-    pause
-)
+call npm run tauri dev
+if %errorlevel% equ 0 goto :done
+
+echo.
+echo [*] æ­£åœ¨é‡æ–°æ¸…ç†æ®‹ç•™ç«¯å£ä¸ç¯å¢ƒå¹¶å°è¯•ä½¿ç”¨ pnpm å¯åŠ¨...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\clean_dev.ps1"
+cd /d "%~dp0app_v2"
+call pnpm run tauri dev
+if %errorlevel% equ 0 goto :done
+
+color 0C
+echo.
+echo [é”™è¯¯] å¼€å‘æœåŠ¡å¼‚å¸¸é€€å‡ºï¼Œè¯·æ£€æŸ¥ä¸Šæ–¹æŠ¥é”™ä¿¡æ¯ã€‚
+echo.
+pause
+
+:done

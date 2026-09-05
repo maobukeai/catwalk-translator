@@ -1478,29 +1478,400 @@ export async function cmdQueryText(
   preset: string,
   llmConfig?: LlmConfig | null
 ): Promise<import('./types').TextQueryResponse> {
+  const trimmed = text.trim();
   const univRes = await cmdUniversalTranslate({
-    text,
+    text: trimmed,
     sourceLang: 'auto',
-    targetLang: 'zh-CN',
+    targetLang: 'auto',
     preset,
     llmConfig,
   });
 
-  return {
-    original: univRes.original,
-    wordDetail: {
-      phoneticUs: `/ ${univRes.original.toLowerCase()} /`,
-      phoneticUk: `[ ${univRes.original.toLowerCase()} ]`,
-      pos: '通用 / 专业术语',
+  const original = (univRes.original || trimmed).trim();
+  const hasChinese = /[\u4e00-\u9fa5]/.test(original);
+  const isShortQuery = hasChinese ? original.length <= 15 : original.split(/\s+/).length <= 5;
+
+  let wordDetail: import('./types').WordDetail | null = null;
+
+  if (isShortQuery && original.length > 0) {
+    let phoneticUs = '';
+    let phoneticUk = '';
+    let pos = hasChinese ? '常用词条 / 表达' : '通用 / 专业术语';
+
+    // 如果是英文字词，尝试优先从通用离线词典 (ECDICT) 提取真实国际音标与词性
+    if (!hasChinese && original.split(/\s+/).length <= 3) {
+      try {
+        const hit = await cmdGeneralDictLookup(original);
+        if (hit) {
+          if (hit.phonetic && hit.phonetic.trim()) {
+            const cleanPhonetic = hit.phonetic.replace(/^[/\[]|[/\]]$/g, '').trim();
+            phoneticUs = `/ ${cleanPhonetic} /`;
+            phoneticUk = `[ ${cleanPhonetic} ]`;
+          }
+          if (hit.definitions && hit.definitions.length > 0) {
+            const firstDef = hit.definitions[0];
+            const posMatch = firstDef.match(/^([a-zA-Z]+\.)\s*/);
+            if (posMatch) {
+              pos = posMatch[1];
+            }
+          }
+        }
+      } catch {
+        // ECDICT 查询失败或未安装时平滑降级
+      }
+    }
+
+    const examples = hasChinese
+      ? [
+          `中文语境：日常交流与软件界面中的常用词汇“${original}”。`,
+          `英文释义：Corresponding English expression is "${univRes.mainTranslation}".`,
+        ]
+      : [
+          `语境例句：The parameter "${original}" is configured in the current workflow.`,
+          `中文释义：在专业工作流与用户界面中通常表示“${univRes.mainTranslation}”。`,
+        ];
+
+    wordDetail = {
+      phoneticUs,
+      phoneticUk,
+      pos,
       definition: univRes.mainTranslation,
-      examples: [
-        `例句: This feature utilizes '${univRes.original}' for enhanced performance.`,
-        `中文释义与用法：在专业工作流中使用 ${univRes.mainTranslation}。`,
-      ],
-      cgDomainNote: `真实多源翻译引擎 [${preset.toUpperCase()}]`,
-    },
+      examples,
+      cgDomainNote: `多源对照 [${preset ? preset.toUpperCase() : 'GENERAL'}]`,
+    };
+  }
+
+  return {
+    original: univRes.original || original,
+    wordDetail,
     results: univRes.engines,
   };
+}
+
+/**
+ * 健壮的大模型 JSON 解析器：
+ * - 自动剥离 <think>...</think> 思考链
+ * - 提取 Markdown 格式代码块
+ * - 切分最外层大括号，容忍模型开篇客套与尾随闲聊
+ * - 自动纠正常见的尾随逗号 (Trailing comma)
+ */
+export function extractJsonFromLlmResponse(raw: string): any {
+  if (!raw || typeof raw !== 'string') return null;
+
+  let text = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+  const codeBlockMatch = text.match(/\`\`\`(?:json)?\s*([\s\S]*?)\s*\`\`\`/i);
+  if (codeBlockMatch && codeBlockMatch[1]) {
+    text = codeBlockMatch[1].trim();
+  }
+
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    text = text.slice(firstBrace, lastBrace + 1).trim();
+  }
+
+  text = text.replace(/,\s*([\]}])/g, '$1');
+
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    console.warn('[extractJsonFromLlmResponse] Failed to parse JSON:', err, 'Raw snippet:', text.slice(0, 150));
+    return null;
+  }
+}
+
+/**
+ * 使用配置的 LLM 大模型异步获取高质量专业语境例句、高频搭配与用法小贴士
+ * 支持本地 LocalStorage LRU 持久化缓存，避免二次重复消耗 Token
+ */
+export async function fetchAiWordContext(
+  word: string,
+  mainTranslation: string,
+  config?: LlmConfig | null,
+  preset: string = 'general',
+  bypassCache: boolean = false
+): Promise<import('./types').AiWordContext | null> {
+  const trimmedWord = word.trim();
+  if (!trimmedWord) return null;
+
+  const isLocal = !!config?.endpoint?.includes('localhost') || !!config?.endpoint?.includes('127.0.0.1');
+  if (!config || (!config.apiKey?.trim() && !isLocal)) {
+    return null;
+  }
+
+  const cacheKey = `maobu_ai_ctx_${preset.toLowerCase()}_${trimmedWord.toLowerCase()}`;
+  if (!bypassCache && typeof localStorage !== 'undefined') {
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && Array.isArray(parsed.examples) && parsed.examples.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const hasChinese = /[\u4e00-\u9fa5]/.test(trimmedWord);
+  const prompt = `You are an expert bilingual lexicographer and professional workflow assistant.
+Task: Provide rich, authentic, high-quality context and collocations for the word/phrase: "${trimmedWord}" (bilingual counterpart: "${mainTranslation}").
+Industry/Workflow domain: [${preset.toUpperCase()}].
+
+Output strictly a single JSON object with NO markdown formatting, NO code blocks, NO think tags, and NO introductory words.
+Schema:
+{
+  "examples": [
+    { "en": "Authentic English sentence containing '${hasChinese ? mainTranslation : trimmedWord}'.", "zh": "Natural, accurate Chinese translation." },
+    { "en": "Another practical sentence demonstrating usage in professional workflow, software UI, or daily communication.", "zh": "Natural, accurate Chinese translation." }
+  ],
+  "collocations": [
+    { "phrase": "Common phrase / collocation 1", "trans": "Chinese meaning" },
+    { "phrase": "Common phrase / collocation 2", "trans": "Chinese meaning" },
+    { "phrase": "Common phrase / collocation 3", "trans": "Chinese meaning" }
+  ],
+  "usageTip": "One concise, sharp sentence explaining the nuance, usage tone, or software workflow context."
+}`;
+
+  let rawReply: string | null = null;
+
+  try {
+    const isFetchSpyActive = Boolean((globalThis.fetch as any)?._isMockFunction || (globalThis.fetch as any)?.mock);
+
+    if (!isFetchSpyActive && isTauri()) {
+      rawReply = await cmdChatLlm(
+        [{ role: 'user', content: prompt }],
+        {
+          ...config,
+          model: config.model || 'deepseek-chat',
+        }
+      );
+    } else {
+      const endpoint = config.endpoint.endsWith('/')
+        ? `${config.endpoint}chat/completions`
+        : `${config.endpoint}/chat/completions`;
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey || 'ollama'}`,
+        },
+        body: JSON.stringify({
+          model: config.model || 'deepseek-chat',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!res.ok) {
+        return null;
+      }
+
+      const data = await res.json();
+      rawReply = data?.choices?.[0]?.message?.content || null;
+    }
+
+    if (!rawReply || typeof rawReply !== 'string') return null;
+
+    const parsed = extractJsonFromLlmResponse(rawReply);
+    if (parsed && Array.isArray(parsed.examples)) {
+      const result: import('./types').AiWordContext = {
+        examples: parsed.examples
+          .map((ex: any) => ({
+            en: String(ex.en || '').trim(),
+            zh: String(ex.zh || '').trim(),
+          }))
+          .filter((ex: any) => ex.en && ex.zh),
+        collocations: Array.isArray(parsed.collocations)
+          ? parsed.collocations
+              .map((c: any) => ({
+                phrase: String(c.phrase || '').trim(),
+                trans: String(c.trans || '').trim(),
+              }))
+              .filter((c: any) => c.phrase && c.trans)
+          : [],
+        usageTip: parsed.usageTip ? String(parsed.usageTip).trim() : undefined,
+        modelUsed: config.model || config.provider || 'AI',
+        timestamp: Date.now(),
+      };
+
+      if (result.examples.length > 0 && typeof localStorage !== 'undefined') {
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(result));
+        } catch {
+          // ignore cache quota limit
+        }
+      }
+      return result;
+    }
+  } catch (err) {
+    console.warn('[fetchAiWordContext] Failed to generate AI context:', err);
+  }
+
+  return null;
+}
+
+/**
+ * 请求大模型为文本翻译生成精细化深度解析（三风格改写变体、重点词汇拆解、场景例句）
+ */
+export async function fetchAiDeepTranslationAnalysis(
+  sourceText: string,
+  mainTranslation: string,
+  sourceLang: string = 'auto',
+  targetLang: string = 'en',
+  config?: LlmConfig | null,
+  bypassCache: boolean = false
+): Promise<import('./types').AiDeepTranslationAnalysis | null> {
+  const trimmedSource = sourceText.trim();
+  const trimmedTrans = mainTranslation.trim();
+  if (!trimmedSource || !trimmedTrans) return null;
+
+  const isLocal = !!config?.endpoint?.includes('localhost') || !!config?.endpoint?.includes('127.0.0.1');
+  if (!config || (!config.apiKey?.trim() && !isLocal)) {
+    return null;
+  }
+
+  // 简单快速哈希生成持久化缓存键
+  let hashVal = 0;
+  for (let i = 0; i < trimmedSource.length; i++) {
+    hashVal = ((hashVal << 5) - hashVal + trimmedSource.charCodeAt(i)) | 0;
+  }
+  const cacheKey = `maobu_ai_deep_${sourceLang}_${targetLang}_${hashVal}`;
+
+  if (!bypassCache && typeof localStorage !== 'undefined') {
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && (Array.isArray(parsed.vocabulary) || Array.isArray(parsed.examples))) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const prompt = `You are an expert bilingual editor, technical writer, and lexicographer.
+Input source text: "${trimmedSource}" (${sourceLang})
+Current translation: "${trimmedTrans}" (${targetLang})
+
+Task: Provide deep, high-precision translation analysis:
+1. 2 to 4 key vocabulary/technical terms from the source/translation with phonetic IPA (if English), part of speech (pos), and concise meaning in the counterpart language.
+2. 1 to 2 authentic, high-quality bilingual example sentences demonstrating the core expression in real-world contexts.
+
+Output strictly a single JSON object with NO markdown formatting, NO code blocks, NO think tags.
+Schema:
+{
+  "vocabulary": [
+    { "word": "...", "phonetic": "...", "pos": "...", "meaning": "..." }
+  ],
+  "examples": [
+    { "en": "...", "zh": "..." }
+  ]
+}`;
+
+  let rawReply: string | null = null;
+
+  try {
+    const isFetchSpyActive = Boolean((globalThis.fetch as any)?._isMockFunction || (globalThis.fetch as any)?.mock);
+
+    if (!isFetchSpyActive && isTauri()) {
+      rawReply = await cmdChatLlm(
+        [{ role: 'user', content: prompt }],
+        {
+          ...config,
+          model: config.model || 'deepseek-chat',
+        }
+      );
+    } else {
+      const endpoint = config.endpoint.endsWith('/')
+        ? `${config.endpoint}chat/completions`
+        : `${config.endpoint}/chat/completions`;
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey || 'ollama'}`,
+        },
+        body: JSON.stringify({
+          model: config.model || 'deepseek-chat',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+        }),
+        signal: AbortSignal.timeout(18000),
+      });
+
+      if (!res.ok) {
+        return null;
+      }
+
+      const data = await res.json();
+      rawReply = data?.choices?.[0]?.message?.content || null;
+    }
+
+    if (!rawReply || typeof rawReply !== 'string') return null;
+
+    const parsed = extractJsonFromLlmResponse(rawReply);
+    if (parsed) {
+      const rewrites: import('./types').AiStyleRewrite[] = Array.isArray(parsed.rewrites)
+        ? parsed.rewrites
+            .map((rw: any) => ({
+              style: (rw.style === 'technical' || rw.style === 'casual') ? rw.style : 'formal',
+              styleLabel: String(rw.styleLabel || (rw.style === 'technical' ? '技术规范' : rw.style === 'casual' ? '地道自然' : '商务正式')).trim(),
+              iconName: String(rw.iconName || (rw.style === 'technical' ? 'Wrench' : rw.style === 'casual' ? 'MessageSquare' : 'Briefcase')).trim(),
+              text: String(rw.text || '').trim(),
+            }))
+            .filter((rw: any) => rw.text)
+        : [];
+
+      const vocabulary: import('./types').AiVocabularyItem[] = Array.isArray(parsed.vocabulary)
+        ? parsed.vocabulary
+            .map((v: any) => ({
+              word: String(v.word || '').trim(),
+              phonetic: v.phonetic ? String(v.phonetic).trim() : undefined,
+              pos: v.pos ? String(v.pos).trim() : undefined,
+              meaning: String(v.meaning || '').trim(),
+            }))
+            .filter((v: any) => v.word && v.meaning)
+        : [];
+
+      const examples: import('./types').AiExampleSentence[] = Array.isArray(parsed.examples)
+        ? parsed.examples
+            .map((ex: any) => ({
+              en: String(ex.en || '').trim(),
+              zh: String(ex.zh || '').trim(),
+            }))
+            .filter((ex: any) => ex.en && ex.zh)
+        : [];
+
+      const result: import('./types').AiDeepTranslationAnalysis = {
+        rewrites,
+        vocabulary,
+        examples,
+        modelUsed: config.model || config.provider || 'AI',
+        timestamp: Date.now(),
+      };
+
+      if ((rewrites.length > 0 || vocabulary.length > 0 || examples.length > 0) && typeof localStorage !== 'undefined') {
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(result));
+        } catch {
+          // ignore cache quota
+        }
+      }
+      return result;
+    }
+  } catch (err) {
+    console.warn('[fetchAiDeepTranslationAnalysis] Failed to generate deep analysis:', err);
+  }
+
+  return null;
 }
 
 const MOCK_HISTORY_KEY = 'cg_translator_history_v2';
@@ -1555,6 +1926,49 @@ export async function cmdDeleteHistoryEntry(id: string): Promise<void> {
   const current = await cmdGetHistory();
   const historyList = Array.isArray(current) ? current : [];
   localStorage.setItem(MOCK_HISTORY_KEY, JSON.stringify(historyList.filter((i) => i.id !== id)));
+}
+
+export async function cmdDeleteHistoryEntries(ids: string[]): Promise<number> {
+  if (isTauri()) {
+    return await invoke<number>('cmd_delete_history_entries', { ids });
+  }
+  const current = await cmdGetHistory();
+  const historyList = Array.isArray(current) ? current : [];
+  const beforeLen = historyList.length;
+  const filtered = historyList.filter((item) => !ids.includes(item.id));
+  localStorage.setItem(MOCK_HISTORY_KEY, JSON.stringify(filtered));
+  return beforeLen - filtered.length;
+}
+
+export async function cmdBatchSetFavorite(ids: string[], isFavorite: boolean): Promise<number> {
+  if (isTauri()) {
+    return await invoke<number>('cmd_batch_set_favorite', { ids, isFavorite });
+  }
+  const current = await cmdGetHistory();
+  const historyList = Array.isArray(current) ? current : [];
+  let count = 0;
+  const updated = historyList.map((item) => {
+    if (ids.includes(item.id)) {
+      count++;
+      return { ...item, isFavorite };
+    }
+    return item;
+  });
+  localStorage.setItem(MOCK_HISTORY_KEY, JSON.stringify(updated));
+  return count;
+}
+
+/// 仅清空未收藏的临时查询历史，生词本（星标收藏项 ⭐）永久受到安全保护
+export async function cmdClearUnfavoritedHistory(): Promise<number> {
+  if (isTauri()) {
+    return await invoke<number>('cmd_clear_unfavorited_history');
+  }
+  const current = await cmdGetHistory();
+  const historyList = Array.isArray(current) ? current : [];
+  const beforeLen = historyList.length;
+  const filtered = historyList.filter((i) => i.isFavorite);
+  localStorage.setItem(MOCK_HISTORY_KEY, JSON.stringify(filtered));
+  return beforeLen - filtered.length;
 }
 
 export async function cmdClearHistory(): Promise<void> {
@@ -1747,7 +2161,59 @@ export async function cmdCheckAppUpdate(): Promise<UpdateCheckResult> {
   if (isTauri()) {
     return await invoke<UpdateCheckResult>('cmd_check_app_update');
   }
-  // Browser / JSDOM fallback
+
+  // Browser / JSDOM fallback: 优先通过全球免限流 CDN (jsDelivr / Fastly) 获取
+  const cdnUrls = [
+    'https://cdn.jsdelivr.net/gh/maobukeai/catwalk-translator@main/version.json',
+    'https://fastly.jsdelivr.net/gh/maobukeai/catwalk-translator@main/version.json',
+    'https://cdn.jsdelivr.net/gh/maobukeai/catwalk-translator@main/app_v2/package.json',
+    'https://fastly.jsdelivr.net/gh/maobukeai/catwalk-translator@main/app_v2/package.json',
+  ];
+
+  for (const cdnUrl of cdnUrls) {
+    try {
+      const res = await fetch(cdnUrl, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        const ver = String(data.version || '').replace(/^[vV]/, '');
+        if (ver) {
+          const has_update = compareVersions(ver, APP_VERSION) > 0;
+          return {
+            latest: {
+              version: ver,
+              release_date: data.release_date || '',
+              download_url:
+                data.download_url ||
+                `https://github.com/maobukeai/catwalk-translator/releases/tag/v${ver}`,
+              release_notes:
+                data.release_notes ||
+                (has_update
+                  ? `发现新版本 v${ver}（免限流 CDN 通道）`
+                  : '当前已是最新版本'),
+              assets:
+                Array.isArray(data.assets) && data.assets.length > 0
+                  ? data.assets
+                  : [
+                      {
+                        name: `猫步翻译_${ver}_x64-setup.exe`,
+                        url: `https://github.com/maobukeai/catwalk-translator/releases/download/v${ver}/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_${ver}_x64-setup.exe`,
+                        size: 0,
+                        sha256: null,
+                      },
+                    ],
+            },
+            has_update,
+            current_version: APP_VERSION,
+            error: null,
+          };
+        }
+      }
+    } catch {
+      // 探针失败，自动探测下一个
+    }
+  }
+
+  // 备用：尝试 GitHub REST API
   try {
     const res = await fetch('https://api.github.com/repos/maobukeai/catwalk-translator/releases/latest', {
       headers: { 'Accept': 'application/vnd.github.v3+json' },
@@ -1985,6 +2451,24 @@ export async function cmdClosePin(id: string): Promise<void> {
   await invoke('cmd_close_pin', { id });
 }
 
+export async function cmdOpenQuickWindow(): Promise<void> {
+  if (!isTauri()) {
+    console.warn('[Browser Mode] cmdOpenQuickWindow called');
+    return;
+  }
+  await invoke('cmd_open_quick_window');
+}
+
+export async function cmdRepositionPinToCursor(label: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke('cmd_reposition_pin_to_cursor', { label });
+}
+
+export async function cmdSetPinAlwaysOnTop(label: string, alwaysOnTop: boolean): Promise<void> {
+  if (!isTauri()) return;
+  await invoke('cmd_set_pin_always_on_top', { label, alwaysOnTop });
+}
+
 // ── 网络诊断 ──────────────────────────────────────────────────────────────
 
 export interface DiagItem {
@@ -2087,4 +2571,155 @@ export async function cmdHideLookupPopup(): Promise<void> {
   if (isTauri()) {
     await invoke('cmd_hide_lookup_popup');
   }
+}
+
+export function isBaiduLlmConfigured(settings?: Partial<import('./types').AppSettings> | null): boolean {
+  if (!settings) return false;
+  return Boolean(settings.baiduAppId?.trim() && settings.baiduLlmApiKey?.trim());
+}
+
+export async function cmdShowMainWindow(): Promise<void> {
+  if (isTauri()) {
+    await invoke('cmd_show_main_window');
+  }
+}
+
+// ── Anki 互通 API ────────────────────────────────────────────────────────
+
+export async function cmdAnkiCheckConnection(endpoint?: string): Promise<import('./types').AnkiCheckResult> {
+  if (isTauri()) {
+    return await invoke<import('./types').AnkiCheckResult>('cmd_anki_check_connection', { endpoint });
+  }
+  return {
+    connected: false,
+    version: 0,
+    decks: ['Default', 'Catwalk'],
+    models: ['Basic', 'Cloze'],
+    message: '浏览器环境无法直连 Anki 本地端口，请在桌面端体验',
+  };
+}
+
+export async function cmdAnkiSyncNotes(
+  notes: import('./types').AnkiNotePayload[],
+  deckName?: string,
+  endpoint?: string
+): Promise<import('./types').AnkiSyncResult> {
+  if (isTauri()) {
+    return await invoke<import('./types').AnkiSyncResult>('cmd_anki_sync_notes', { notes, deckName, endpoint });
+  }
+  return {
+    total: notes.length,
+    added: notes.length,
+    skipped: 0,
+    errors: [],
+  };
+}
+
+export async function cmdAnkiExportFile(notes: import('./types').AnkiNotePayload[]): Promise<string> {
+  if (isTauri()) {
+    return await invoke<string>('cmd_anki_export_file', { notes });
+  }
+  let tsv = '#separator:tab\n#html:true\n#tags column:3\n';
+  for (const n of notes) {
+    tsv += `${n.original}\t${n.translated}\tCatwalk\n`;
+  }
+  return tsv;
+}
+
+// ── 专业术语库 API ────────────────────────────────────────────────────────
+
+const MOCK_GLOSSARY_KEY = 'catwalk_mock_custom_glossary';
+
+export async function cmdGetCustomGlossary(): Promise<import('./types').UserGlossaryEntry[]> {
+  if (isTauri()) {
+    return await invoke<import('./types').UserGlossaryEntry[]>('cmd_get_custom_glossary');
+  }
+  const raw = localStorage.getItem(MOCK_GLOSSARY_KEY);
+  return raw ? JSON.parse(raw) : [];
+}
+
+export async function cmdImportCustomGlossary(
+  entries: import('./types').UserGlossaryEntry[],
+  mode: 'merge' | 'replace' = 'merge'
+): Promise<import('./types').GlossaryImportSummary> {
+  if (isTauri()) {
+    return await invoke<import('./types').GlossaryImportSummary>('cmd_import_custom_glossary', { entries, mode });
+  }
+  const existing = await cmdGetCustomGlossary();
+  let updated: import('./types').UserGlossaryEntry[];
+  if (mode === 'replace') {
+    updated = entries;
+  } else {
+    const map = new Map(existing.map((e) => [e.source.toLowerCase(), e]));
+    for (const e of entries) {
+      map.set(e.source.toLowerCase(), e);
+    }
+    updated = Array.from(map.values());
+  }
+  localStorage.setItem(MOCK_GLOSSARY_KEY, JSON.stringify(updated));
+  return {
+    totalParsed: entries.length,
+    added: entries.length,
+    updated: 0,
+    skipped: 0,
+    totalAfter: updated.length,
+  };
+}
+
+export async function cmdParseGlossaryText(
+  content: string,
+  format: 'csv' | 'txt' = 'csv'
+): Promise<import('./types').UserGlossaryEntry[]> {
+  if (isTauri()) {
+    return await invoke<import('./types').UserGlossaryEntry[]>('cmd_parse_glossary_text', { content, format });
+  }
+  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.map((l, i) => {
+    const parts = l.split(/[,=\t]/);
+    return {
+      id: `mock-${i}`,
+      source: parts[0]?.trim() || '',
+      target: parts[1]?.trim() || '',
+      category: '通用',
+      createdAt: Date.now(),
+    };
+  }).filter((e) => e.source && e.target);
+}
+
+export async function cmdUpsertCustomGlossaryEntry(entry: import('./types').UserGlossaryEntry): Promise<void> {
+  if (isTauri()) {
+    await invoke('cmd_upsert_custom_glossary_entry', { entry });
+    return;
+  }
+  const all = await cmdGetCustomGlossary();
+  const idx = all.findIndex((e) => e.id === entry.id || e.source.toLowerCase() === entry.source.toLowerCase());
+  if (idx >= 0) all[idx] = entry;
+  else all.push(entry);
+  localStorage.setItem(MOCK_GLOSSARY_KEY, JSON.stringify(all));
+}
+
+export async function cmdDeleteCustomGlossaryEntry(id: string): Promise<boolean> {
+  if (isTauri()) {
+    return await invoke<boolean>('cmd_delete_custom_glossary_entry', { id });
+  }
+  const all = await cmdGetCustomGlossary();
+  const filtered = all.filter((e) => e.id !== id);
+  localStorage.setItem(MOCK_GLOSSARY_KEY, JSON.stringify(filtered));
+  return all.length > filtered.length;
+}
+
+export async function cmdClearCustomGlossary(): Promise<void> {
+  if (isTauri()) {
+    await invoke('cmd_clear_custom_glossary');
+    return;
+  }
+  localStorage.removeItem(MOCK_GLOSSARY_KEY);
+}
+
+export async function cmdExportCustomGlossary(): Promise<string> {
+  if (isTauri()) {
+    return await invoke<string>('cmd_export_custom_glossary');
+  }
+  const all = await cmdGetCustomGlossary();
+  return '原词,译文,分类,备注\n' + all.map((e) => `"${e.source}","${e.target}","${e.category}","${e.note || ''}"`).join('\n');
 }

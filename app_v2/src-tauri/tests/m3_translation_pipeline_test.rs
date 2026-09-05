@@ -88,6 +88,22 @@ fn test_m3_query_text_detail_word_card() {
 }
 
 #[test]
+fn test_m3_query_text_detail_chinese_suppresses_phonetics() {
+    tauri::async_runtime::block_on(async {
+        let pipeline = MultiTierPipeline::new();
+        let res = pipeline.query_text_detail("你好", "blender", None, &[]).await;
+        assert_eq!(res.original, "你好");
+        assert!(res.word_detail.is_some());
+        let detail = res.word_detail.unwrap();
+        // Chinese words should never have phoneticUs or phoneticUk slashes
+        assert_eq!(detail.phonetic_us, "");
+        assert_eq!(detail.phonetic_uk, "");
+        assert_eq!(detail.pos, "常用词条 / 表达");
+        assert!(detail.examples.iter().any(|ex| ex.contains("你好")));
+    });
+}
+
+#[test]
 fn test_m3_dict_case_insensitive_lookup() {
     let pipeline = MultiTierPipeline::new();
 
@@ -329,6 +345,7 @@ fn test_m3_universal_translate_forced_engine_dict_routing() {
             forced_engine: Some("blender".to_string()),
             baidu_app_id: None,
             baidu_secret: None,
+            baidu_llm_api_key: None,
             deepl_api_key: None,
             deepl_custom_url: None,
             volcengine_access_key: None,
@@ -380,6 +397,7 @@ fn test_m3_universal_translate_forced_engine_substance_routing() {
             forced_engine: Some("substance".to_string()),
             baidu_app_id: None,
             baidu_secret: None,
+            baidu_llm_api_key: None,
             deepl_api_key: None,
             deepl_custom_url: None,
             volcengine_access_key: None,
@@ -486,6 +504,7 @@ fn test_m3_universal_translate_100_percent_cards_retained() {
             forced_engine: None,
             baidu_app_id: Some("mock_id".to_string()),
             baidu_secret: Some("mock_sec".to_string()),
+            baidu_llm_api_key: None,
             deepl_api_key: Some("mock_key".to_string()),
             deepl_custom_url: None,
             volcengine_access_key: None,

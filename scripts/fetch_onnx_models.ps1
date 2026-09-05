@@ -1,4 +1,4 @@
-# Downloads the three PP-OCRv3 ONNX models needed by the Rust-native OCR
+﻿# Downloads the three PP-OCRv3 ONNX models needed by the Rust-native OCR
 # engine into app_v2\src-tauri\models\ (Apache-2.0, PaddleOCR).
 #
 # Sources (in order of preference):

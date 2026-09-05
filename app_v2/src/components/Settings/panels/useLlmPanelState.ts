@@ -10,6 +10,10 @@ export const PROVIDER_DEFAULT_ENDPOINTS: Record<string, { endpoint: string; mode
     endpoint: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
   },
+  '百度文心 (千帆)': {
+    endpoint: 'https://qianfan.baidubce.com/v2',
+    model: 'ernie-speed-128k',
+  },
   SiliconFlow: {
     endpoint: 'https://api.siliconflow.cn/v1',
     model: 'deepseek-ai/DeepSeek-V3',
@@ -38,6 +42,22 @@ export const PROVIDER_DEFAULT_ENDPOINTS: Record<string, { endpoint: string; mode
     endpoint: 'https://api.custom-llm.com/v1',
     model: 'custom-model',
   },
+};
+
+export const PROVIDER_PRESET_MODELS: Record<string, string[]> = {
+  '百度文心 (千帆)': [
+    'ernie-speed-128k',
+    'ernie-lite-8k',
+    'ernie-4.0-turbo-8k',
+    'ernie-4.0-8k',
+    'ernie-3.5-8k',
+  ],
+  DeepSeek: ['deepseek-chat', 'deepseek-reasoner'],
+  SiliconFlow: ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1', 'Qwen/Qwen2.5-7B-Instruct'],
+  '智谱 GLM': ['glm-4-flash', 'glm-4-plus', 'glm-4-air'],
+  '通义千问': ['qwen-plus', 'qwen-turbo', 'qwen-max'],
+  Kimi: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
+  OpenAI: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'],
 };
 
 /**
@@ -76,25 +96,36 @@ export function useLlmPanelState() {
         ? [llm]
         : [];
 
-  const [fetchedModels, setFetchedModels] = useState<string[]>(llm.availableModels || []);
+  const [fetchedModels, setFetchedModels] = useState<string[]>(
+    llm.availableModels && llm.availableModels.length > 0
+      ? llm.availableModels
+      : PROVIDER_PRESET_MODELS[llm.provider] || []
+  );
   const [fetchModelNotice, setFetchModelNotice] = useState<string | null>(null);
 
   const handleProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newProvider = e.target.value;
     const defaults = PROVIDER_DEFAULT_ENDPOINTS[newProvider] || PROVIDER_DEFAULT_ENDPOINTS.Custom;
+    const presets = PROVIDER_PRESET_MODELS[newProvider];
     setLlmConfig({
       provider: newProvider,
       endpoint: defaults.endpoint,
       model: defaults.model,
+      ...(presets ? { availableModels: presets } : {}),
     });
+    if (presets) {
+      setFetchedModels(presets);
+    }
   };
 
   const handleAddModel = (provider: string) => {
     const defaults = PROVIDER_DEFAULT_ENDPOINTS[provider] || PROVIDER_DEFAULT_ENDPOINTS.Custom;
+    const presets = PROVIDER_PRESET_MODELS[provider];
     addLlmConfig({
       provider,
       model: defaults.model,
       endpoint: defaults.endpoint,
+      ...(presets ? { availableModels: presets } : {}),
     });
     setShowModelPicker(false);
   };

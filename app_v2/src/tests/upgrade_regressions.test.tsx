@@ -287,7 +287,7 @@ describe('v2.2 feature upgrades: snap / style / collapse / replay', () => {
     (window as any).__TAURI_INTERNALS__ = {};
 
     render(<HistoryPanel />);
-    expect(await screen.findByText('划词回放')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('subtab-replay'));
     expect(await screen.findByText(/1 场截图翻译可重看/)).toBeInTheDocument();
 
     const row = screen.getByText('2026/8/16 18:00:00').closest('div.cursor-pointer')!;

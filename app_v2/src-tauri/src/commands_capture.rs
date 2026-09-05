@@ -943,7 +943,7 @@ pub async fn cmd_show_overlay(window: tauri::WebviewWindow) -> Result<(), String
         const SM_CXVIRTUALSCREEN: i32 = 78;
         const SM_CYVIRTUALSCREEN: i32 = 79;
 
-        let (vx, vy, vw, vh) = unsafe {
+        let (mut vx, mut vy, mut vw, mut vh) = unsafe {
             (
                 GetSystemMetrics(SM_XVIRTUALSCREEN),
                 GetSystemMetrics(SM_YVIRTUALSCREEN),
@@ -951,6 +951,15 @@ pub async fn cmd_show_overlay(window: tauri::WebviewWindow) -> Result<(), String
                 GetSystemMetrics(SM_CYVIRTUALSCREEN),
             )
         };
+
+        const SM_CXSCREEN: i32 = 0;
+        const SM_CYSCREEN: i32 = 1;
+        if vw <= 0 || vh <= 0 {
+            vx = 0;
+            vy = 0;
+            vw = unsafe { GetSystemMetrics(SM_CXSCREEN).max(800) };
+            vh = unsafe { GetSystemMetrics(SM_CYSCREEN).max(600) };
+        }
 
         let _ = window.set_always_on_top(true);
         let _ = window.set_shadow(false);

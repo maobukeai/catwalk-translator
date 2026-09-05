@@ -356,6 +356,9 @@ pub struct UniversalTranslationRequest {
     /// 百度翻译开放平台密钥（与 AppID 配合使用）
     #[serde(default)]
     pub baidu_secret: Option<String>,
+    /// 百度翻译开放平台大模型版专用 API Key (Bearer Token)
+    #[serde(default)]
+    pub baidu_llm_api_key: Option<String>,
     /// DeepL 官方免费 API Key（deepl.com 注册，每月 50 万字符）
     #[serde(default)]
     pub deepl_api_key: Option<String>,
@@ -507,6 +510,37 @@ pub struct CustomDictItem {
     pub created_at: String,
 }
 
+/// AnkiConnect 本地同步配置
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnkiSettings {
+    #[serde(default = "default_true_opt")]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub deck_name: Option<String>,
+    #[serde(default)]
+    pub model_name: Option<String>,
+    #[serde(default)]
+    pub auto_sync_on_star: Option<bool>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+impl Default for AnkiSettings {
+    fn default() -> Self {
+        Self {
+            enabled: Some(true),
+            endpoint: Some("http://127.0.0.1:8765".to_string()),
+            deck_name: Some("Catwalk".to_string()),
+            model_name: Some("Basic".to_string()),
+            auto_sync_on_star: Some(false),
+            tags: Some(vec!["Catwalk".to_string()]),
+        }
+    }
+}
+
 // 注意：tts_rate 为 f32，不可派生 Eq，仅保留 PartialEq
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -516,10 +550,12 @@ pub struct AppSettings {
     pub spotlight_hotkey: Option<String>,
     pub clipboard_hotkey: Option<String>,
     pub toggle_window_hotkey: Option<String>,
+    pub quick_window_hotkey: Option<String>,
     pub capture_hotkey_enabled: Option<bool>,
     pub spotlight_hotkey_enabled: Option<bool>,
     pub clipboard_hotkey_enabled: Option<bool>,
     pub toggle_window_hotkey_enabled: Option<bool>,
+    pub quick_window_hotkey_enabled: Option<bool>,
     pub default_preset: String,
     pub llm_config: Option<LlmConfig>,
     /// Multi-model configuration pool. The active model is mirrored in `llm_config`.
@@ -566,6 +602,12 @@ pub struct AppSettings {
     /// 百度翻译开放平台密钥（与 AppID 配合使用）
     #[serde(default)]
     pub baidu_secret: Option<String>,
+    /// 百度翻译开放平台大模型版专用 API Key (Bearer Token)
+    #[serde(default)]
+    pub baidu_llm_api_key: Option<String>,
+    /// 是否通用版与大模型版使用相同密钥
+    #[serde(default)]
+    pub use_baidu_same_secret: Option<bool>,
     /// DeepL 官方免费 API Key（deepl.com 注册，每月 50 万字符）
     #[serde(default)]
     pub deepl_api_key: Option<String>,
@@ -635,6 +677,9 @@ pub struct AppSettings {
     /// 用户自定义词库(术语强制表):前端 CRUD,随 settings.json 持久化
     #[serde(default)]
     pub custom_dict_items: Vec<CustomDictItem>,
+    /// AnkiConnect 本地同步配置
+    #[serde(default)]
+    pub anki_settings: Option<AnkiSettings>,
 }
 
 impl Default for AppSettings {
@@ -644,11 +689,13 @@ impl Default for AppSettings {
             hotkey: "F4".to_string(),
             spotlight_hotkey: Some("Alt+Space".to_string()),
             clipboard_hotkey: Some("Ctrl+Shift+C".to_string()),
-            toggle_window_hotkey: Some("Alt+Q".to_string()),
+            toggle_window_hotkey: Some("Alt+W".to_string()),
+            quick_window_hotkey: Some("Alt+W".to_string()),
             capture_hotkey_enabled: Some(true),
             spotlight_hotkey_enabled: Some(false),
             clipboard_hotkey_enabled: Some(false),
             toggle_window_hotkey_enabled: Some(false),
+            quick_window_hotkey_enabled: Some(false),
             default_preset: "blender".to_string(),
             auto_detect_preset: Some(true),
             enable_llm_progressive_refine: Some(true),
@@ -709,6 +756,8 @@ impl Default for AppSettings {
             primary_translation_engine: None,
             baidu_app_id: None,
             baidu_secret: None,
+            baidu_llm_api_key: None,
+            use_baidu_same_secret: Some(true),
             deepl_api_key: None,
             deepl_custom_url: None,
             volcengine_access_key: None,
@@ -724,6 +773,7 @@ impl Default for AppSettings {
             backup_settings: None,
             webdav_config: None,
             custom_dict_items: Vec::new(),
+            anki_settings: Some(AnkiSettings::default()),
         }
     }
 }

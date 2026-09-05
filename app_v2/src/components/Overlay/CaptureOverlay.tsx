@@ -10,7 +10,7 @@
  *  5. Render in-place translated text blocks directly at exact original screen coordinates
  *  6. Right-click or Esc to dismiss and restore main window (unless pinned)
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   cmdBeginCapture,
   cmdShowOverlay,
@@ -426,6 +426,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           translationTiers: settings.translationTiers,
           baiduAppId: settings.baiduAppId,
           baiduSecret: settings.baiduSecret,
+          baiduLlmApiKey: settings.baiduLlmApiKey,
           deeplApiKey: settings.deeplApiKey,
           deeplCustomUrl: settings.deeplCustomUrl,
         });
@@ -581,10 +582,16 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   );
 
   // ── Re-translate existing blocks when targetLang / engine changes ────────────
+  const retranslateEpochRef = useRef(0);
+
   const retranslateBlocks = useCallback(
     async (newTargetLang: LanguageCode, engine: string) => {
       if (!overlayResult || overlayResult.blocks.length === 0) return;
       const total = overlayResult.blocks.length;
+      retranslateEpochRef.current += 1;
+      const currentEpoch = retranslateEpochRef.current;
+      const stale = () => !mountedRef.current || retranslateEpochRef.current !== currentEpoch;
+
       setTranslatingProgress({ done: 0, total });
       try {
         const activeLlm = resolveLlmConfig(engine);
@@ -592,53 +599,114 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         const style = settings.translationStyle;
         const forcedEngine = engine === 'auto' ? undefined : engine;
 
-        // 当用户显式指定了第三方在线通道（如 DeepL/Baidu 等）时，按渠道调用 cmdUniversalTranslate 满足 API Key 与渠道路由
+        // 1. 优先从前端 TranslationMemo 缓存中读取相同 targetLang 的结果 (0ms 瞬开)
+        const phrases = overlayResult.blocks.map((b) => b.original);
+        const memoHits = new Map<number, TranslationResult>();
+        const misses: number[] = [];
+        phrases.forEach((p, i) => {
+          const hit = memoGet(memoKey(p, newTargetLang, preset, style, glossaryFp));
+          if (hit) memoHits.set(i, hit);
+          else misses.push(i);
+        });
+
+        // 2. 当用户显式指定了第三方在线通道（如 DeepL/Baidu 等）
         if (forcedEngine && !forcedEngine.startsWith('llm') && !settings.presetDicts?.[forcedEngine as keyof typeof settings.presetDicts]) {
-          let done = 0;
-          const updatedBlocks = await Promise.all(
-            overlayResult.blocks.map(async (block) => {
-              const res = await cmdUniversalTranslate({
-                text: block.original,
-                sourceLang: 'auto',
-                targetLang: newTargetLang,
-                preset: effectivePreset(),
-                llmConfig: activeLlm,
-                llmConfigs: settings.llmConfigs,
-                presetDicts: settings.presetDicts,
-                onlineEngines: settings.onlineEngines,
-                translationTiers: settings.translationTiers,
-                style: settings.translationStyle,
-                forcedEngine,
-                baiduAppId: settings.baiduAppId,
-                baiduSecret: settings.baiduSecret,
-                deeplApiKey: settings.deeplApiKey,
-                deeplCustomUrl: settings.deeplCustomUrl,
-              });
-              done += 1;
-              if (mountedRef.current) setTranslatingProgress({ done, total });
-              return {
-                ...block,
-                translated: res.mainTranslation || block.translated,
-                sourceTier: res.engines[0]?.sourceTier || block.sourceTier,
-                translationFailed: !res.mainTranslation,
-              };
-            })
-          );
+          let done = memoHits.size;
+          const updatedBlocks = [...overlayResult.blocks];
+          
+          memoHits.forEach((hit, idx) => {
+            updatedBlocks[idx] = {
+              ...updatedBlocks[idx],
+              translated: hit.translated || updatedBlocks[idx].translated,
+              sourceTier: hit.sourceTier || updatedBlocks[idx].sourceTier,
+              translationFailed: !hit.translated,
+            };
+          });
+          if (mountedRef.current) setTranslatingProgress({ done, total });
+
+          if (misses.length > 0) {
+            await Promise.all(
+              misses.map(async (idx) => {
+                const block = overlayResult.blocks[idx];
+                const res = await cmdUniversalTranslate({
+                  text: block.original,
+                  sourceLang: 'auto',
+                  targetLang: newTargetLang,
+                  preset: effectivePreset(),
+                  llmConfig: activeLlm,
+                  llmConfigs: settings.llmConfigs,
+                  presetDicts: settings.presetDicts,
+                  onlineEngines: settings.onlineEngines,
+                  translationTiers: settings.translationTiers,
+                  style: settings.translationStyle,
+                  forcedEngine,
+                  baiduAppId: settings.baiduAppId,
+                  baiduSecret: settings.baiduSecret,
+                  baiduLlmApiKey: settings.baiduLlmApiKey,
+                  deeplApiKey: settings.deeplApiKey,
+                  deeplCustomUrl: settings.deeplCustomUrl,
+                });
+                done += 1;
+                if (mountedRef.current) setTranslatingProgress({ done, total });
+                const trResult: TranslationResult = {
+                  original: block.original,
+                  translated: res.mainTranslation || block.translated,
+                  sourceTier: res.engines[0]?.sourceTier || block.sourceTier,
+                };
+                if (trResult.translated && trResult.translated.trim()) {
+                  memoPut(memoKey(block.original, newTargetLang, preset, style, glossaryFp), trResult);
+                }
+                updatedBlocks[idx] = {
+                  ...block,
+                  translated: trResult.translated,
+                  sourceTier: trResult.sourceTier,
+                  translationFailed: !res.mainTranslation,
+                };
+              })
+            );
+          }
+          if (stale()) return;
           setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : null));
           showFeedback(`已切换至 ${engine} 重新翻译全部卡片`);
         } else {
-          // 切换语种/auto/LLM/词典统一收敛为单次批处理 translate 接口，杜绝 N 次网络并发单发与连接风控打满
-          const phrases = overlayResult.blocks.map((b) => b.original);
-          const batchResults = await cmdTranslatePhrasesStyled(
-            phrases,
-            preset,
-            activeLlm,
-            style,
-            newTargetLang
-          );
+          // 3. auto 模式或 LLM / 词典模式
+          let translations: TranslationResult[];
+          if (misses.length === 0) {
+            // 全部命中缓存，0ms 瞬间完成！
+            translations = phrases.map((_, i) => memoHits.get(i)!);
+          } else {
+            // 快通道（Stage-2）：渐进精翻模式或自动模式下绝不阻塞等待大模型，传 null 确保只走本地词库 + 在线引擎并发大竞速（150ms 秒级上屏！）
+            const isProgressive =
+              settings.enableLlmProgressiveRefine !== false &&
+              (engine === 'auto' || !engine.startsWith('llm'));
+            const fastLlmConfig = isProgressive ? null : activeLlm;
+
+            const fetched = await cmdTranslatePhrasesStyled(
+              misses.map((i) => phrases[i]),
+              preset,
+              fastLlmConfig,
+              style,
+              newTargetLang
+            );
+            if (stale()) return;
+
+            const byIdx = new Map<number, TranslationResult>();
+            misses.forEach((pi, k) => {
+              const tr = fetched[k];
+              if (tr) {
+                byIdx.set(pi, tr);
+                if (tr.translated && tr.translated.trim()) {
+                  memoPut(memoKey(phrases[pi], newTargetLang, preset, style, glossaryFp), tr);
+                }
+              }
+            });
+            translations = phrases.map(
+              (_, i) => byIdx.get(i) ?? memoHits.get(i) ?? { original: phrases[i], translated: '', sourceTier: 'OCR' }
+            );
+          }
 
           const updatedBlocks = overlayResult.blocks.map((block, i) => {
-            const res = batchResults[i];
+            const res = translations[i];
             return {
               ...block,
               translated: res?.translated || block.translated,
@@ -647,8 +715,112 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             };
           });
 
+          if (stale()) return;
           setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : null));
-          showFeedback(`已切换至 ${engine === 'auto' ? '智能回退' : engine} 重新翻译全部卡片`);
+          showFeedback(`已切换至 ${engine === 'auto' ? '智能回退' : engine} (${newTargetLang})`);
+
+          // 4. 后台异步精翻（Stage-3）：快通道卡片已 150ms 秒级上屏，若有大模型在后台异步进行润色
+          const isProgressive =
+            settings.enableLlmProgressiveRefine !== false &&
+            (engine === 'auto' || !engine.startsWith('llm'));
+
+          const candidateLlms: typeof settings.llmConfigs = [];
+          if (
+            activeLlm &&
+            activeLlm.endpoint &&
+            (activeLlm.apiKey || activeLlm.endpoint.includes('localhost') || activeLlm.endpoint.includes('127.0.0.1')) &&
+            activeLlm.enabled !== false
+          ) {
+            candidateLlms.push(activeLlm);
+          }
+          (settings.llmConfigs || []).forEach((cfg) => {
+            if (
+              cfg.endpoint &&
+              (cfg.apiKey || cfg.endpoint.includes('localhost') || cfg.endpoint.includes('127.0.0.1')) &&
+              cfg.enabled !== false &&
+              !candidateLlms.some((c) => c.id === cfg.id || (c.endpoint === cfg.endpoint && c.model === cfg.model))
+            ) {
+              candidateLlms.push(cfg);
+            }
+          });
+
+          if (isProgressive && candidateLlms.length > 0) {
+            const refineCandidates: { index: number; phrase: string }[] = [];
+            updatedBlocks.forEach((block, idx) => {
+              const orig = block.original.trim();
+              const tier = block.sourceTier || '';
+              if (
+                orig.length >= 2 &&
+                !tier.includes('custom_dict') &&
+                !tier.includes('标识符透传') &&
+                !tier.includes('LLM') &&
+                !tier.includes('离线词库') &&
+                !/^\d+([.,]\d+)?%?$/.test(orig)
+              ) {
+                refineCandidates.push({ index: idx, phrase: orig });
+              }
+            });
+
+            if (refineCandidates.length > 0) {
+              (async () => {
+                try {
+                  setIsAiRefining(true);
+                  const phrasesToRefine = refineCandidates.map((c) => c.phrase);
+                  let resultMap: Record<string, string> = {};
+                  let usedLlm: (typeof candidateLlms)[0] | null = null;
+                  for (const currentLlm of candidateLlms) {
+                    try {
+                      const map = await cmdLlmBatchRefine(phrasesToRefine, currentLlm, style, newTargetLang);
+                      if (map && Object.keys(map).length > 0) {
+                        resultMap = map;
+                        usedLlm = currentLlm;
+                        break;
+                      }
+                    } catch (e) {
+                      console.warn(`[CaptureOverlay] Retranslate LLM ${currentLlm.model || currentLlm.provider} failed:`, e);
+                    }
+                  }
+
+                  if (stale()) return;
+
+                  if (usedLlm && Object.keys(resultMap).length > 0) {
+                    const tierLabel = `AI 精翻 ✨ (${usedLlm.provider || usedLlm.model})`;
+                    setOverlayResult((prev) => {
+                      if (!prev) return prev;
+                      const nextBlocks = prev.blocks.map((b, i) => {
+                        const cand = refineCandidates.find((c) => c.index === i);
+                        if (cand) {
+                          const origClean = cand.phrase;
+                          const refined =
+                            resultMap[origClean] ||
+                            resultMap[origClean.toLowerCase()] ||
+                            resultMap[origClean.replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, '').trim()];
+                          if (refined && refined.trim() && refined.trim() !== b.translated) {
+                            const newTr: TranslationResult = {
+                              original: b.original,
+                              translated: refined.trim(),
+                              sourceTier: tierLabel,
+                            };
+                            memoPut(memoKey(b.original, newTargetLang, preset, style, glossaryFp), newTr);
+                            return {
+                              ...b,
+                              translated: refined.trim(),
+                              sourceTier: tierLabel,
+                              translationFailed: false,
+                            };
+                          }
+                        }
+                        return b;
+                      });
+                      return { ...prev, blocks: nextBlocks };
+                    });
+                  }
+                } finally {
+                  if (!stale()) setIsAiRefining(false);
+                }
+              })();
+            }
+          }
         }
       } catch (err) {
         console.warn('[CaptureOverlay] Retranslate error:', err);
@@ -657,7 +829,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         if (mountedRef.current) setTranslatingProgress(null);
       }
     },
-    [overlayResult, settings]
+    [overlayResult, settings, effectivePreset, resolveLlmConfig, glossaryFp]
   );
 
   const handleLanguageChange = (lang: LanguageCode) => {
@@ -923,7 +1095,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         // Ctrl+D: Add the ACTIVE card to favorite / vocabulary
         if (e.ctrlKey && e.key.toLowerCase() === 'd') {
           e.preventDefault();
-          saveTranslationHistory(targetBlock.original, targetBlock.translated, `${targetBlock.sourceTier} (⭐已生词本)`).catch(console.warn);
+          saveTranslationHistory(targetBlock.original, targetBlock.translated, `${targetBlock.sourceTier} (⭐已生词本)`, true).catch(console.warn);
           showFeedback(`⭐ 已收藏第 ${activeIdx + 1} 段至生词本 (Ctrl+D)`);
           return;
         }
@@ -1254,12 +1426,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : prev));
       setTranslatingProgress({ done: translatedCount, total: layout.blocks.length });
 
-      // 将识别并翻译的文本块异步写入历史记录（按原文去重）
-      updatedBlocks.forEach((b) => {
-        saveTranslationHistory(b.original, b.translated, b.sourceTier).catch((e) =>
-          console.warn('History save failed:', e)
-        );
-      });
+      // 截图整场划词会话通过 cmdSaveCaptureSession 归档至「截图划词回放」，
+      // 不再将零散碎块无脑刷屏写入全局历史记录，单个词块由用户在卡片上点击 ⭐ 主动加入生词本。
 
       // 保存整场划词会话，供主窗口「划词回放」重看与导出（监控 tick 不重复存档）
       if (!isWatch) {
@@ -1375,12 +1543,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
               if (refinedAny && !stale()) {
                 showFeedback(`✨ ${usedLlm.model || usedLlm.provider || 'AI'} 深度精翻已就绪`);
-                // 异步更新持久化的历史记录与回放会话
-                latestBlocks.forEach((b) => {
-                  if (b.sourceTier && b.sourceTier.includes('✨')) {
-                    saveTranslationHistory(b.original, b.translated, b.sourceTier).catch(console.warn);
-                  }
-                });
+                // 异步更新回放会话，不污染历史与生词本列表
                 cmdSaveCaptureSession({
                   id: `sess_${Date.now()}`,
                   timestamp: new Date().toLocaleString(),
@@ -1456,7 +1619,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     }
   };
 
-  /** 把译文块钉成桌面贴图（独立置顶小窗，overlay 关闭后仍常驻） */
+  /** 把译文块钉成桌面贴图（统一置顶小窗，overlay 关闭后仍常驻） */
   const pinOverlayBlocks = (
     pinBlocks: { original: string; translated: string; sourceTier: string }[],
     title: string,
@@ -1464,16 +1627,15 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     originY: number,
   ) => {
     if (pinBlocks.length === 0) return;
-    const id = `pin_${Date.now()}`;
-    const height = Math.min(680, 104 + pinBlocks.length * 74);
+    const id = "quick";
     cmdOpenPin({
       id,
-      title,
+      title: title || "翻译结果",
       blocks: pinBlocks,
       x: Math.max(8, (typeof window !== 'undefined' ? window.screenX : 0) + originX),
       y: Math.max(8, (typeof window !== 'undefined' ? window.screenY : 0) + originY),
-      width: 380,
-      height,
+      width: 460,
+      height: 520,
     })
       .then(() => showFeedback('📌 已贴图到桌面（可拖拽 / 滚轮缩放）'))
       .catch((e) => showFeedback(`⚠️ 贴图失败：${String(e).slice(0, 40)}`));
@@ -2156,6 +2318,41 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   };
   handleCloseRef.current = handleClose;
 
+  const isAiRefined = useMemo(() => {
+    return (
+      overlayResult?.blocks.some(
+        (b) =>
+          b.sourceTier &&
+          (b.sourceTier.includes('✨') ||
+            b.sourceTier.includes('AI 精翻') ||
+            b.sourceTier.includes('LLM') ||
+            b.sourceTier.toLowerCase().includes('deepseek') ||
+            b.sourceTier.toLowerCase().includes('openai') ||
+            b.sourceTier.toLowerCase().includes('ollama'))
+      ) ?? false
+    );
+  }, [overlayResult]);
+
+  const aiEngineName = useMemo(() => {
+    if (!overlayResult) return '';
+    const blockWithAi = overlayResult.blocks.find(
+      (b) =>
+        b.sourceTier &&
+        (b.sourceTier.includes('✨') ||
+          b.sourceTier.includes('AI 精翻') ||
+          b.sourceTier.includes('LLM') ||
+          b.sourceTier.toLowerCase().includes('deepseek') ||
+          b.sourceTier.toLowerCase().includes('openai') ||
+          b.sourceTier.toLowerCase().includes('ollama'))
+    );
+    if (!blockWithAi?.sourceTier) return '';
+    const tier = blockWithAi.sourceTier;
+    const match = tier.match(/\(([^)]+)\)/);
+    if (match) return match[1].trim();
+    const cleaned = tier.replace(/✨|AI|精翻/g, '').trim();
+    return cleaned || 'AI';
+  }, [overlayResult]);
+
   if (!isOpen) return null;
 
   const selBox = startPos && currPos ? {
@@ -2560,6 +2757,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           onCheatSheet={() => setCheatOpen(true)}
           isDowngraded={isDowngraded}
           effectiveEngineName={effectiveEngineName}
+          isAiRefined={isAiRefined}
+          isAiRefining={isAiRefining}
+          aiEngineName={aiEngineName}
           bannerDismissed={bannerDismissed}
           viewMode={cardViewMode}
           onSelectViewMode={setCardViewMode}
@@ -2573,13 +2773,13 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             left: Math.max(
               12,
               Math.min(
-                effectiveRect.x + (effectiveRect.width - Math.min(1040, vw - 24)) / 2,
-                Math.max(12, vw - Math.min(1040, vw - 24) - 12)
+                effectiveRect.x + (effectiveRect.width - Math.min(480, vw - 24)) / 2,
+                Math.max(12, vw - Math.min(480, vw - 24) - 12)
               )
             ),
             top:
-              effectiveRect.y + effectiveRect.height + 10 + 46 > vh - 10
-                ? Math.max(10, effectiveRect.y - 52)
+              effectiveRect.y + effectiveRect.height + 10 + 78 > vh - 10
+                ? Math.max(10, effectiveRect.y - 88)
                 : effectiveRect.y + effectiveRect.height + 10,
           }}
         />
@@ -2743,7 +2943,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                 title="收藏到生词本"
                 className="p-1 rounded-md text-zinc-300 hover:text-amber-300 hover:bg-white/10 transition cursor-pointer"
                 onClick={() => {
-                  saveTranslationHistory(hoverBubble.text, hoverBubble.translated, `${hoverBubble.tier || 'hover'} (⭐已生词本)`).catch(console.warn);
+                  saveTranslationHistory(hoverBubble.text, hoverBubble.translated, `${hoverBubble.tier || 'hover'} (⭐已生词本)`, true).catch(console.warn);
                   showFeedback('⭐ 已收藏至生词本');
                 }}
               >
@@ -2948,7 +3148,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               {
                 label: '⭐ 收藏到生词本',
                 run: () => {
-                  saveTranslationHistory(mb.original, mb.translated, `${mb.sourceTier} (⭐已生词本)`).catch(console.warn);
+                  saveTranslationHistory(mb.original, mb.translated, `${mb.sourceTier} (⭐已生词本)`, true).catch(console.warn);
                   showFeedback('⭐ 已收藏至生词本');
                 },
               },

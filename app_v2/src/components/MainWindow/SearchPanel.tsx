@@ -16,15 +16,31 @@ import {
   MousePointer2,
   Keyboard,
   Settings,
+  RotateCw,
+  Lightbulb,
+  Tag,
+  ChevronRight,
 } from "lucide-react";
-import { cmdQueryText, cmdGetHistory, cmdAddHistory, cmdToggleFavorite } from "../../services/tauri";
+import {
+  cmdQueryText,
+  cmdGetHistory,
+  cmdAddHistory,
+  cmdToggleFavorite,
+  fetchAiWordContext,
+} from "../../services/tauri";
 import { speakText } from "../../services/tts";
-import type { TextQueryResponse, AppSettings, HistoryItem } from "../../services/types";
+import type {
+  TextQueryResponse,
+  AppSettings,
+  HistoryItem,
+  AiWordContext,
+} from "../../services/types";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppTheme } from "../../hooks/useAppTheme";
 
 interface SearchPanelProps {
   settings: AppSettings;
+  onOpenSettings?: () => void;
 }
 
 /** 空状态常用术语快捷标签（点按即查） */
@@ -39,7 +55,38 @@ const CG_QUICK_TERMS = [
   "Roughness",
 ];
 
-export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
+function highlightQueryTerm(text: string, term: string, transTerm?: string) {
+  if (!text || (!term?.trim() && !transTerm?.trim())) return text;
+  const termsToHighlight = [term, transTerm]
+    .filter(Boolean)
+    .map((t) => t!.trim())
+    .filter((t) => t.length > 1);
+  if (termsToHighlight.length === 0) return text;
+
+  const escaped = termsToHighlight
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const regex = new RegExp(`(${escaped})`, "gi");
+  const parts = text.split(regex);
+
+  return parts.map((part, i) => {
+    const isMatched = termsToHighlight.some(
+      (t) => t.toLowerCase() === part.toLowerCase()
+    );
+    return isMatched ? (
+      <span
+        key={i}
+        className="font-bold text-blue-600 dark:text-sky-300 bg-blue-500/10 dark:bg-blue-400/20 px-1 py-0.5 rounded transition"
+      >
+        {part}
+      </span>
+    ) : (
+      part
+    );
+  });
+}
+
+export const SearchPanel: React.FC<SearchPanelProps> = ({ settings, onOpenSettings }) => {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<TextQueryResponse | null>(null);
@@ -47,6 +94,9 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
   const [isFavorite, setIsFavorite] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [recent, setRecent] = useState<HistoryItem[]>([]);
+  const [aiContext, setAiContext] = useState<AiWordContext | null>(null);
+  const [aiContextLoading, setAiContextLoading] = useState(false);
+  const [copiedAiKey, setCopiedAiKey] = useState<string | null>(null);
 
   const { isLight } = useAppTheme();
 
@@ -74,6 +124,45 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
     loadRecent();
   }, []);
 
+  const loadAiContext = async (
+    word: string,
+    mainTrans: string,
+    bypassCache: boolean = false
+  ) => {
+    if (!word.trim()) return;
+    const isLocal =
+      !!settings.llmConfig?.endpoint?.includes("localhost") ||
+      !!settings.llmConfig?.endpoint?.includes("127.0.0.1");
+    const isConfigured = !!settings.llmConfig?.apiKey?.trim() || isLocal;
+    if (!isConfigured) {
+      setAiContext(null);
+      setAiContextLoading(false);
+      return;
+    }
+
+    setAiContextLoading(true);
+    try {
+      const ctx = await fetchAiWordContext(
+        word,
+        mainTrans,
+        settings.llmConfig,
+        settings.defaultPreset,
+        bypassCache
+      );
+      setAiContext(ctx);
+    } catch (err) {
+      console.warn("Failed to load AI word context:", err);
+    } finally {
+      setAiContextLoading(false);
+    }
+  };
+
+  const handleCopyAiText = (key: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedAiKey(key);
+    setTimeout(() => setCopiedAiKey(null), 2000);
+  };
+
   const handleSearch = async (textToSearch?: string) => {
     const q = textToSearch !== undefined ? textToSearch : query;
     if (!q.trim()) return;
@@ -82,6 +171,10 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
     try {
       const res = await cmdQueryText(q, settings.defaultPreset, settings.llmConfig);
       setResult(res);
+      setAiContext(null);
+      if (res.wordDetail) {
+        loadAiContext(res.original, res.wordDetail.definition, false);
+      }
 
       // 从真实历史中同步收藏状态
       const current = await cmdGetHistory();
@@ -323,9 +416,11 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
                 </span>
               </div>
               <div className={`flex items-center space-x-4 mt-2 text-sm font-mono ${isLight ? "text-slate-500" : "text-zinc-400"}`}>
-                <span>美 {result.wordDetail.phoneticUs}</span>
-                <span>英 {result.wordDetail.phoneticUk}</span>
-                <span className={`font-sans ${isLight ? "text-slate-400" : "text-zinc-500"}`}>{result.wordDetail.pos}</span>
+                {result.wordDetail.phoneticUs ? <span>美 {result.wordDetail.phoneticUs}</span> : null}
+                {result.wordDetail.phoneticUk ? <span>英 {result.wordDetail.phoneticUk}</span> : null}
+                {result.wordDetail.pos ? (
+                  <span className={`font-sans ${isLight ? "text-slate-400" : "text-zinc-500"}`}>{result.wordDetail.pos}</span>
+                ) : null}
               </div>
             </div>
 
@@ -365,13 +460,148 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
             <p className="text-base font-bold leading-relaxed">{result.wordDetail.definition}</p>
           </div>
 
-          {/* Context Sentences */}
-          {result.wordDetail.examples.length > 0 && (
-            <div className="space-y-2 pt-2">
+          {/* Context Sentences & AI Deep Explanation */}
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center justify-between">
               <div className={`text-xs font-semibold uppercase tracking-wider flex items-center space-x-1.5 ${isLight ? "text-slate-500" : "text-zinc-400"}`}>
                 <BookOpen className="h-3.5 w-3.5 text-blue-500" />
-                <span>语境例句 / Context</span>
+                <span>语境例句与场景解析 / Context & Collocations</span>
               </div>
+              {(settings.llmConfig?.apiKey || settings.llmConfig?.endpoint?.includes("localhost") || settings.llmConfig?.endpoint?.includes("127.0.0.1")) && (
+                <button
+                  type="button"
+                  onClick={() => loadAiContext(result.original, result.wordDetail!.definition, true)}
+                  disabled={aiContextLoading}
+                  className={`flex items-center space-x-1 text-[11px] font-medium px-2.5 py-1 rounded-lg border transition cursor-pointer ${
+                    isLight
+                      ? "bg-slate-50 border-slate-200 text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700"
+                      : "bg-white/[0.03] border-white/10 text-zinc-400 hover:bg-white/[0.08] hover:border-white/20 hover:text-sky-300"
+                  } disabled:opacity-50`}
+                  title="重新请求大模型生成另一组例句与搭配"
+                >
+                  <RotateCw className={`h-3 w-3 ${aiContextLoading ? "animate-spin text-blue-500" : ""}`} />
+                  <span>{aiContextLoading ? "AI 生成中..." : "✨ 换一批"}</span>
+                </button>
+              )}
+            </div>
+
+            {/* AI Loading Skeleton */}
+            {aiContextLoading && (
+              <div className={`p-4 rounded-xl border space-y-3 animate-pulse ${
+                isLight ? "bg-blue-50/40 border-blue-200/60" : "bg-blue-950/20 border-blue-500/20"
+              }`}>
+                <div className="flex items-center space-x-2 text-xs font-medium text-blue-600 dark:text-sky-400">
+                  <Sparkles className="h-3.5 w-3.5 animate-spin" />
+                  <span>AI 大模型正在提炼专业地道例句与场景搭配...</span>
+                </div>
+                <div className="space-y-2 pt-1">
+                  <div className={`h-3 rounded-md w-4/5 ${isLight ? "bg-slate-200" : "bg-white/10"}`} />
+                  <div className={`h-3 rounded-md w-3/5 ${isLight ? "bg-slate-200" : "bg-white/10"}`} />
+                </div>
+              </div>
+            )}
+
+            {/* AI Context Card (Rich Mode) */}
+            {!aiContextLoading && aiContext && aiContext.examples.length > 0 && (
+              <div className="space-y-3">
+                {/* 1. Bilingual Examples */}
+                <div className="space-y-2.5">
+                  {aiContext.examples.map((ex, idx) => {
+                    const copyKey = `ex_${idx}`;
+                    const isCopied = copiedAiKey === copyKey;
+                    return (
+                      <div
+                        key={idx}
+                        className={`group relative p-3.5 rounded-xl border transition shadow-xs ${
+                          isLight
+                            ? "bg-slate-50/80 border-slate-200/90 hover:border-blue-300 hover:bg-white"
+                            : "bg-white/[0.03] border-white/8 hover:border-white/20 hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="space-y-1 pr-1 flex-1">
+                            <p className={`text-sm font-medium leading-relaxed font-sans ${isLight ? "text-slate-900" : "text-zinc-100"}`}>
+                              {highlightQueryTerm(ex.en, result.original, result.wordDetail?.definition)}
+                            </p>
+                            <p className={`text-xs leading-relaxed ${isLight ? "text-slate-500" : "text-zinc-400"}`}>
+                              {ex.zh}
+                            </p>
+                          </div>
+                          <div className="flex items-center space-x-1 shrink-0 opacity-80 group-hover:opacity-100 transition">
+                            <button
+                              type="button"
+                              onClick={() => speakText(ex.en, { lang: "en-US" })}
+                              className={`p-1.5 rounded-lg border transition cursor-pointer ${
+                                isLight ? "bg-white border-slate-200 hover:bg-slate-100 text-slate-600" : "bg-white/5 border-white/10 hover:bg-white/15 text-zinc-300"
+                              }`}
+                              title="朗读英文例句"
+                            >
+                              <Volume2 className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyAiText(copyKey, `${ex.en}\n${ex.zh}`)}
+                              className={`p-1.5 rounded-lg border transition cursor-pointer ${
+                                isLight ? "bg-white border-slate-200 hover:bg-slate-100 text-slate-600" : "bg-white/5 border-white/10 hover:bg-white/15 text-zinc-300"
+                              }`}
+                              title="复制双语例句"
+                            >
+                              {isCopied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 2. Collocations & Phrases */}
+                {aiContext.collocations && aiContext.collocations.length > 0 && (
+                  <div className="space-y-1.5 pt-1">
+                    <div className={`text-[11px] font-semibold uppercase tracking-wider flex items-center space-x-1 ${isLight ? "text-slate-400" : "text-zinc-500"}`}>
+                      <Tag className="h-3 w-3" />
+                      <span>常用搭配 / 场景短语（点击即查）</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {aiContext.collocations.map((col, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleSearch(col.phrase)}
+                          className={`group flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs transition cursor-pointer active:scale-95 shadow-xs ${
+                            isLight
+                              ? "bg-slate-50 border-slate-200 text-slate-700 hover:border-blue-300 hover:bg-blue-50/50 hover:text-blue-700"
+                              : "bg-white/[0.03] border-white/10 text-zinc-300 hover:border-sky-400/40 hover:bg-blue-500/10 hover:text-sky-300"
+                          }`}
+                          title={`查询短语: ${col.phrase}`}
+                        >
+                          <span className="font-medium">{col.phrase}</span>
+                          <span className={`text-[11px] opacity-70 border-l pl-1.5 ${isLight ? "border-slate-300" : "border-white/15"}`}>
+                            {col.trans}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Usage Tip Callout */}
+                {aiContext.usageTip && (
+                  <div className={`p-3 rounded-xl border flex items-start space-x-2.5 text-xs leading-relaxed ${
+                    isLight ? "bg-amber-50/50 border-amber-200/80 text-amber-900" : "bg-amber-500/[0.08] border-amber-400/20 text-amber-200"
+                  }`}>
+                    <Lightbulb className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5 flex-1">
+                      <span className="font-semibold text-amber-600 dark:text-amber-400">语境辨析与用法提示：</span>
+                      <span>{aiContext.usageTip}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Fallback Local Sentences (When AI context not available) */}
+            {!aiContextLoading && !aiContext && result.wordDetail.examples.length > 0 && (
               <div className="space-y-2">
                 {result.wordDetail.examples.map((ex, idx) => (
                   <div key={idx} className={`p-3 rounded-xl border text-xs leading-relaxed ${
@@ -381,8 +611,30 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ settings }) => {
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+
+            {/* Unconfigured LLM Banner Guide */}
+            {!aiContextLoading && !aiContext && !(settings.llmConfig?.apiKey || settings.llmConfig?.endpoint?.includes("localhost") || settings.llmConfig?.endpoint?.includes("127.0.0.1")) && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className={`w-full p-3 rounded-xl border flex items-center justify-between text-xs transition cursor-pointer group ${
+                  isLight
+                    ? "bg-gradient-to-r from-blue-50/70 to-indigo-50/70 border-blue-200 hover:border-blue-400 text-blue-800 shadow-xs"
+                    : "bg-gradient-to-r from-blue-500/[0.08] to-indigo-500/[0.08] border-blue-400/20 hover:border-blue-400/40 text-sky-300 shadow-sm"
+                }`}
+              >
+                <div className="flex items-center space-x-2">
+                  <Sparkles className="h-3.5 w-3.5 text-blue-500 dark:text-sky-400" />
+                  <span className="font-medium">连接 AI 大模型，即可自动解锁专业地道例句、高频短语搭配与深度语境辨析</span>
+                </div>
+                <div className="flex items-center space-x-1 font-semibold group-hover:translate-x-0.5 transition-transform text-blue-600 dark:text-sky-300">
+                  <span>去配置</span>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </div>
+              </button>
+            )}
+          </div>
         </div>
       )}
 

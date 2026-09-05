@@ -81,4 +81,17 @@ describe('TitleBar Windows 11 Controls Test Suite', () => {
       expect(handleOpenAbout).toHaveBeenCalledTimes(2);
     }
   });
+
+  it('renders and handles onOpenQuickWindow when provided in titlebar', () => {
+    const handleOpenQuick = vi.fn();
+    render(<TitleBar onOpenQuickWindow={handleOpenQuick} quickWindowHotkey="Alt+W" />);
+
+    const quickBtn = screen.getByRole('button', { name: '贴图' });
+    expect(quickBtn).toBeInTheDocument();
+    expect(screen.getByText('贴图')).toBeInTheDocument();
+    expect(quickBtn).toHaveAttribute('title', '打开/收起桌面贴图 (Alt+W)');
+
+    fireEvent.click(quickBtn);
+    expect(handleOpenQuick).toHaveBeenCalledTimes(1);
+  });
 });

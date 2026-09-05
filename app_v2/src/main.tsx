@@ -5,6 +5,7 @@ import { PinWindowApp } from "./components/Pin/PinWindow";
 import { LookupPopupApp } from "./components/Lookup/LookupPopup";
 import { isTauri } from "./services/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./index.css";
 
 // 贴图窗口（label = pin_*）复用同一前端产物，经 URL hash 路由到精简的
@@ -26,6 +27,9 @@ const kind = resolveWindowKind();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {kind === "pin" ? <PinWindowApp /> : kind === "lookup" ? <LookupPopupApp /> : <App />}
+    <ErrorBoundary>
+      {kind === "pin" ? <PinWindowApp /> : kind === "lookup" ? <LookupPopupApp /> : <App />}
+    </ErrorBoundary>
   </React.StrictMode>
 );
+
