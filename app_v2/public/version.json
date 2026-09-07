@@ -6,10 +6,10 @@
   "release_notes": "1. 快捷小窗连续查词体验重构：回车翻译后自动清空输入框，光标自聚焦无需手动删除；\n2. 新增历史查询按键回溯（方向键 ↑/↓ 快速切换历史词汇）；\n3. 输入框聚焦时自动全选，直接打字覆盖更丝滑；\n4. 浮岛微晶输入栏与极光胶囊按钮视觉全面打磨。",
   "assets": [
     {
-      "name": "猫步翻译_0.3.1_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.1/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.1_x64-setup.exe",
-      "size": 0,
-      "sha256": null
+      "name": "MaobuTranslator_0.3.1_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.1/MaobuTranslator_0.3.1_x64-setup.exe",
+      "size": 7717517,
+      "sha256": "c9a222b3160b60af5f1448337c369ae7c140aa044537cdd4790a1bc35273524d"
     }
   ]
 }

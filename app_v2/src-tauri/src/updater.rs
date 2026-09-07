@@ -73,6 +73,15 @@ fn build_update_client() -> Result<Client, String> {
         .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))
 }
 
+fn build_download_client() -> Result<Client, String> {
+    Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("构建下载 HTTP 客户端失败：{e}"))
+}
+
 /// 解析 CDN 返回的元数据（支持根目录 version.json 以及 app_v2/package.json）
 pub fn parse_cdn_version_info(body: &str, current: &str) -> Option<UpdateCheckResult> {
     let json: serde_json::Value = serde_json::from_str(body).ok()?;
@@ -102,9 +111,9 @@ pub fn parse_cdn_version_info(body: &str, current: &str) -> Option<UpdateCheckRe
 
     if assets.is_empty() {
         assets.push(UpdateAssetInfo {
-            name: format!("猫步翻译_{}_x64-setup.exe", version),
+            name: format!("MaobuTranslator_{}_x64-setup.exe", version),
             url: format!(
-                "https://github.com/{}/{}/releases/download/v{}/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_{}_x64-setup.exe",
+                "https://github.com/{}/{}/releases/download/v{}/MaobuTranslator_{}_x64-setup.exe",
                 GITHUB_OWNER, GITHUB_REPO, version, version
             ),
             size: 0,
@@ -520,6 +529,55 @@ pub fn cmd_open_external_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+pub fn build_candidate_download_urls(raw_url: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let clean = raw_url.trim();
+    if clean.is_empty() {
+        return urls;
+    }
+    urls.push(clean.to_string());
+
+    // 若为 GitHub Release URL，生成加速镜像与文件名变体
+    if clean.contains("github.com") && clean.contains("/releases/download/") {
+        // 1. 直连镜像加速（如 ghfast.top, ghproxy.net）
+        urls.push(format!("https://ghfast.top/{}", clean));
+        urls.push(format!("https://ghproxy.net/{}", clean));
+        urls.push(format!("https://mirror.ghproxy.com/{}", clean));
+
+        // 2. 文件名变体（支持 MaobuTranslator_ 和 猫步翻译_ 以及 _ 前缀）
+        if let Some((base, filename)) = clean.rsplit_once('/') {
+            let variants = [
+                filename.replace("%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_", "MaobuTranslator_"),
+                filename.replace("猫步翻译_", "MaobuTranslator_"),
+                filename.replace("MaobuTranslator_", "%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_"),
+                filename.replace("MaobuTranslator_", "猫步翻译_"),
+                if filename.starts_with('_') {
+                    format!("MaobuTranslator{}", filename)
+                } else {
+                    format!("_{}", filename)
+                },
+            ];
+            for v in variants {
+                if v != filename {
+                    let alt_url = format!("{}/{}", base, v);
+                    urls.push(alt_url.clone());
+                    urls.push(format!("https://ghfast.top/{}", alt_url));
+                    urls.push(format!("https://ghproxy.net/{}", alt_url));
+                }
+            }
+        }
+    }
+
+    // 排重
+    let mut deduped = Vec::new();
+    for u in urls {
+        if !deduped.contains(&u) {
+            deduped.push(u);
+        }
+    }
+    deduped
+}
+
 #[tauri::command]
 pub async fn cmd_download_and_install_update(
     app: tauri::AppHandle,
@@ -529,24 +587,39 @@ pub async fn cmd_download_and_install_update(
         return Err("下载地址为空".to_string());
     }
 
-    let client = build_update_client().map_err(|e| format!("创建下载客户端失败: {e}"))?;
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("请求安装包失败: {e}"))?;
+    let client = build_download_client()?;
+    let candidate_urls = build_candidate_download_urls(&url);
+    let mut last_error = String::new();
+    let mut downloaded_bytes: Option<Vec<u8>> = None;
 
-    if !response.status().is_success() {
-        return Err(format!(
-            "下载服务器返回 HTTP {}",
-            response.status().as_u16()
-        ));
+    for target_url in candidate_urls {
+        match client.get(&target_url).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    if let Ok(b) = resp.bytes().await {
+                        // 确保不是被网页拦截返回的 404 HTML，安装包 exe 正常体积在 1MB 以上
+                        if b.len() > 1024 * 512 {
+                            downloaded_bytes = Some(b.to_vec());
+                            break;
+                        }
+                    }
+                } else {
+                    last_error = format!("HTTP {}", resp.status().as_u16());
+                }
+            }
+            Err(e) => {
+                last_error = e.to_string();
+            }
+        }
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("读取安装包数据失败: {e}"))?;
+    let Some(bytes) = downloaded_bytes else {
+        return Err(format!(
+            "自动下载失败（已尝试直连及多条国内 CDN 加速源）：{}",
+            if last_error.is_empty() { "未获取到有效安装包数据" } else { &last_error }
+        ));
+    };
+
     let temp_installer = std::env::temp_dir().join("MaobuTranslator_Setup_Update.exe");
     std::fs::write(&temp_installer, bytes).map_err(|e| format!("保存安装包到临时目录失败: {e}"))?;
 
@@ -651,5 +724,15 @@ mod tests {
         assert!(latest.release_notes.contains("发现新版本 v0.3.3"));
         assert_eq!(latest.assets.len(), 1);
         assert!(latest.assets[0].name.contains("0.3.3"));
+    }
+
+    #[test]
+    fn test_build_candidate_download_urls() {
+        let url = "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.1/MaobuTranslator_0.3.1_x64-setup.exe";
+        let candidates = build_candidate_download_urls(url);
+        assert!(candidates.contains(&url.to_string()));
+        assert!(candidates.iter().any(|c| c.contains("ghfast.top")));
+        assert!(candidates.iter().any(|c| c.contains("ghproxy.net")));
+        assert!(candidates.iter().any(|c| c.contains("_0.3.1_x64-setup.exe")));
     }
 }
