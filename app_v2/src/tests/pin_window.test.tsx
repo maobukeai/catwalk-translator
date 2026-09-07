@@ -127,11 +127,19 @@ describe('PinWindow 贴图窗口与快捷查词悬浮窗', () => {
     fireEvent.submit(screen.getByTestId('quick-window-submit'));
 
     expect(await screen.findByText('精翻: Metallic')).toBeInTheDocument();
+    // 回车翻译后输入框自动清空，方便下次直接打字
+    expect(input.value).toBe('');
 
-    // 清空按钮 ✕ 清空输入框
+    // 再次手动输入未提交时，清空按钮 ✕ 可以清空输入框
+    fireEvent.change(input, { target: { value: 'Roughness' } });
+    expect(input.value).toBe('Roughness');
     const clearBtn = screen.getByTestId('quick-window-clear');
     fireEvent.click(clearBtn);
     expect(input.value).toBe('');
+
+    // 按方向键 ↑ 可以恢复上一条查询词
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    expect(input.value).toBe('Metallic');
   });
 
   it('交互式 📌 钉住与生命周期切换', async () => {
