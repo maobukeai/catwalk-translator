@@ -75,9 +75,10 @@ fn build_update_client() -> Result<Client, String> {
 
 fn build_download_client() -> Result<Client, String> {
     Client::builder()
-        .user_agent(USER_AGENT)
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(180))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| format!("构建下载 HTTP 客户端失败：{e}"))
 }
@@ -535,47 +536,85 @@ pub fn build_candidate_download_urls(raw_url: &str) -> Vec<String> {
     if clean.is_empty() {
         return urls;
     }
+
+    // 基础直连
     urls.push(clean.to_string());
 
-    // 若为 GitHub Release URL，生成加速镜像与文件名变体
-    if clean.contains("github.com") && clean.contains("/releases/download/") {
-        // 1. 直连镜像加速（如 ghfast.top, ghproxy.net）
-        urls.push(format!("https://ghfast.top/{}", clean));
-        urls.push(format!("https://ghproxy.net/{}", clean));
-        urls.push(format!("https://mirror.ghproxy.com/{}", clean));
+    // 若给定的只是 release tag 页面链接（如 .../releases/tag/v0.3.2），自动推断安装包直链
+    let mut direct_download_urls = Vec::new();
+    if clean.contains("github.com") && clean.contains("/releases/tag/") {
+        if let Some(tag) = extract_tag_from_location(clean) {
+            let ver = strip_leading_v(&tag);
+            direct_download_urls.push(format!(
+                "https://github.com/{}/{}/releases/download/{}/MaobuTranslator_{}_x64-setup.exe",
+                GITHUB_OWNER, GITHUB_REPO, tag, ver
+            ));
+            direct_download_urls.push(format!(
+                "https://github.com/{}/{}/releases/download/{}/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_{}_x64-setup.exe",
+                GITHUB_OWNER, GITHUB_REPO, tag, ver
+            ));
+        }
+    }
 
-        // 2. 文件名变体（支持 MaobuTranslator_ 和 猫步翻译_ 以及 _ 前缀）
-        if let Some((base, filename)) = clean.rsplit_once('/') {
-            let variants = [
-                filename.replace("%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_", "MaobuTranslator_"),
-                filename.replace("猫步翻译_", "MaobuTranslator_"),
-                filename.replace("MaobuTranslator_", "%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_"),
-                filename.replace("MaobuTranslator_", "猫步翻译_"),
-                if filename.starts_with('_') {
-                    format!("MaobuTranslator{}", filename)
-                } else {
-                    format!("_{}", filename)
-                },
-            ];
-            for v in variants {
-                if v != filename {
-                    let alt_url = format!("{}/{}", base, v);
-                    urls.push(alt_url.clone());
-                    urls.push(format!("https://ghfast.top/{}", alt_url));
-                    urls.push(format!("https://ghproxy.net/{}", alt_url));
+    for d_url in &direct_download_urls {
+        if !urls.contains(d_url) {
+            urls.push(d_url.clone());
+        }
+    }
+
+    // 收集需要为其附加镜像加速的所有直连基准链接
+    let base_urls = urls.clone();
+
+    // 生成文件名变体（支持 MaobuTranslator_、猫步翻译_ 以及下划线前缀变体）
+    for u in &base_urls {
+        if u.contains("github.com") && u.contains("/releases/download/") {
+            if let Some((base, filename)) = u.rsplit_once('/') {
+                let variants = [
+                    filename.replace("%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_", "MaobuTranslator_"),
+                    filename.replace("猫步翻译_", "MaobuTranslator_"),
+                    filename.replace("MaobuTranslator_", "%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_"),
+                    filename.replace("MaobuTranslator_", "猫步翻译_"),
+                    if filename.starts_with('_') {
+                        format!("MaobuTranslator{}", filename)
+                    } else {
+                        format!("_{}", filename)
+                    },
+                ];
+                for v in variants {
+                    if v != filename {
+                        let alt = format!("{}/{}", base, v);
+                        if !urls.contains(&alt) {
+                            urls.push(alt);
+                        }
+                    }
                 }
             }
         }
     }
 
-    // 排重
-    let mut deduped = Vec::new();
-    for u in urls {
-        if !deduped.contains(&u) {
-            deduped.push(u);
+    // 为所有 GitHub 直连链接增加多组国内高速 CDN 镜像加速通道
+    let github_urls: Vec<String> = urls
+        .iter()
+        .filter(|u| u.contains("github.com/"))
+        .cloned()
+        .collect();
+
+    for g_url in github_urls {
+        let mirrors = [
+            format!("https://ghfast.top/{}", g_url),
+            format!("https://ghproxy.net/{}", g_url),
+            format!("https://mirror.ghproxy.com/{}", g_url),
+            format!("https://hub.gitmirror.com/{}", g_url),
+            format!("https://gh-proxy.com/{}", g_url),
+        ];
+        for m in mirrors {
+            if !urls.contains(&m) {
+                urls.push(m);
+            }
         }
     }
-    deduped
+
+    urls
 }
 
 #[tauri::command]
@@ -620,7 +659,11 @@ pub async fn cmd_download_and_install_update(
         ));
     };
 
-    let temp_installer = std::env::temp_dir().join("MaobuTranslator_Setup_Update.exe");
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let temp_installer = std::env::temp_dir().join(format!("MaobuTranslator_Setup_Update_{timestamp}.exe"));
     std::fs::write(&temp_installer, bytes).map_err(|e| format!("保存安装包到临时目录失败: {e}"))?;
 
     #[cfg(target_os = "windows")]
