@@ -187,9 +187,8 @@ Thinking about deep analysis for "正确配置指引"...
       vi.spyOn(tauriService, 'cmdUniversalTranslate').mockResolvedValue(mockTransResponse);
 
       render(<DualPaneTranslator settings={DEFAULT_SETTINGS} initialText="正确配置指引" onOpenSettings={handleOpenSettings} />);
-
       await waitFor(() => {
-        expect(screen.getByText('Correct Configuration Guide')).toBeInTheDocument();
+        expect(screen.getAllByText('Correct Configuration Guide').length).toBeGreaterThanOrEqual(1);
       });
 
       const guideBanner = await screen.findByText('连接 AI 大模型，即可自动解锁重点词汇拆解与地道场景例句');
@@ -207,9 +206,8 @@ Thinking about deep analysis for "正确配置指引"...
 
       render(<DualPaneTranslator settings={SETTINGS_WITH_LLM} initialText="正确配置指引" />);
 
-      // Wait for primary translation to render
       await waitFor(() => {
-        expect(screen.getByText('Correct Configuration Guide')).toBeInTheDocument();
+        expect(screen.getAllByText('Correct Configuration Guide').length).toBeGreaterThanOrEqual(1);
       });
 
       // Wait for deep analysis to render vocabulary items

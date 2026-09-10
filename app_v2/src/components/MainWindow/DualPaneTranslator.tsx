@@ -545,7 +545,14 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   const settings = propsSettings || storeSettings || DEFAULT_SETTINGS;
   const [sourceText, setSourceText] = useState(initialText);
   const [sourceLang, setSourceLang] = useState<LanguageCode>("auto");
-  const [targetLang, setTargetLang] = useState<LanguageCode>("zh-CN");
+  const [targetLang, setTargetLang] = useState<LanguageCode>(() => {
+    if (initialText && initialText.trim()) {
+      const { detected } = detectLanguage(initialText.trim());
+      if (detected === 'zh-CN') return 'en';
+      if (detected === 'en') return 'zh-CN';
+    }
+    return 'zh-CN';
+  });
   const [detectedLangName, setDetectedLangName] = useState<string>("");
 
   const [loading, setLoading] = useState(false);
@@ -614,6 +621,9 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   const imageEngineChoices = React.useMemo(() => buildImageTranslateEngineChoices(settings), [settings]);
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevDetectedLangRef = useRef<LanguageCode | null>(
+    initialText && initialText.trim() ? detectLanguage(initialText.trim()).detected : null
+  );
   // 翻译请求序号：防止并发触发（切语言/交换/重译）时慢的旧请求覆盖新结果
   const translationSeqRef = useRef(0);
   const stage1DoneSeqRef = useRef(0);
@@ -838,7 +848,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
       setRetryingEngines((prev) => ({ ...prev, [engineName]: true }));
       try {
-        const res = await cmdUniversalTranslate({
+        const res = await tauriService.cmdUniversalTranslate({
           text: trimmed,
           sourceLang,
           targetLang,
@@ -1077,7 +1087,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           setIsAiRefining(true);
           (async () => {
             try {
-              const aiRes = await cmdUniversalTranslate({
+              const aiRes = await tauriService.cmdUniversalTranslate({
                 ...baseParams,
                 forcedEngine: 'llm',
               });
@@ -1134,6 +1144,37 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
     [settings.defaultPreset, settings.llmConfig, settings.llmConfigs, settings.presetDicts, settings.onlineEngines, settings.translationTiers, settings.translationStyle, settings.enableLlmProgressiveRefine, preferredEngine]
   );
 
+  // 用户修改输入文本时的智能语种配对（仅当源语言为 auto 时在输入不同语种时自动配对目标语言，绝不干扰用户手动切换下拉框）
+  const handleSourceTextChange = useCallback(
+    (text: string) => {
+      setSourceText(text);
+      setCustomAppliedText(null);
+      setDeepError(null);
+      setDeepAnalysis(null);
+
+      const trimmed = text.trim();
+      if (!trimmed) {
+        prevDetectedLangRef.current = null;
+        return;
+      }
+
+      if (sourceLang === "auto") {
+        const { detected, suggestedTarget } = detectLanguage(trimmed);
+        if (prevDetectedLangRef.current !== detected) {
+          prevDetectedLangRef.current = detected;
+          if (
+            detected === targetLang ||
+            (detected === "zh-CN" && (targetLang === "zh-CN" || targetLang === "zh")) ||
+            (detected === "en" && targetLang === "en")
+          ) {
+            setTargetLang(suggestedTarget);
+          }
+        }
+      }
+    },
+    [sourceLang, targetLang]
+  );
+
   // Live input debounce listener
   useEffect(() => {
     if (debounceTimerRef.current) {
@@ -1148,20 +1189,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
     setLoading(true);
     debounceTimerRef.current = setTimeout(() => {
-      let activeTarget = targetLang;
-      // 智能双向互译：当源语言为 "auto"（自动检测）时，如果检测到输入为中文且当前目标语言也是中文，自动将目标语言切换为英文（en）；
-      // 反之，如果检测到英文/其他外文且当前目标语言为英文，自动切换回中文（zh-CN）
-      if (sourceLang === "auto") {
-        const { detected, suggestedTarget } = detectLanguage(sourceText);
-        if (detected === "zh-CN" && (targetLang === "zh-CN" || targetLang === "zh")) {
-          activeTarget = "en";
-          setTargetLang("en");
-        } else if (detected === "en" && targetLang === "en") {
-          activeTarget = "zh-CN";
-          setTargetLang("zh-CN");
-        }
-      }
-      performTranslation(sourceText, sourceLang, activeTarget);
+      performTranslation(sourceText, sourceLang, targetLang);
     }, 350);
 
     return () => {
@@ -1172,12 +1200,16 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   const handleSwapLanguages = () => {
     if (sourceLang === "auto") {
       const { detected } = detectLanguage(sourceText);
-      setSourceLang(targetLang);
-      setTargetLang(detected);
+      const nextTarget = detected;
+      const nextSource = targetLang;
+      setSourceLang(nextSource);
+      setTargetLang(nextTarget);
+      prevDetectedLangRef.current = nextSource;
     } else {
       const prevSrc = sourceLang;
       setSourceLang(targetLang);
       setTargetLang(prevSrc);
+      prevDetectedLangRef.current = targetLang;
     }
 
     if (response?.mainTranslation) {
@@ -1207,7 +1239,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         }
       }
       const text = await navigator.clipboard.readText();
-      if (text) setSourceText(text);
+      if (text) handleSourceTextChange(text);
     } catch (err) {
       console.warn("Paste error:", err);
     }
@@ -2072,7 +2104,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
               {sourceText && (
                 <button
                   type="button"
-                  onClick={() => setSourceText("")}
+                  onClick={() => handleSourceTextChange("")}
                   className={`flex items-center space-x-1 px-2 py-1 rounded-md transition cursor-pointer ${
                     isLight ? 'hover:bg-black/5 text-slate-700 hover:text-slate-900' : 'hover:bg-white/10 text-zinc-300 hover:text-zinc-100'
                   }`}
@@ -2087,7 +2119,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
           <textarea
             value={sourceText}
-            onChange={(e) => { setSourceText(e.target.value); setCustomAppliedText(null); setDeepError(null); setDeepAnalysis(null); }}
+            onChange={(e) => handleSourceTextChange(e.target.value)}
             placeholder="输入或粘贴文本，或直接拖入图片、按 Ctrl+V 粘贴图片翻译..."
             className={`flex-1 w-full bg-transparent resize-none py-3 text-base leading-relaxed focus:outline-none scrollbar-thin ${
               isLight
