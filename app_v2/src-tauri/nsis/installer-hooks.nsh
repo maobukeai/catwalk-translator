@@ -8,9 +8,26 @@
   nsExec::Exec 'taskkill /F /IM catwalk.exe /T'
 !macroend
 
+!macro customInstall
+  ; 1. 刷新 Windows Shell 图标与文件关联缓存（彻底解决覆盖升级后桌面/任务栏快捷方式显示旧图标问题）
+  System::Call 'shell32.dll::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+  System::Call 'shell32.dll::SHChangeNotify(i 0x00001000, i 0x0005, w "$DESKTOP", i 0)'
+  
+  ; 2. 触发 Windows 内置 ie4uinit 刷新图标缓存数据库
+  nsExec::Exec 'ie4uinit.exe -show'
+  nsExec::Exec 'ie4uinit.exe -ClearIconCache'
+!macroend
+
 !macro customUnInit
   ; 卸载前自动静默结束运行中的进程
   nsExec::Exec 'taskkill /F /IM MaobuTranslator.exe /T'
   nsExec::Exec 'taskkill /F /IM "猫步翻译.exe" /T'
   nsExec::Exec 'taskkill /F /IM catwalk.exe /T'
 !macroend
+
+!macro customUnInstall
+  ; 卸载后刷新桌面与外壳图标通知
+  System::Call 'shell32.dll::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+  System::Call 'shell32.dll::SHChangeNotify(i 0x00001000, i 0x0005, w "$DESKTOP", i 0)'
+!macroend
+

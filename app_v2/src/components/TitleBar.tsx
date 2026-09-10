@@ -145,7 +145,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       >
         <img
           src={appIcon}
-          className="h-7 w-7 object-contain select-none shrink-0 drop-shadow-sm transition-transform group-hover:scale-105"
+          className="h-8 w-8 object-contain select-none shrink-0 transition-transform group-hover:scale-105"
           alt="猫步翻译"
         />
         <span className={`text-[13.5px] font-bold tracking-tight ${isLight ? 'text-slate-800' : 'text-white/95'}`}>
