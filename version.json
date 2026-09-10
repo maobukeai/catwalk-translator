@@ -1,15 +1,21 @@
 {
-  "version": "0.3.1",
+  "version": "0.3.2",
   "name": "猫步翻译",
-  "release_date": "2026-09-07",
+  "release_date": "2026-09-10",
   "download_url": "https://github.com/maobukeai/catwalk-translator/releases",
-  "release_notes": "1. 快捷小窗连续查词体验重构：回车翻译后自动清空输入框，光标自聚焦无需手动删除；\n2. 新增历史查询按键回溯（方向键 ↑/↓ 快速切换历史词汇）；\n3. 输入框聚焦时自动全选，直接打字覆盖更丝滑；\n4. 浮岛微晶输入栏与极光胶囊按钮视觉全面打磨。",
+  "release_notes": "1. 软件在线更新稳定性修复：支持多源 CDN 镜像加速与文件名自愈容灾，彻底解决下载 404 异常；\n2. 全新品牌视觉：全面焕新软件图标为可爱猫咪翻译徽章（Windows / macOS / Web 全尺寸高清适配）；\n3. 主窗口语言切换体验优化：彻底修复翻译后手动修改目标语言被自动重置的问题，手动选择 100% 保持；\n4. 快捷查词与全引擎翻译性能与稳定性持续提升。",
   "assets": [
     {
-      "name": "MaobuTranslator_0.3.1_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.1/MaobuTranslator_0.3.1_x64-setup.exe",
-      "size": 7717517,
-      "sha256": "c9a222b3160b60af5f1448337c369ae7c140aa044537cdd4790a1bc35273524d"
+      "name": "MaobuTranslator_0.3.2_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.2/MaobuTranslator_0.3.2_x64-setup.exe",
+      "size": 8503610,
+      "sha256": "68144f6f124a48b4f2ed782a728ace8438e7c4b7f026b3d75fdb74a6aed0e1f9"
+    },
+    {
+      "name": "猫步翻译_0.3.2_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.2/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.2_x64-setup.exe",
+      "size": 8503610,
+      "sha256": "68144f6f124a48b4f2ed782a728ace8438e7c4b7f026b3d75fdb74a6aed0e1f9"
     }
   ]
 }
