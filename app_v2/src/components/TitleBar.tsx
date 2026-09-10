@@ -145,10 +145,10 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       >
         <img
           src={appIcon}
-          className="h-6 w-6 object-contain select-none shrink-0"
+          className="h-7 w-7 object-contain select-none shrink-0 drop-shadow-sm transition-transform group-hover:scale-105"
           alt="猫步翻译"
         />
-        <span className={`text-[13px] font-bold tracking-tight ${isLight ? 'text-slate-800' : 'text-white/90'}`}>
+        <span className={`text-[13.5px] font-bold tracking-tight ${isLight ? 'text-slate-800' : 'text-white/95'}`}>
           猫步翻译
         </span>
       </button>

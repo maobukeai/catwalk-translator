@@ -256,8 +256,8 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
       <div className="lg-panel p-5 space-y-5">
         {/* 顶部 Header：Logo、名称、版本、作者与操作按钮 */}
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[var(--g-hairline)]">
-          <div className="flex items-center space-x-3.5">
-            <img src={appIcon} alt="猫步翻译 Logo" className="h-14 w-14 object-contain select-none shrink-0" />
+          <div className="flex items-center space-x-4">
+            <img src={appIcon} alt="猫步翻译 Logo" className="h-16 w-16 object-contain select-none shrink-0 drop-shadow-md rounded-2xl" />
             <div>
               <div className="flex items-center space-x-2">
                 <h1 className="text-base font-bold tracking-tight">猫步翻译 (Maobu Translator)</h1>
