@@ -9,11 +9,16 @@
 !macroend
 
 !macro customInstall
-  ; 1. 刷新 Windows Shell 图标与文件关联缓存（彻底解决覆盖升级后桌面/任务栏快捷方式显示旧图标问题）
+  ; 1. 显式删除并重建桌面快捷方式，强迫 Windows 绑定新 exe 内部的最新图标
+  Delete "$DESKTOP\猫步翻译.lnk"
+  Delete "$DESKTOP\MaobuTranslator.lnk"
+  CreateShortcut "$DESKTOP\猫步翻译.lnk" "$INSTDIR\MaobuTranslator.exe" "" "$INSTDIR\MaobuTranslator.exe" 0
+
+  ; 2. 刷新 Windows Shell 图标与文件关联缓存（彻底解决覆盖升级后桌面/任务栏快捷方式显示旧图标问题）
   System::Call 'shell32.dll::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
   System::Call 'shell32.dll::SHChangeNotify(i 0x00001000, i 0x0005, w "$DESKTOP", i 0)'
   
-  ; 2. 触发 Windows 内置 ie4uinit 刷新图标缓存数据库
+  ; 3. 触发 Windows 内置 ie4uinit 刷新图标缓存数据库
   nsExec::Exec 'ie4uinit.exe -show'
   nsExec::Exec 'ie4uinit.exe -ClearIconCache'
 !macroend
