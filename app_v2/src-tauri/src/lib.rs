@@ -817,8 +817,10 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
                 std::mem::size_of::<u32>() as u32,
             );
 
-            // 33 = DWMWA_WINDOW_CORNER_PREFERENCE: 2 = DWMWCP_ROUND (Win11 启用时显式赋予系统大圆角，禁用时由前端 CSS 控制)
-            let corner_pref: u32 = if enable { 2 } else { 1 };
+            // 33 = DWMWA_WINDOW_CORNER_PREFERENCE: 1 = DWMWCP_DONOTROUND
+            // 严禁 Win11 DWM 进行 8px 系统圆角强制硬裁剪，将圆角全权交由前端 CSS 与 DirectComposition 抗锯齿透明通道渲染，
+            // 确保 Windows 10 与 Windows 11 的圆角弧度、发丝边框与无残留透明边缘 100% 统一精致！
+            let corner_pref: u32 = 1;
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(33),

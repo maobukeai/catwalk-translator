@@ -379,19 +379,15 @@ function App() {
         backgroundColor: isSolid
           ? (isLight ? '#f8fafc' : '#0f1015')
           : (isLight
-              ? 'rgba(255, 255, 255, 0.88)'
-              : 'rgba(18, 22, 34, 0.90)'),
+              ? 'rgba(255, 255, 255, 0.92)'
+              : 'rgba(18, 22, 34, 0.94)'),
         backdropFilter: blurFilterVal,
         WebkitBackdropFilter: blurFilterVal,
-        boxShadow: !isFloatingWindow
-          ? 'none'
-          : isSolid
+        boxShadow: isFloatingWindow && !isOverlayOpen
           ? (isLight
-              ? '0 10px 30px rgba(0, 0, 0, 0.08)'
-              : '0 12px 36px rgba(0, 0, 0, 0.35)')
-          : (isLight
-              ? '0 20px 50px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.65)'
-              : '0 24px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.16)'),
+              ? 'inset 0 1px 0 rgba(255, 255, 255, 0.75)'
+              : 'inset 0 1px 0 rgba(255, 255, 255, 0.15)')
+          : 'none',
       };
 
   const textColorClass = isLight ? 'text-slate-800' : 'text-zinc-100';
@@ -405,13 +401,18 @@ function App() {
 
   return (
     <div
-      className={`relative h-screen w-screen overflow-hidden select-none transition-[border-radius] duration-150 ${
-        isFloatingWindow ? 'rounded-[20px]' : 'rounded-none'
+      style={glassRootStyle}
+      className={`relative h-screen w-screen flex flex-col antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden select-none transition-[border-radius,border-color] duration-150 ${fontClass} ${fontSizeClass} ${textColorClass} ${
+        isOverlayOpen
+          ? 'bg-transparent'
+          : isFloatingWindow
+          ? 'rounded-[14px] border border-black/[0.08] dark:border-white/[0.14]'
+          : 'rounded-none border-none'
       }`}
     >
-      {/* Aurora Backdrop — only mounted when overlay is not active */}
+      {/* Aurora Backdrop — strictly clipped within window shell */}
       {!isOverlayOpen && !isSolid && (
-        <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden" style={{ willChange: 'transform' }}>
+        <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden" style={{ willChange: 'transform' }}>
           <div
             className="absolute inset-0 transition-opacity duration-500 aurora-field opacity-[0.15]"
             style={{
@@ -477,16 +478,6 @@ function App() {
         </div>
       )}
 
-    <div
-      style={glassRootStyle}
-      className={`relative z-10 flex flex-col h-screen w-full antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden transition-[border-radius,border-color] duration-150 ${fontClass} ${fontSizeClass} ${textColorClass} ${
-        isOverlayOpen
-          ? 'bg-transparent'
-          : isFloatingWindow
-          ? 'rounded-[20px] border border-black/[0.08] dark:border-white/[0.14] ring-1 ring-black/[0.04] dark:ring-white/[0.08]'
-          : 'rounded-none border-none ring-0'
-      }`}
-    >
       {/* Real Frosted Glass Grain & Specular Top Reflection Layer */}
       {blurEnabled && !isSolid && !isOverlayOpen && (
         <>
@@ -643,7 +634,6 @@ function App() {
         isOpen={isCloseConfirmOpen}
         onClose={() => setIsCloseConfirmOpen(false)}
       />
-    </div>
     </div>
   );
 }
