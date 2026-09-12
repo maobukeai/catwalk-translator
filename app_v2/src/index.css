@@ -114,6 +114,46 @@
     font-family: inherit;
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════════
+     全局现代极简浮动滚动条 (彻底消除 Windows 10 原生 17px 灰色厚重带箭头的滚动条)
+     Windows 10 / 11 / macOS 视觉 100% 统一精致质感
+     ═══════════════════════════════════════════════════════════════════════════ */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.30);
+    border-radius: 9999px;
+    transition: background-color 0.2s ease;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.55);
+  }
+
+  [data-theme="dark"] ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.20);
+  }
+
+  [data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.38);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.30) transparent;
+  }
+
+  [data-theme="dark"] * {
+    scrollbar-color: rgba(255, 255, 255, 0.20) transparent;
+  }
+
   /* Unified accessible focus ring for keyboard users */
   :focus-visible {
     outline: 2px solid color-mix(in srgb, var(--accent) 80%, transparent);

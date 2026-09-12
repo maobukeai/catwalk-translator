@@ -817,17 +817,14 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
                 std::mem::size_of::<u32>() as u32,
             );
 
-            // 33 = DWMWA_WINDOW_CORNER_PREFERENCE: 1 = DWMWCP_DONOTROUND
-            // 当禁用 DWM 磨砂时（贴图/浮动透明窗），严禁 DWM 绘制任何直角或次级圆角框，由前端 CSS 圆角完全掌控纯净透明边界
-            if !enable {
-                let corner_pref: u32 = 1;
-                let _ = DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWINDOWATTRIBUTE(33),
-                    &corner_pref as *const _ as *const std::ffi::c_void,
-                    std::mem::size_of::<u32>() as u32,
-                );
-            }
+            // 33 = DWMWA_WINDOW_CORNER_PREFERENCE: 2 = DWMWCP_ROUND (Win11 启用时显式赋予系统大圆角，禁用时由前端 CSS 控制)
+            let corner_pref: u32 = if enable { 2 } else { 1 };
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(33),
+                &corner_pref as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
+            );
 
             // 2. Windows 10 SetWindowCompositionAttribute fallback
             if hr_backdrop.is_err() || !enable {
@@ -860,9 +857,11 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
                         let set_window_composition_attribute: SetWindowCompositionAttributeFn =
                             std::mem::transmute(proc);
 
+                        // 注意：accent_flags 必须为 0！绝对不能设为 2 (DRAW_ALL_BORDERS)，
+                        // 否则 Windows 10 DWM 会强制在 HWND 外围绘制一条生硬突兀的 1px 矩形白边/灰边外框！
                         let mut accent = ACCENT_POLICY {
                             accent_state: if enable { 4 } else { 0 },
-                            accent_flags: if enable { 2 } else { 0 },
+                            accent_flags: 0,
                             gradient_color: if enable {
                                 if is_dark {
                                     0x0112131a
@@ -885,7 +884,7 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
                         if enable && res == 0 {
                             let mut fallback_accent = ACCENT_POLICY {
                                 accent_state: 3,
-                                accent_flags: 2,
+                                accent_flags: 0,
                                 gradient_color: 0,
                                 animation_id: 0,
                             };

@@ -2052,7 +2052,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       {/* Main Dual-Pane Section */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Left Pane: Source Input */}
-        <div className={`flex flex-col h-[clamp(320px,46vh,540px)] p-4 rounded-2xl border transition-all ${
+        <div className={`flex flex-col h-[clamp(260px,40vh,540px)] p-4 rounded-2xl border transition-all ${
           isLight
             ? 'bg-white/70 border-white/80 shadow-md backdrop-blur-md shadow-slate-900/5 focus-within:border-sky-500/50'
             : 'bg-white/[0.04] border-white/10 shadow-lg backdrop-blur-md shadow-black/20 focus-within:border-sky-400/40'
@@ -2157,7 +2157,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         </div>
 
         {/* Right Pane: Translation Output */}
-        <div className={`flex flex-col h-[clamp(320px,46vh,540px)] p-4 relative rounded-2xl border transition-all ${
+        <div className={`flex flex-col h-[clamp(260px,40vh,540px)] p-4 relative rounded-2xl border transition-all ${
           isLight
             ? 'bg-white/70 border-white/80 shadow-md backdrop-blur-md shadow-slate-900/5'
             : 'bg-white/[0.04] border-white/10 shadow-lg backdrop-blur-md shadow-black/20'

@@ -449,7 +449,7 @@ function App() {
 
     <div
       style={glassRootStyle}
-      className={`relative z-10 flex flex-col h-screen antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden ${fontClass} ${fontSizeClass} ${textColorClass} ${isOverlayOpen ? 'bg-transparent border-none' : (!isSolid ? (isLight ? 'border border-slate-200/60' : 'border border-white/[0.10]') : '')}`}
+      className={`relative z-10 flex flex-col h-screen antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden ${fontClass} ${fontSizeClass} ${textColorClass} ${isOverlayOpen ? 'bg-transparent' : ''}`}
     >
       {/* Real Frosted Glass Grain & Specular Top Reflection Layer */}
       {blurEnabled && !isSolid && !isOverlayOpen && (
