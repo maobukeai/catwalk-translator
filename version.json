@@ -1,21 +1,21 @@
 {
-  "version": "0.3.4",
+  "version": "0.3.5",
   "name": "猫步翻译",
   "release_date": "2026-09-12",
   "download_url": "https://github.com/maobukeai/catwalk-translator/releases",
-  "release_notes": "1. 亚克力真实磨砂质感与标准圆角深度融合：重塑 Windows 11 DWM 硬件级 Acrylic 亚克力磨砂，配合 DWMWCP_ROUND 与 8px 标准圆角，磨砂通透感拉满同时杜绝方角外露；\n2. Windows 10 与 11 视觉质感完全统一：消除 Win10 边缘硬性边界与 Win11 系统 1px 粗边框；\n3. 多大模型供应商支持与自定义配置：支持 DeepSeek、OpenAI、Claude、智谱 GLM、通义千问等统一接入；\n4. 开机静默自启与无感后台常驻优化。",
+  "release_notes": "1. AI 对话模型级联选择体验重构：按照供应商分层展示，悬浮展开二级模型列表，支持屏幕边缘防溢出翻转；\n2. 彻底剔除 Custom 展现：智能解析各大厂商模型（Google Gemini、DeepSeek、智谱 GLM、Ollama 等），界面更整洁规范；\n3. Windows 10 / 11 亚克力磨砂质感与圆角深度打磨：修复 Win10 边缘裁切与黑边，磨砂通透感与 8px 圆角自然融合；\n4. 纯净零配置首屏引导：无配置时开箱即净板，按需启用模版。",
   "assets": [
     {
-      "name": "MaobuTranslator_0.3.4_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.4/MaobuTranslator_0.3.4_x64-setup.exe",
-      "size": 9072181,
-      "sha256": "3cac36e93ffb99e4f92d85b458e228c1e417a0182d23b754b6e94b6231ac4230"
+      "name": "MaobuTranslator_0.3.5_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.5/MaobuTranslator_0.3.5_x64-setup.exe",
+      "size": 9074584,
+      "sha256": "2a0e552cdf0c67e1c3dba891fddb4319b6740315cdf2cbfae2682c069c47769f"
     },
     {
-      "name": "猫步翻译_0.3.4_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.4/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.4_x64-setup.exe",
-      "size": 9072181,
-      "sha256": "3cac36e93ffb99e4f92d85b458e228c1e417a0182d23b754b6e94b6231ac4230"
+      "name": "猫步翻译_0.3.5_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.5/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.5_x64-setup.exe",
+      "size": 9074584,
+      "sha256": "2a0e552cdf0c67e1c3dba891fddb4319b6740315cdf2cbfae2682c069c47769f"
     }
   ]
 }
