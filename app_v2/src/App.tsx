@@ -70,17 +70,39 @@ function App() {
   const isOverlayOpenRef = useRef(false);
   isOverlayOpenRef.current = isOverlayOpen;
 
+  const [isMaximized, setIsMaximized] = useState(false);
+
   useEffect(() => {
     fetchSettings();
     if (isTauri()) {
+      let unlistenResize: (() => void) | undefined;
       import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
         const win = getCurrentWindow();
         win.show().catch(() => {});
         win.unminimize().catch(() => {});
         win.setFocus().catch(() => {});
+        win.isMaximized().then(setIsMaximized).catch(() => {});
       }).catch(() => {});
+
+      import('@tauri-apps/api/event').then(({ listen }) => {
+        listen('tauri://resize', async () => {
+          try {
+            const { getCurrentWindow } = await import('@tauri-apps/api/window');
+            const max = await getCurrentWindow().isMaximized();
+            setIsMaximized(max);
+          } catch {}
+        }).then((u) => {
+          unlistenResize = u;
+        });
+      }).catch(() => {});
+
+      return () => {
+        if (unlistenResize) unlistenResize();
+      };
     }
   }, [fetchSettings]);
+
+  const isFloatingWindow = !isOverlayOpen && !isMaximized;
 
   // Debounce refs to prevent double-execution from safe wake-up event emissions
   const lastCaptureTimeRef = useRef(0);
@@ -357,15 +379,19 @@ function App() {
         backgroundColor: isSolid
           ? (isLight ? '#f8fafc' : '#0f1015')
           : (isLight
-              ? `rgba(255, 255, 255, ${(0.12 + (Math.min(Math.max(blurPx, 0), 60) / 60) * 0.10).toFixed(3)})`
-              : `rgba(15, 18, 26, ${(0.15 + (Math.min(Math.max(blurPx, 0), 60) / 60) * 0.13).toFixed(3)})`),
+              ? 'rgba(255, 255, 255, 0.88)'
+              : 'rgba(18, 22, 34, 0.90)'),
         backdropFilter: blurFilterVal,
         WebkitBackdropFilter: blurFilterVal,
-        boxShadow: isSolid
+        boxShadow: !isFloatingWindow
           ? 'none'
+          : isSolid
+          ? (isLight
+              ? '0 10px 30px rgba(0, 0, 0, 0.08)'
+              : '0 12px 36px rgba(0, 0, 0, 0.35)')
           : (isLight
-              ? '0 20px 50px rgba(15, 23, 42, 0.08)'
-              : '0 24px 60px rgba(0, 0, 0, 0.35)'),
+              ? '0 20px 50px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.65)'
+              : '0 24px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.16)'),
       };
 
   const textColorClass = isLight ? 'text-slate-800' : 'text-zinc-100';
@@ -378,10 +404,14 @@ function App() {
   const glassRootStyle = { ...dynamicBgStyle, ...glassVars };
 
   return (
-    <div className="relative h-screen overflow-hidden">
+    <div
+      className={`relative h-screen w-screen overflow-hidden select-none transition-[border-radius] duration-150 ${
+        isFloatingWindow ? 'rounded-[20px]' : 'rounded-none'
+      }`}
+    >
       {/* Aurora Backdrop — only mounted when overlay is not active */}
       {!isOverlayOpen && !isSolid && (
-        <div aria-hidden className="pointer-events-none fixed inset-0 z-0" style={{ willChange: 'transform' }}>
+        <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden" style={{ willChange: 'transform' }}>
           <div
             className="absolute inset-0 transition-opacity duration-500 aurora-field opacity-[0.15]"
             style={{
@@ -449,7 +479,13 @@ function App() {
 
     <div
       style={glassRootStyle}
-      className={`relative z-10 flex flex-col h-screen antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden ${fontClass} ${fontSizeClass} ${textColorClass} ${isOverlayOpen ? 'bg-transparent' : ''}`}
+      className={`relative z-10 flex flex-col h-screen w-full antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden transition-[border-radius,border-color] duration-150 ${fontClass} ${fontSizeClass} ${textColorClass} ${
+        isOverlayOpen
+          ? 'bg-transparent'
+          : isFloatingWindow
+          ? 'rounded-[20px] border border-black/[0.08] dark:border-white/[0.14] ring-1 ring-black/[0.04] dark:ring-white/[0.08]'
+          : 'rounded-none border-none ring-0'
+      }`}
     >
       {/* Real Frosted Glass Grain & Specular Top Reflection Layer */}
       {blurEnabled && !isSolid && !isOverlayOpen && (
@@ -472,6 +508,17 @@ function App() {
             onRequestClose={handleRequestClose}
             onOpenQuickWindow={handleOpenQuickWindow}
             quickWindowHotkey={quickWindowHotkey}
+            isMaximized={isMaximized}
+            onToggleMaximize={() => {
+              if (isTauri()) {
+                import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+                  const win = getCurrentWindow();
+                  win.toggleMaximize().then(() => win.isMaximized().then(setIsMaximized)).catch(() => {});
+                }).catch(() => {});
+              } else {
+                setIsMaximized((prev) => !prev);
+              }
+            }}
           />
 
           {/* Global Hotkey Trigger Toast */}

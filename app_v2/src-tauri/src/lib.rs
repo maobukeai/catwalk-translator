@@ -857,20 +857,14 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
                         let set_window_composition_attribute: SetWindowCompositionAttributeFn =
                             std::mem::transmute(proc);
 
-                        // 注意：accent_flags 必须为 0！绝对不能设为 2 (DRAW_ALL_BORDERS)，
-                        // 否则 Windows 10 DWM 会强制在 HWND 外围绘制一条生硬突兀的 1px 矩形白边/灰边外框！
+                        // 注意：在 Windows 10 上，必须设为 accent_state: 0 且 accent_flags: 0！
+                        // 绝对不能在 Win 10 强制开启 4 (ACCENT_ENABLE_ACRYLICBLURBEHIND)，
+                        // 否则 Windows 10 DWM 会在整个直角 HWND 铺满硬性直角模糊，破坏前端平滑大圆角并引发拖拽掉帧；
+                        // 将其设为 0（透明通道释放），由 WebView2 DirectComposition 与前端 CSS 呈现抗锯齿平滑大圆角！
                         let mut accent = ACCENT_POLICY {
-                            accent_state: if enable { 4 } else { 0 },
+                            accent_state: 0,
                             accent_flags: 0,
-                            gradient_color: if enable {
-                                if is_dark {
-                                    0x0112131a
-                                } else {
-                                    0x01f8fafc
-                                }
-                            } else {
-                                0
-                            },
+                            gradient_color: 0,
                             animation_id: 0,
                         };
 
@@ -880,21 +874,7 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
                             size_of_data: std::mem::size_of::<ACCENT_POLICY>(),
                         };
 
-                        let res = set_window_composition_attribute(hwnd, &mut data);
-                        if enable && res == 0 {
-                            let mut fallback_accent = ACCENT_POLICY {
-                                accent_state: 3,
-                                accent_flags: 0,
-                                gradient_color: 0,
-                                animation_id: 0,
-                            };
-                            let mut fallback_data = WINDOWCOMPOSITIONATTRIBDATA {
-                                attribute: 19,
-                                data: &mut fallback_accent as *mut _ as _,
-                                size_of_data: std::mem::size_of::<ACCENT_POLICY>(),
-                            };
-                            let _ = set_window_composition_attribute(hwnd, &mut fallback_data);
-                        }
+                        let _ = set_window_composition_attribute(hwnd, &mut data);
                     }
                 }
             }

@@ -1,21 +1,21 @@
 {
   "version": "0.3.2",
   "name": "猫步翻译",
-  "release_date": "2026-09-10",
+  "release_date": "2026-09-12",
   "download_url": "https://github.com/maobukeai/catwalk-translator/releases",
-  "release_notes": "1. 软件在线更新稳定性修复：支持多源 CDN 镜像加速与文件名自愈容灾，彻底解决下载 404 异常；\n2. 全新品牌视觉：全面焕新软件图标为可爱猫咪翻译徽章（Windows / macOS / Web 全尺寸高清适配）；\n3. 主窗口语言切换体验优化：彻底修复翻译后手动修改目标语言被自动重置的问题，手动选择 100% 保持；\n4. 快捷查词与全引擎翻译性能与稳定性持续提升。",
+  "release_notes": "1. 软件边框圆角深度优化：主窗口采用平滑抗锯齿大圆角（20px）与精致发丝边框，最大化及截图模式自适应贴合直角；\n2. Windows 10/11 视觉一致性优化：消除 Win10 边缘硬性直角模糊外溢与 Win11 系统 1px 粗边框，磨砂通透感大幅提升；\n3. 全局滚动条升级：全面替换 Windows 经典厚重灰条为现代极简浮动圆角滚动条；\n4. 品牌图标与界面布局调优：修复黑边，全尺寸高清适配，主翻译面板输入高度更宽裕舒适。",
   "assets": [
     {
       "name": "MaobuTranslator_0.3.2_x64-setup.exe",
       "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.2/MaobuTranslator_0.3.2_x64-setup.exe",
-      "size": 9003532,
-      "sha256": "940e3f2c70a6c5a6fdda198f4ff46236f155aa616b046c86152df6ea2ca4de31"
+      "size": 9007994,
+      "sha256": "2be67b363b5fc4cf9a6362afd8e77eaddfb63dadb9a7cd114716384995805848"
     },
     {
       "name": "猫步翻译_0.3.2_x64-setup.exe",
       "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.2/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.2_x64-setup.exe",
-      "size": 9003532,
-      "sha256": "940e3f2c70a6c5a6fdda198f4ff46236f155aa616b046c86152df6ea2ca4de31"
+      "size": 9007994,
+      "sha256": "2be67b363b5fc4cf9a6362afd8e77eaddfb63dadb9a7cd114716384995805848"
     }
   ]
 }

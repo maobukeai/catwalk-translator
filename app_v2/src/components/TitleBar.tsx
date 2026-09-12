@@ -14,6 +14,8 @@ interface TitleBarProps {
   onRequestClose?: () => void;
   onOpenQuickWindow?: () => void;
   quickWindowHotkey?: string;
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
@@ -22,8 +24,11 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onRequestClose,
   onOpenQuickWindow,
   quickWindowHotkey = "Alt+W",
+  isMaximized: isMaximizedProp,
+  onToggleMaximize,
 }) => {
-  const [isMaximized, setIsMaximized] = useState(false);
+  const [internalMaximized, setInternalMaximized] = useState(false);
+  const isMaximized = isMaximizedProp !== undefined ? isMaximizedProp : internalMaximized;
 
   // 原生窗口拖拽处理（同步无延迟调用）
   const handleStartDrag = (e: React.MouseEvent) => {
@@ -48,7 +53,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       try {
         const win = getCurrentWindow();
         const max = await win.isMaximized();
-        setIsMaximized(max);
+        setInternalMaximized(max);
       } catch (err) {
         console.warn('Check maximized error:', err);
       }
@@ -84,17 +89,20 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
   const handleMaximize = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (onToggleMaximize) {
+      onToggleMaximize();
+    }
     if (isTauri()) {
       try {
         const win = getCurrentWindow();
         await win.toggleMaximize();
         const max = await win.isMaximized();
-        setIsMaximized(max);
+        setInternalMaximized(max);
       } catch (err) {
         console.warn('Window maximize error:', err);
       }
     } else {
-      setIsMaximized((prev) => !prev);
+      setInternalMaximized((prev) => !prev);
       console.log('[Browser Mode] Window maximize clicked');
     }
   };

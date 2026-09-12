@@ -82,6 +82,26 @@ export interface LlmConfig {
   availableModels?: string[];
 }
 
+/** 单个模型条目（支持 1 个供应商绑定多个模型） */
+export interface AiModelItem {
+  id: string;
+  modelId: string;
+  displayName?: string;
+  enabled: boolean;
+}
+
+/** 供应商配置（凭据与 Base URL 共享） */
+export interface AiProviderConfig {
+  id: string;
+  name: string;
+  providerType: string;
+  endpoint: string;
+  apiKey: string;
+  enabled: boolean;
+  models: AiModelItem[];
+  defaultModelId?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -308,6 +328,7 @@ export interface AppSettings {
   captureEngine?: string;
   llmConfig: LlmConfig | null;
   llmConfigs?: LlmConfig[];
+  aiProviders?: AiProviderConfig[];
   translationTiers: string[];
   presetDicts: PresetDicts;
   onlineEngines?: OnlineEngines;

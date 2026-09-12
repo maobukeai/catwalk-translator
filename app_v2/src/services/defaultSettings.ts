@@ -1,4 +1,4 @@
-import type { AppSettings, AppearanceSettings } from './types';
+import type { AppSettings, AppearanceSettings, AiProviderConfig, LlmConfig } from './types';
 
 /**
  * 应用默认设置的唯一来源（single source of truth）。
@@ -16,6 +16,198 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   fontSize: 'medium',
 };
 
+/** 默认预设的 AI 供应商列表（每个供应商支持挂载多个模型） */
+export const defaultAiProviders: AiProviderConfig[] = [
+  {
+    id: 'provider-deepseek',
+    name: 'DeepSeek (官方)',
+    providerType: 'DeepSeek',
+    apiKey: '',
+    endpoint: 'https://api.deepseek.com/v1',
+    enabled: true,
+    defaultModelId: 'deepseek-chat',
+    models: [
+      { id: 'deepseek-chat', modelId: 'deepseek-chat', displayName: 'DeepSeek V3 (通用快译)', enabled: true },
+      { id: 'deepseek-reasoner', modelId: 'deepseek-reasoner', displayName: 'DeepSeek R1 (深度思考)', enabled: true },
+    ],
+  },
+  {
+    id: 'provider-siliconflow',
+    name: 'SiliconFlow (硅基流动)',
+    providerType: 'SiliconFlow',
+    apiKey: '',
+    endpoint: 'https://api.siliconflow.cn/v1',
+    enabled: true,
+    defaultModelId: 'deepseek-ai/DeepSeek-V3',
+    models: [
+      { id: 'deepseek-ai/DeepSeek-V3', modelId: 'deepseek-ai/DeepSeek-V3', displayName: 'DeepSeek V3 (硅基高速)', enabled: true },
+      { id: 'deepseek-ai/DeepSeek-R1', modelId: 'deepseek-ai/DeepSeek-R1', displayName: 'DeepSeek R1 (深度思考)', enabled: false },
+      { id: 'Qwen/Qwen2.5-7B-Instruct', modelId: 'Qwen/Qwen2.5-7B-Instruct', displayName: 'Qwen 2.5 7B (极速)', enabled: false },
+    ],
+  },
+  {
+    id: 'provider-baidu-qianfan',
+    name: '百度文心千帆',
+    providerType: '百度文心 (千帆)',
+    apiKey: '',
+    endpoint: 'https://qianfan.baidubce.com/v2',
+    enabled: true,
+    defaultModelId: 'ernie-speed-128k',
+    models: [
+      { id: 'ernie-speed-128k', modelId: 'ernie-speed-128k', displayName: 'ERNIE Speed 128K (免费高并发)', enabled: true },
+      { id: 'ernie-lite-8k', modelId: 'ernie-lite-8k', displayName: 'ERNIE Lite 8K', enabled: false },
+      { id: 'ernie-4.0-turbo-8k', modelId: 'ernie-4.0-turbo-8k', displayName: 'ERNIE 4.0 Turbo', enabled: false },
+    ],
+  },
+  {
+    id: 'provider-zhipu',
+    name: '智谱 GLM',
+    providerType: '智谱 GLM',
+    apiKey: '',
+    endpoint: 'https://open.bigmodel.cn/api/paas/v4',
+    enabled: true,
+    defaultModelId: 'glm-4-flash',
+    models: [
+      { id: 'glm-4-flash', modelId: 'glm-4-flash', displayName: 'GLM-4-Flash (免费秒级)', enabled: true },
+      { id: 'glm-4-plus', modelId: 'glm-4-plus', displayName: 'GLM-4-Plus (旗舰旗舰)', enabled: false },
+      { id: 'glm-4-air', modelId: 'glm-4-air', displayName: 'GLM-4-Air', enabled: false },
+    ],
+  },
+  {
+    id: 'provider-qwen',
+    name: '通义千问',
+    providerType: '通义千问',
+    apiKey: '',
+    endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    enabled: true,
+    defaultModelId: 'qwen-plus',
+    models: [
+      { id: 'qwen-plus', modelId: 'qwen-plus', displayName: 'Qwen Plus', enabled: true },
+      { id: 'qwen-turbo', modelId: 'qwen-turbo', displayName: 'Qwen Turbo (极速)', enabled: false },
+      { id: 'qwen-max', modelId: 'qwen-max', displayName: 'Qwen Max', enabled: false },
+    ],
+  },
+  {
+    id: 'provider-kimi',
+    name: 'Moonshot Kimi',
+    providerType: 'Kimi',
+    apiKey: '',
+    endpoint: 'https://api.moonshot.cn/v1',
+    enabled: true,
+    defaultModelId: 'moonshot-v1-8k',
+    models: [
+      { id: 'moonshot-v1-8k', modelId: 'moonshot-v1-8k', displayName: 'Moonshot v1 8K', enabled: true },
+      { id: 'moonshot-v1-32k', modelId: 'moonshot-v1-32k', displayName: 'Moonshot v1 32K', enabled: false },
+    ],
+  },
+  {
+    id: 'provider-openai',
+    name: 'OpenAI',
+    providerType: 'OpenAI',
+    apiKey: '',
+    endpoint: 'https://api.openai.com/v1',
+    enabled: true,
+    defaultModelId: 'gpt-4o-mini',
+    models: [
+      { id: 'gpt-4o-mini', modelId: 'gpt-4o-mini', displayName: 'GPT-4o mini', enabled: true },
+      { id: 'gpt-4o', modelId: 'gpt-4o', displayName: 'GPT-4o (全能旗舰)', enabled: false },
+    ],
+  },
+  {
+    id: 'provider-ollama',
+    name: 'Ollama (本地私有化)',
+    providerType: 'Ollama',
+    apiKey: '',
+    endpoint: 'http://localhost:11434/v1',
+    enabled: true,
+    defaultModelId: 'llama3',
+    models: [
+      { id: 'llama3', modelId: 'llama3', displayName: 'Llama 3 8B', enabled: true },
+      { id: 'qwen2.5:7b', modelId: 'qwen2.5:7b', displayName: 'Qwen 2.5 7B', enabled: false },
+    ],
+  },
+];
+
+/** 将结构化的 AiProviderConfig 转换为平铺的 LlmConfig 列表（供后端或现有组件平滑调用） */
+export function flattenAiProvidersToLlmConfigs(providers: AiProviderConfig[]): LlmConfig[] {
+  const list: LlmConfig[] = [];
+  for (const p of providers) {
+    for (const m of p.models) {
+      list.push({
+        id: `${p.id}__${m.id}`,
+        name: m.displayName || m.modelId,
+        provider: p.name || p.providerType,
+        apiKey: p.apiKey,
+        model: m.modelId,
+        endpoint: p.endpoint,
+        enabled: p.enabled && m.enabled,
+      });
+    }
+  }
+  return list;
+}
+
+/** 将平铺的 LlmConfig 列表聚合升维为结构化的 AiProviderConfig 列表（保证旧版本历史配置零丢失） */
+export function migrateLlmConfigsToAiProviders(
+  llmConfigs?: LlmConfig[] | null,
+  existingProviders?: AiProviderConfig[]
+): AiProviderConfig[] {
+  const baseProviders: AiProviderConfig[] =
+    existingProviders && existingProviders.length > 0
+      ? JSON.parse(JSON.stringify(existingProviders))
+      : JSON.parse(JSON.stringify(defaultAiProviders));
+
+  if (!llmConfigs || llmConfigs.length === 0) {
+    return baseProviders;
+  }
+
+  for (const cfg of llmConfigs) {
+    if (!cfg.provider) continue;
+    let p = baseProviders.find(
+      (bp) =>
+        bp.providerType.toLowerCase() === cfg.provider.toLowerCase() ||
+        bp.name.toLowerCase() === cfg.provider.toLowerCase()
+    );
+
+    if (p) {
+      if (cfg.apiKey && !p.apiKey) p.apiKey = cfg.apiKey;
+      if (cfg.endpoint && (!p.endpoint || p.endpoint.includes('custom-llm'))) p.endpoint = cfg.endpoint;
+      if (cfg.model) {
+        const existingModel = p.models.find((m) => m.modelId === cfg.model || m.id === cfg.model);
+        if (!existingModel) {
+          p.models.push({
+            id: cfg.model,
+            modelId: cfg.model,
+            displayName: cfg.name || cfg.model,
+            enabled: cfg.enabled ?? true,
+          });
+        }
+      }
+    } else {
+      const pid = `provider-${cfg.provider.toLowerCase().replace(/[\s\u4e00-\u9fff]+/g, '-')}-${Date.now().toString(36)}`;
+      baseProviders.push({
+        id: pid,
+        name: cfg.provider,
+        providerType: cfg.provider,
+        apiKey: cfg.apiKey || '',
+        endpoint: cfg.endpoint || '',
+        enabled: cfg.enabled ?? true,
+        defaultModelId: cfg.model || '',
+        models: [
+          {
+            id: cfg.model || 'default-model',
+            modelId: cfg.model || 'default-model',
+            displayName: cfg.name || cfg.model || '默认模型',
+            enabled: cfg.enabled ?? true,
+          },
+        ],
+      });
+    }
+  }
+
+  return baseProviders;
+}
+
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   hotkey: 'F4',
@@ -30,6 +222,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   quickWindowHotkeyEnabled: false,
   defaultPreset: 'blender',
   captureEngine: 'auto',
+  aiProviders: defaultAiProviders,
   llmConfig: {
     id: 'llm-deepseek-deepseek-chat',
     provider: 'DeepSeek',
