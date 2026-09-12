@@ -445,9 +445,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   updateAiProvider: (providerId: string, updates: Partial<AiProviderConfig>) => {
     const { settings, initialSettings } = get();
-    const providers = settings.aiProviders && settings.aiProviders.length > 0
-      ? settings.aiProviders
-      : defaultAiProviders;
+    const providers = settings.aiProviders || [];
 
     const updatedProviders = providers.map((p) => {
       if (p.id === providerId) {
@@ -484,9 +482,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   addAiProvider: (provider: Partial<AiProviderConfig>) => {
     const { settings, initialSettings } = get();
-    const providers = settings.aiProviders && settings.aiProviders.length > 0
-      ? settings.aiProviders
-      : defaultAiProviders;
+    const providers = settings.aiProviders || [];
 
     const name = provider.name || provider.providerType || '自定义供应商';
     const id = provider.id || `provider-${Date.now().toString(36)}`;
@@ -507,6 +503,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       ...settings,
       aiProviders: updatedProviders,
       llmConfigs: synchronizedLlmConfigs,
+      llmConfig: settings.llmConfig || synchronizedLlmConfigs[0] || null,
     };
     set({
       settings: updated,
@@ -517,14 +514,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   deleteAiProvider: (providerId: string) => {
     const { settings, initialSettings } = get();
-    const providers = settings.aiProviders && settings.aiProviders.length > 0
-      ? settings.aiProviders
-      : defaultAiProviders;
+    const providers = settings.aiProviders || [];
 
     const updatedProviders = providers.filter((p) => p.id !== providerId);
     const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
     let newActive = settings.llmConfig;
-    if (newActive && newActive.id && newActive.id.startsWith(providerId)) {
+    if (updatedProviders.length === 0) {
+      newActive = null;
+    } else if (newActive && newActive.id && (newActive.id === providerId || newActive.id.startsWith(providerId))) {
       newActive = synchronizedLlmConfigs[0] || null;
     }
     const updated: AppSettings = {
@@ -542,9 +539,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   addModelToProvider: (providerId: string, model: { modelId: string; displayName?: string; enabled?: boolean }) => {
     const { settings, initialSettings } = get();
-    const providers = settings.aiProviders && settings.aiProviders.length > 0
-      ? settings.aiProviders
-      : defaultAiProviders;
+    const providers = settings.aiProviders || [];
 
     const trimmedModelId = model.modelId.trim();
     if (!trimmedModelId) return;
@@ -583,9 +578,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   removeModelFromProvider: (providerId: string, modelId: string) => {
     const { settings, initialSettings } = get();
-    const providers = settings.aiProviders && settings.aiProviders.length > 0
-      ? settings.aiProviders
-      : defaultAiProviders;
+    const providers = settings.aiProviders || [];
 
     const updatedProviders = providers.map((p) => {
       if (p.id === providerId) {
@@ -618,9 +611,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   toggleModelEnabled: (providerId: string, modelId: string) => {
     const { settings, initialSettings } = get();
-    const providers = settings.aiProviders && settings.aiProviders.length > 0
-      ? settings.aiProviders
-      : defaultAiProviders;
+    const providers = settings.aiProviders || [];
 
     const updatedProviders = providers.map((p) => {
       if (p.id === providerId) {
@@ -652,9 +643,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   setDefaultModelForProvider: (providerId: string, modelId: string) => {
     const { settings, initialSettings } = get();
-    const providers = settings.aiProviders && settings.aiProviders.length > 0
-      ? settings.aiProviders
-      : defaultAiProviders;
+    const providers = settings.aiProviders || [];
 
     const updatedProviders = providers.map((p) => {
       if (p.id === providerId) {

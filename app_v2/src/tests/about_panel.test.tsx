@@ -39,7 +39,7 @@ describe('AboutPanel Component Test Suite', () => {
     expect(checkUpdateBtn).toBeInTheDocument();
 
     fireEvent.click(checkUpdateBtn);
-    expect(await screen.findByText(/最新版|发现新版本|检查失败|检查更新/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/最新版|发现新版本|检查失败|检查更新/)).length).toBeGreaterThan(0);
   });
 
   it('opens and closes contact and sponsor QR modals', () => {

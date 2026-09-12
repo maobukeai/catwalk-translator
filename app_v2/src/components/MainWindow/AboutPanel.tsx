@@ -123,6 +123,7 @@ function formatBytes(bytes: number): string {
 
 export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
   const { isLight } = useAppTheme();
+  const { settings, setAutoCheckUpdate, setAutoSilentUpdate } = useSettingsStore();
   const [qrModal, setQrModal] = useState<"contact" | "sponsor" | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -419,6 +420,43 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
                   <span>{isCheckingUpdate ? "检查中…" : "检查更新"}</span>
                 </button>
                 <span className="text-[11px] font-mono text-[var(--g-text-3)]">v{currentVer}</span>
+              </div>
+
+              {/* 自动更新与静默升级选项 */}
+              <div className="pt-2 border-t border-[var(--g-hairline)] space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold text-[var(--g-text-1)]">启动时自动检查更新</div>
+                    <div className="text-[10px] text-[var(--g-text-3)] leading-tight">开机或启动后后台静默探测新版</div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={settings.autoCheckUpdate ?? true}
+                      onChange={(e) => setAutoCheckUpdate(e.target.checked)}
+                      className="sr-only peer"
+                      data-testid="about-auto-check-toggle"
+                    />
+                    <div className="w-8 h-4.5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold text-[var(--g-text-1)]">全自动静默无感升级</div>
+                    <div className="text-[10px] text-[var(--g-text-3)] leading-tight">免点击下一步，自动重启新版</div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={settings.autoSilentUpdate ?? false}
+                      onChange={(e) => setAutoSilentUpdate(e.target.checked)}
+                      className="sr-only peer"
+                      data-testid="about-auto-silent-toggle"
+                    />
+                    <div className="w-8 h-4.5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
               </div>
 
               {/* 检查结果呈现 */}

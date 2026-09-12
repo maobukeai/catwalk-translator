@@ -1353,10 +1353,14 @@ export async function cmdUniversalTranslate(
     if (cfg.enabled === false) return false;
     const ep = cfg.endpoint || '';
     const isLocal = ep.includes('localhost') || ep.includes('127.0.0.1');
-    return !ep.trim() ? false : (!!cfg.apiKey?.trim() || isLocal);
+    if (!ep.trim()) return false;
+    if (isLocal) {
+      return cfg.enabled === true && !!cfg.model?.trim();
+    }
+    return !!cfg.apiKey?.trim();
   });
 
-  const runLlm = (forced && (forced.includes('llm') || forced.includes('ai') || forced.includes('openai') || forced.includes('deepseek') || forced.includes('ollama') || forced.includes('glm') || forced.includes('custom'))) || (!isForced && readyConfigs.length > 0);
+  const runLlm = !req.skipLlm && ((forced && (forced.includes('llm') || forced.includes('ai') || forced.includes('openai') || forced.includes('deepseek') || forced.includes('ollama') || forced.includes('glm') || forced.includes('custom'))) || (!isForced && readyConfigs.length > 0));
 
   if (runLlm) {
     const targetClean = forced ? forced.replace(/^llm:/i, '').toLowerCase() : '';
@@ -1392,19 +1396,24 @@ export async function cmdUniversalTranslate(
     e.sourceTier === 'LLM (Config Required)' ||
     e.sourceTier === 'LLM (Auth Error)' ||
     e.sourceTier === 'LLM (Quota Error)' ||
+    e.sourceTier === 'Online (Unconfigured)' ||
     e.translated.includes('点击重试') ||
     e.translated.includes('网络连接超时') ||
-    e.translated.includes('未配置 API Key') ||
-    e.translated.includes('API Key 无效') ||
-    e.translated.includes('额度不足');
+    e.translated.includes('未配置') ||
+    e.translated.includes('需配置') ||
+    e.translated.includes('API Key') ||
+    e.translated.includes('额度不足') ||
+    e.translated.includes('鉴权失败');
 
   const isRetryTranslation = (text: string) =>
     !text ||
     text.includes('点击重试') ||
     text.includes('网络连接超时') ||
-    text.includes('未配置 API Key') ||
-    text.includes('API Key 无效') ||
-    text.includes('额度不足');
+    text.includes('未配置') ||
+    text.includes('需配置') ||
+    text.includes('API Key') ||
+    text.includes('额度不足') ||
+    text.includes('鉴权失败');
 
   // 优先保证有效 AI 大模型翻译 (LLM API) 排在最前，其次词库、其他有效在线翻译，待配置/鉴权错误/重试项排在最后
   engines.sort((a, b) => {

@@ -711,34 +711,8 @@ impl Default for AppSettings {
             selection_lookup_enabled: Some(false),
             hover_lookup_enabled: Some(false),
             hover_lookup_modifier: Some("ctrl".to_string()),
-            llm_config: Some(LlmConfig::new(
-                "DeepSeek",
-                "",
-                "deepseek-chat",
-                "https://api.deepseek.com/v1",
-            )),
-            llm_configs: vec![
-                LlmConfig::new(
-                    "DeepSeek",
-                    "",
-                    "deepseek-chat",
-                    "https://api.deepseek.com/v1",
-                ),
-                LlmConfig::new("OpenAI", "", "gpt-4o-mini", "https://api.openai.com/v1"),
-                LlmConfig::new("Ollama", "", "llama3", "http://localhost:11434/v1"),
-                LlmConfig::new(
-                    "智谱 GLM",
-                    "",
-                    "glm-4-flash",
-                    "https://open.bigmodel.cn/api/paas/v4",
-                ),
-                LlmConfig::new(
-                    "Custom",
-                    "",
-                    "custom-model",
-                    "https://api.custom-llm.com/v1",
-                ),
-            ],
+            llm_config: None,
+            llm_configs: vec![],
             translation_tiers: vec![
                 "Preset Dictionary".to_string(),
                 "LLM API".to_string(),

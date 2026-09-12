@@ -16,8 +16,8 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   fontSize: 'medium',
 };
 
-/** 默认预设的 AI 供应商列表（每个供应商支持挂载多个模型） */
-export const defaultAiProviders: AiProviderConfig[] = [
+/** 常用预设的 AI 供应商模板库（供用户在设置中一键添加使用，首次安装不内置挂载） */
+export const PRESET_AI_PROVIDER_TEMPLATES: AiProviderConfig[] = [
   {
     id: 'provider-deepseek',
     name: 'DeepSeek',
@@ -142,6 +142,9 @@ export const defaultAiProviders: AiProviderConfig[] = [
   },
 ];
 
+/** 向后兼容别名：常用预设模板库 */
+export const defaultAiProviders: AiProviderConfig[] = PRESET_AI_PROVIDER_TEMPLATES;
+
 /**
  * 校验指定大模型配置是否真正处于就绪可用状态：
  * - 必须启用 (enabled !== false)
@@ -166,7 +169,7 @@ export function isConfiguredLlm(cfg?: LlmConfig | null): boolean {
  * 其次根据 Endpoint 域名/路径特征匹配，最后根据配置名称或友好备用名称兜底。
  */
 export function resolveVendor(cfg?: Partial<LlmConfig> | null): string {
-  if (!cfg) return 'DeepSeek';
+  if (!cfg) return '未配置';
   const provider = (cfg.provider || '').trim();
   const model = (cfg.model || '').trim().toLowerCase();
   const endpoint = (cfg.endpoint || '').trim().toLowerCase();
@@ -254,13 +257,13 @@ export function resolveVendor(cfg?: Partial<LlmConfig> | null): string {
  * 纯净解析模型显示名称，剔除生硬的前缀
  */
 export function resolveModelLabel(cfg?: Partial<LlmConfig> | null): string {
-  if (!cfg) return '默认模型';
+  if (!cfg) return '未配置模型';
   const name = (cfg.name || '').trim();
   const model = (cfg.model || '').trim();
   if (name && !/^(custom|自定义|默认)$/i.test(name) && name !== model) {
     return name;
   }
-  return model || '默认模型';
+  return model || '未配置模型';
 }
 
 /** 将结构化的 AiProviderConfig 转换为平铺的 LlmConfig 列表（供后端或现有组件平滑调用） */
@@ -295,7 +298,8 @@ export function migrateLlmConfigsToAiProviders(
   llmConfigs?: LlmConfig[] | null,
   existingProviders?: AiProviderConfig[]
 ): AiProviderConfig[] {
-  if (existingProviders && existingProviders.length > 0) {
+  // 若已有供应商配置（包括用户主动清空为 0 个的空数组 []），直接保留，绝不强行塞入默认模型
+  if (existingProviders !== undefined && existingProviders !== null) {
     return JSON.parse(JSON.stringify(existingProviders));
   }
 
@@ -317,7 +321,7 @@ export function migrateLlmConfigsToAiProviders(
     );
 
     if (!p) {
-      const defaultPreset = defaultAiProviders.find(
+      const defaultPreset = PRESET_AI_PROVIDER_TEMPLATES.find(
         (dp) =>
           dp.providerType.toLowerCase() === vendorName.toLowerCase() ||
           dp.name.toLowerCase() === vendorName.toLowerCase()
@@ -368,74 +372,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   toggleWindowHotkeyEnabled: false,
   quickWindowHotkeyEnabled: false,
   defaultPreset: 'blender',
-  captureEngine: 'auto',
-  aiProviders: defaultAiProviders,
-  llmConfig: {
-    id: 'llm-deepseek-deepseek-chat',
-    provider: 'DeepSeek',
-    apiKey: '',
-    model: 'deepseek-chat',
-    endpoint: 'https://api.deepseek.com/v1',
-  },
-  llmConfigs: [
-    {
-      id: 'llm-deepseek-deepseek-chat',
-      provider: 'DeepSeek',
-      apiKey: '',
-      model: 'deepseek-chat',
-      endpoint: 'https://api.deepseek.com/v1',
-    },
-    {
-      id: 'llm-openai-gpt-4o-mini',
-      provider: 'OpenAI',
-      apiKey: '',
-      model: 'gpt-4o-mini',
-      endpoint: 'https://api.openai.com/v1',
-    },
-    {
-      id: 'llm-ollama-llama3',
-      provider: 'Ollama',
-      apiKey: '',
-      model: 'llama3',
-      endpoint: 'http://localhost:11434/v1',
-      enabled: false,
-    },
-    {
-      id: 'llm-智谱-glm-4-flash',
-      provider: '智谱 GLM',
-      apiKey: '',
-      model: 'glm-4-flash',
-      endpoint: 'https://open.bigmodel.cn/api/paas/v4',
-    },
-    {
-      id: 'llm-siliconflow-deepseek-v3',
-      provider: 'SiliconFlow',
-      apiKey: '',
-      model: 'deepseek-ai/DeepSeek-V3',
-      endpoint: 'https://api.siliconflow.cn/v1',
-    },
-    {
-      id: 'llm-tongyi-qwen-plus',
-      provider: '通义千问',
-      apiKey: '',
-      model: 'qwen-plus',
-      endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    },
-    {
-      id: 'llm-kimi-moonshot-v1-8k',
-      provider: 'Kimi',
-      apiKey: '',
-      model: 'moonshot-v1-8k',
-      endpoint: 'https://api.moonshot.cn/v1',
-    },
-    {
-      id: 'llm-custom-custom-model',
-      provider: 'Custom',
-      apiKey: '',
-      model: 'custom-model',
-      endpoint: 'https://api.custom-llm.com/v1',
-    },
-  ],
+  aiProviders: [],
+  llmConfig: null,
+  llmConfigs: [],
   translationTiers: ['Preset Dictionary', 'LLM API', 'Online Fallback'],
   presetDicts: {
     blender: true,

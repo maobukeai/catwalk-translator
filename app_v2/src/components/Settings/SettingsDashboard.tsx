@@ -138,7 +138,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     { id: 'online', label: '在线引擎', badge: activeOnlineCount, icon: Globe },
     { id: 'glossary', label: '专属术语库', icon: BookOpen },
     { id: 'dicts', label: '专业词库', icon: Layers },
-    { id: 'preference', label: '优先级', icon: Sliders },
+    { id: 'preference', label: '偏好与优先级', icon: Sliders },
     { id: 'backup', label: '备份与同步', icon: CloudUpload },
   ] as const;
 

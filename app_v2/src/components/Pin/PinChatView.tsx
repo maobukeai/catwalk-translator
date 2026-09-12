@@ -116,14 +116,6 @@ function renderMarkdownContent(content: string, isLight?: boolean) {
   );
 }
 
-const DEFAULT_FALLBACK_LLM: LlmConfig = {
-  provider: "Ollama",
-  apiKey: "",
-  model: "qwen2.5:7b",
-  endpoint: "http://localhost:11434/v1",
-  enabled: true,
-};
-
 export function PinChatView({
   contextTerm,
   onClearContextTerm,
@@ -164,19 +156,19 @@ export function PinChatView({
 
   const configuredPool = pool.filter(isModelConfigured);
 
-  // 用户手动选择 > 当前已配好的模型 > 模型池中首个已配好的可用模型 > 默认回退
+  // 用户手动选择 > 当前已配好的模型 > 模型池中首个已配好的可用模型 > null
   const rawActive = curSettings.llmConfig;
   const userSelected = selectedModelId
     ? pool.find((c) => (c.id || `${c.provider}-${c.model}`) === selectedModelId)
     : null;
 
-  const activeLlm: LlmConfig =
+  const activeLlm: LlmConfig | null =
     userSelected ||
     (rawActive && isModelConfigured(rawActive)
       ? rawActive
-      : configuredPool[0] || rawActive || DEFAULT_FALLBACK_LLM);
+      : configuredPool[0] || rawActive || null);
 
-  const isCurrentConfigured = isModelConfigured(activeLlm);
+  const isCurrentConfigured = activeLlm ? isModelConfigured(activeLlm) : false;
 
   // 挂载时从 localStorage 读取会话历史
   useEffect(() => {
@@ -239,17 +231,17 @@ export function PinChatView({
         mode: activePreset?.label,
       };
 
-      // API Key 缺失校验拦截
-      if (!isCurrentConfigured) {
+      // API Key 缺失校验拦截 / 未配置模型拦截
+      if (!activeLlm || !isCurrentConfigured) {
         const warnMsg: ChatMessage = {
           id: `ai_${Date.now() + 1}`,
           role: "assistant",
           content:
-            pool.length === 0
+            pool.length === 0 || !activeLlm
               ? `⚠️ 当前未配置 AI 模型。\n\n请在主窗口「设置 -> AI 模型池」中添加大模型配置，或启动本地 Ollama。`
               : `⚠️ 未检测到 **${activeLlm.provider} (${activeLlm.model || "默认模型"})** 的有效 API 密钥。\n\n请在主窗口「设置 -> AI 模型池」中配置 API Key，或在顶部下拉菜单中切换为已配好的其他模型。`,
           timestamp: nowTime(),
-          model: activeLlm.model,
+          model: activeLlm?.model,
         };
         setMessages((prev) => [...prev, userMsg, warnMsg]);
         if (!textToSend) setInput("");
@@ -466,7 +458,7 @@ export function PinChatView({
                 );
               })}
             </select>
-          ) : (
+          ) : activeLlm ? (
             <span
               className={`font-semibold font-mono truncate max-w-[170px] ${
                 isLight ? "text-slate-800" : "text-zinc-200"
@@ -474,6 +466,10 @@ export function PinChatView({
               title={`提供商: ${activeLlm.provider} | 端点: ${activeLlm.endpoint}`}
             >
               {activeLlm.provider}: {activeLlm.model || "默认模型"}
+            </span>
+          ) : (
+            <span className="font-semibold text-[11px] truncate max-w-[170px] text-amber-500">
+              未配置大模型
             </span>
           )}
 
@@ -632,14 +628,16 @@ export function PinChatView({
                 isLight ? "text-slate-800" : "text-zinc-100"
               }`}
             >
-              猫步悬浮 AI 对话
+              {activeLlm ? "猫步悬浮 AI 对话" : "暂未添加 AI 大模型"}
             </p>
             <p
               className={`mt-1 text-[11px] max-w-[260px] leading-relaxed ${
                 isLight ? "text-slate-500" : "text-zinc-400"
               }`}
             >
-              输入您的问题，或在上方选择「AI 智能翻译」、「学术润色」等预设模式极速探索
+              {activeLlm
+                ? "输入您的问题，或在上方选择「AI 智能翻译」、「学术润色」等预设模式极速探索"
+                : "请在主窗口设置中添加大模型（如 DeepSeek、OpenAI 或本地 Ollama），以开启悬浮对话功能"}
             </p>
           </div>
         )}
@@ -661,7 +659,7 @@ export function PinChatView({
                 }`}
               >
                 <span className={`font-medium ${isLight ? "text-slate-600" : "text-zinc-400"}`}>
-                  {isUser ? "👤 我" : `🤖 ${m.model || activeLlm.model || "AI"}`}
+                  {isUser ? "👤 我" : `🤖 ${m.model || activeLlm?.model || "AI"}`}
                 </span>
                 {m.mode && (
                   <span

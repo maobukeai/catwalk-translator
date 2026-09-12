@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { cmdFetchLlmModels } from '../../../services/tauri';
-import { defaultAiProviders } from '../../../services/defaultSettings';
+import { defaultAiProviders, migrateLlmConfigsToAiProviders, PRESET_AI_PROVIDER_TEMPLATES } from '../../../services/defaultSettings';
 import type { LlmConfig, AiProviderConfig, AiModelItem } from '../../../services/types';
 
 const isTestEnv = typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
@@ -84,16 +84,22 @@ export function useLlmPanelState() {
   const deleteLlmConfig = useSettingsStore((s) => s.deleteLlmConfig);
   const setActiveLlmConfig = useSettingsStore((s) => s.setActiveLlmConfig);
   const toggleLlmConfigEnabled = useSettingsStore((s) => s.toggleLlmConfigEnabled);
-
+  const rawProviders = settings?.aiProviders;
   const providers: AiProviderConfig[] =
-    settings?.aiProviders && settings.aiProviders.length > 0
-      ? settings.aiProviders
-      : (settings?.llmConfigs && settings.llmConfigs.length > 0
-          ? defaultAiProviders
-          : (defaultAiProviders || []));
+    rawProviders !== undefined
+      ? rawProviders
+      : settings?.llmConfig || (settings?.llmConfigs && settings.llmConfigs.length > 0)
+      ? migrateLlmConfigsToAiProviders(
+          settings?.llmConfigs?.length
+            ? settings.llmConfigs
+            : settings?.llmConfig
+            ? [settings.llmConfig]
+            : []
+        )
+      : [];
 
   const [selectedProviderId, setSelectedProviderId] = useState<string>(
-    providers?.[0]?.id || 'provider-deepseek'
+    providers?.[0]?.id || ''
   );
 
   const [showApiKey, setShowApiKey] = useState(false);
@@ -106,40 +112,35 @@ export function useLlmPanelState() {
   const [fetchedModels, setFetchedModels] = useState<string[]>([]);
   const [fetchModelNotice, setFetchModelNotice] = useState<string | null>(null);
 
-  // Safe fallback to active provider
-  const currentProvider: AiProviderConfig =
+  // Safe active provider (null when 0 providers)
+  const currentProvider: AiProviderConfig | null =
     providers.find((p) => p.id === selectedProviderId) ||
-    providers[0] || {
-      id: 'provider-deepseek',
-      name: 'DeepSeek',
-      providerType: 'DeepSeek',
-      apiKey: '',
-      endpoint: 'https://api.deepseek.com/v1',
-      enabled: true,
-      models: [],
-    };
+    providers[0] ||
+    null;
 
-  const currentModels: AiModelItem[] = currentProvider.models || [];
+  const currentModels: AiModelItem[] = currentProvider?.models || [];
 
   // Legacy fallback compatibility
   const llm = (settings.llmConfig as (LlmConfig & { availableModels?: string[] })) || {
-    provider: currentProvider.name,
-    apiKey: currentProvider.apiKey,
-    model: currentProvider.defaultModelId || currentModels[0]?.modelId || 'deepseek-chat',
-    endpoint: currentProvider.endpoint,
+    provider: currentProvider?.name || '未添加模型',
+    apiKey: currentProvider?.apiKey || '',
+    model: currentProvider?.defaultModelId || currentModels[0]?.modelId || '',
+    endpoint: currentProvider?.endpoint || '',
   };
 
   const llmPool: LlmConfig[] =
     settings.llmConfigs && settings.llmConfigs.length > 0
       ? settings.llmConfigs
-      : [llm];
+      : (currentProvider ? [llm] : []);
 
   // Provider operations
   const handleUpdateCurrentProvider = (updates: Partial<AiProviderConfig>) => {
+    if (!currentProvider) return;
     updateAiProvider(currentProvider.id, updates);
   };
 
   const handleAddModelToCurrentProvider = (modelId: string, displayName?: string) => {
+    if (!currentProvider) return;
     addModelToProvider(currentProvider.id, {
       modelId,
       displayName: displayName || modelId,
@@ -148,14 +149,17 @@ export function useLlmPanelState() {
   };
 
   const handleRemoveModelFromCurrent = (modelId: string) => {
+    if (!currentProvider) return;
     removeModelFromProvider(currentProvider.id, modelId);
   };
 
   const handleToggleModelInCurrent = (modelId: string) => {
+    if (!currentProvider) return;
     toggleModelEnabled(currentProvider.id, modelId);
   };
 
   const handleSetDefaultModelInCurrent = (modelId: string) => {
+    if (!currentProvider) return;
     setDefaultModelForProvider(currentProvider.id, modelId);
   };
 
@@ -181,12 +185,21 @@ export function useLlmPanelState() {
   };
 
   const handleDeleteCurrentProvider = () => {
-    if (providers.length <= 1) return;
+    if (!currentProvider) return;
     deleteAiProvider(currentProvider.id);
     const remaining = providers.filter((p) => p.id !== currentProvider.id);
-    if (remaining.length > 0) {
-      setSelectedProviderId(remaining[0].id);
+    setSelectedProviderId(remaining[0]?.id || '');
+  };
+
+  const handleAddPresetProvider = (preset: AiProviderConfig) => {
+    const existing = providers.find((p) => p.providerType === preset.providerType || p.name === preset.name);
+    if (existing) {
+      setSelectedProviderId(existing.id);
+      return;
     }
+    const cloned: AiProviderConfig = JSON.parse(JSON.stringify(preset));
+    addAiProvider(cloned);
+    setSelectedProviderId(cloned.id);
   };
 
   const handleTestLlmConnection = async () => {
@@ -196,8 +209,8 @@ export function useLlmPanelState() {
     setTestSuccess(null);
     const start = performance.now();
 
-    const endpoint = currentProvider.endpoint || llm.endpoint;
-    const apiKey = currentProvider.apiKey ?? llm.apiKey;
+    const endpoint = currentProvider?.endpoint || llm?.endpoint || '';
+    const apiKey = currentProvider?.apiKey ?? llm?.apiKey ?? '';
 
     if (!endpoint) {
       setTestStatus('未配置 API 接口地址');
@@ -278,16 +291,34 @@ export function useLlmPanelState() {
 
   // Legacy compat functions
   const handleProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newProvider = e.target.value;
-    const matchedProvider = providers.find((p) => p.providerType === newProvider || p.name === newProvider);
+    const rawVal = e.target.value;
+    const newProvider = rawVal.replace(/^\+\s*/, '');
+    let matchedProvider = providers.find((p) => p.providerType === newProvider || p.name === newProvider);
     const defaults = PROVIDER_DEFAULT_ENDPOINTS[newProvider] || PROVIDER_DEFAULT_ENDPOINTS.Custom;
     const endpoint = matchedProvider?.endpoint || defaults.endpoint;
     const model = matchedProvider?.defaultModelId || matchedProvider?.models?.[0]?.modelId || defaults.model;
     const apiKey = matchedProvider?.apiKey || '';
 
-    if (matchedProvider) {
+    if (!matchedProvider) {
+      const template = PRESET_AI_PROVIDER_TEMPLATES.find(
+        (t) => t.providerType === newProvider || t.name === newProvider
+      );
+      const newProvConfig: AiProviderConfig = {
+        id: template ? template.id : `provider-${Date.now().toString(36)}`,
+        name: template ? template.name : newProvider,
+        providerType: template ? template.providerType : newProvider,
+        endpoint,
+        apiKey,
+        enabled: true,
+        defaultModelId: model,
+        models: template ? template.models : [{ id: model, modelId: model, displayName: model, enabled: true }],
+      };
+      setAiProviders([...providers, newProvConfig]);
+      setSelectedProviderId(newProvConfig.id);
+    } else {
       setSelectedProviderId(matchedProvider.id);
     }
+
     setLlmConfig({
       provider: newProvider,
       endpoint,
@@ -321,6 +352,7 @@ export function useLlmPanelState() {
     handleSetDefaultModelInCurrent,
     handleAddNewProvider,
     handleDeleteCurrentProvider,
+    handleAddPresetProvider,
     // Legacy support
     llm,
     llmPool,

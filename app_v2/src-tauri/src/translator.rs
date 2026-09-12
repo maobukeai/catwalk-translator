@@ -3317,19 +3317,25 @@ pub fn is_retry_status(engine: &MultiEngineTranslation) -> bool {
         || engine.source_tier == "LLM (Config Required)"
         || engine.source_tier == "LLM (Auth Error)"
         || engine.source_tier == "LLM (Quota Error)"
+        || engine.source_tier == "Online (Unconfigured)"
         || engine.translated.contains("点击重试")
         || engine.translated.contains("网络连接超时")
-        || engine.translated.contains("未配置 API Key")
-        || engine.translated.contains("API Key 无效")
+        || engine.translated.contains("未配置")
+        || engine.translated.contains("需配置")
+        || engine.translated.contains("API Key")
         || engine.translated.contains("额度不足")
+        || engine.translated.contains("鉴权失败")
 }
 
 pub fn is_retry_translation(text: &str) -> bool {
-    text.contains("点击重试")
+    text.is_empty()
+        || text.contains("点击重试")
         || text.contains("网络连接超时")
-        || text.contains("未配置 API Key")
-        || text.contains("API Key 无效")
+        || text.contains("未配置")
+        || text.contains("需配置")
+        || text.contains("API Key")
         || text.contains("额度不足")
+        || text.contains("鉴权失败")
 }
 
 /// 解析实际生效的目标语言：目标为 "auto" 时按源语言智能翻转（中文→英文，其他→中文）；
@@ -3777,14 +3783,20 @@ pub async fn execute_universal_translate(
     let is_llm_configured = active_llm_config.as_ref().is_some_and(|cfg| {
         let ep = cfg.endpoint.trim();
         let is_local = ep.contains("localhost") || ep.contains("127.0.0.1");
-        !ep.is_empty() && (!cfg.api_key.trim().is_empty() || is_local) && cfg.enabled.unwrap_or(true)
+        !ep.is_empty()
+            && (!cfg.api_key.trim().is_empty() || (is_local && cfg.enabled == Some(true)))
+            && cfg.enabled.unwrap_or(true)
     });
 
     let configs_to_run: Vec<LlmConfig> = if let Some(_target) = &target_clean_str {
         if let Some(matched) = matched_llm_config {
             vec![matched]
         } else if let Some(cfg) = &active_llm_config {
-            vec![cfg.clone()]
+            if is_llm_configured {
+                vec![cfg.clone()]
+            } else {
+                vec![]
+            }
         } else {
             vec![]
         }
@@ -3794,7 +3806,9 @@ pub async fn execute_universal_translate(
             .filter(|cfg| {
                 let ep = cfg.endpoint.trim();
                 let is_local = ep.contains("localhost") || ep.contains("127.0.0.1");
-                !ep.is_empty() && (!cfg.api_key.trim().is_empty() || is_local) && cfg.enabled.unwrap_or(true)
+                !ep.is_empty()
+                    && (!cfg.api_key.trim().is_empty() || (is_local && cfg.enabled == Some(true)))
+                    && cfg.enabled.unwrap_or(true)
             })
             .cloned()
             .collect();
@@ -3959,9 +3973,11 @@ pub async fn execute_universal_translate(
             });
 
             if let Some(idx) = matched_idx {
-                main_translation = engines[idx].translated.clone();
-                let item = engines.remove(idx);
-                engines.insert(0, item);
+                if !is_retry_status(&engines[idx]) {
+                    main_translation = engines[idx].translated.clone();
+                    let item = engines.remove(idx);
+                    engines.insert(0, item);
+                }
             }
         }
     }

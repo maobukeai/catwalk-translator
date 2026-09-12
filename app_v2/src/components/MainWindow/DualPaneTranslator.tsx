@@ -43,7 +43,7 @@ import { exportTranslationImage } from "../../services/exportImage";
 import { speakText } from "../../services/tts";
 import type { ImageTranslateResponse } from "../../services/tauri";
 import { useSettingsStore } from "../../stores/useSettingsStore";
-import { DEFAULT_SETTINGS } from "../../services/defaultSettings";
+import { DEFAULT_SETTINGS, isConfiguredLlm } from "../../services/defaultSettings";
 import { useAppTheme } from "../../hooks/useAppTheme";
 import { buildCaptureEngineChoices, buildImageTranslateEngineChoices, isLlmChannelReady } from "../../services/engineOptions";
 import { toTranslucentBg, toSolidBg, isLightBg, getCardTextColor } from "../Overlay/OverlayBlockCard";
@@ -973,10 +973,24 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       const currentPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine;
       const isAutoMode = currentPref === 'auto';
       const hasActiveLlm = !!(
-        (settings.llmConfig?.endpoint && (settings.llmConfig.apiKey || settings.llmConfig.endpoint.includes('localhost') || settings.llmConfig.endpoint.includes('127.0.0.1')) && settings.llmConfig.enabled !== false) ||
-        settings.llmConfigs?.some(c => c.endpoint && (c.apiKey || c.endpoint.includes('localhost') || c.endpoint.includes('127.0.0.1')) && c.enabled !== false)
+        isConfiguredLlm(settings.llmConfig) ||
+        settings.llmConfigs?.some(isConfiguredLlm)
       );
       const isProgressive = isAutoMode && hasActiveLlm && settings.enableLlmProgressiveRefine !== false;
+
+      // 判定文本是否为待重试、待配置、鉴权失败或网络异常错误串（严禁此类错误态被误当作优质译文呈现）
+      const isFaultyOrUnconfiguredTranslation = (text?: string | null): boolean => {
+        if (!text) return true;
+        return (
+          text.includes('点击重试') ||
+          text.includes('网络连接超时') ||
+          text.includes('未配置') ||
+          text.includes('需配置') ||
+          text.includes('API Key') ||
+          text.includes('额度不足') ||
+          text.includes('鉴权失败')
+        );
+      };
 
       // ── Stage-0: 闪电先锋快通道 (与截图翻译完全一致的并发竞速，150ms 秒级直出上屏) ──
       if (isAutoMode) {
@@ -990,7 +1004,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           .then(([flashRes]) => {
             if (seq !== translationSeqRef.current) return;
             if (stage1DoneSeqRef.current === seq) return;
-            if (flashRes && flashRes.translated && flashRes.translated.trim()) {
+            if (flashRes && flashRes.translated && flashRes.translated.trim() && !isFaultyOrUnconfiguredTranslation(flashRes.translated)) {
               setResponse((prev) => {
                 if (stage1DoneSeqRef.current === seq) return prev;
                 if (prev && !prev.engines.some(e => e.engineName.includes('⚡'))) return prev;
@@ -1014,10 +1028,10 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       }
 
       try {
-        // ── Stage-1: 全引擎多源对照 (带 1.2s 动态熔断截断，绝不拖垮首屏) ──
+        // ── Stage-1: 全引擎多源对照 (带 1.2s 动态熔断截断，绝不拖垮首屏；未配置大模型时严格跳过 LLM) ──
         const res = await tauriService.cmdUniversalTranslate({
           ...baseParams,
-          skipLlm: isProgressive,
+          skipLlm: isProgressive || !hasActiveLlm,
         });
 
         // 请求期间用户又触发了新翻译，丢弃本次过期结果
@@ -1028,10 +1042,10 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         stage1DoneSeqRef.current = seq;
 
         setResponse((prev) => {
-          // 若已有先锋有效结果且新返回的 mainTranslation 处于重试态，优先保留先锋优质译文
+          // 若已有先锋有效结果且新返回的 mainTranslation 处于重试或待配置态，优先保留先锋优质译文
           let finalMain = res.mainTranslation;
-          const isResMainRetry = !finalMain || finalMain.includes('点击重试') || finalMain.includes('网络连接超时');
-          if (isResMainRetry && prev?.mainTranslation && !prev.mainTranslation.includes('点击重试')) {
+          const isResMainFaulty = isFaultyOrUnconfiguredTranslation(finalMain);
+          if (isResMainFaulty && prev?.mainTranslation && !isFaultyOrUnconfiguredTranslation(prev.mainTranslation)) {
             finalMain = prev.mainTranslation;
           }
           return {
@@ -1048,8 +1062,9 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
             return (
               short === currentPref.toLowerCase() &&
               e.sourceTier !== 'Online (Retry)' &&
-              !e.translated.includes('点击重试') &&
-              !e.translated.includes('网络连接超时')
+              e.sourceTier !== 'LLM (Config Required)' &&
+              e.sourceTier !== 'Online (Unconfigured)' &&
+              !isFaultyOrUnconfiguredTranslation(e.translated)
             );
           });
         }
@@ -1059,13 +1074,27 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
             (e) =>
               e.translated === res.mainTranslation &&
               e.sourceTier !== 'Online (Retry)' &&
-              !e.translated.includes('点击重试')
+              e.sourceTier !== 'LLM (Config Required)' &&
+              e.sourceTier !== 'Online (Unconfigured)' &&
+              !isFaultyOrUnconfiguredTranslation(e.translated)
+          );
+        }
+
+        if (targetIdx === -1) {
+          // 智能寻找首个真正有效的译文卡片（排除未配置与重试态）
+          targetIdx = res.engines.findIndex(
+            (e) =>
+              e.sourceTier !== 'Online (Retry)' &&
+              e.sourceTier !== 'LLM (Config Required)' &&
+              e.sourceTier !== 'Online (Unconfigured)' &&
+              !isFaultyOrUnconfiguredTranslation(e.translated) &&
+              e.translated.trim().length > 0
           );
         }
 
         setSelectedEngineIndex(targetIdx >= 0 ? targetIdx : 0);
 
-        if (res.mainTranslation && !res.mainTranslation.includes('点击重试')) {
+        if (res.mainTranslation && !isFaultyOrUnconfiguredTranslation(res.mainTranslation)) {
           const tier = res.engines[0]?.sourceTier || 'Online Fallback';
           saveTranslationHistory(trimmed, res.mainTranslation, tier).catch((e) =>
             console.warn('History save failed:', e)
@@ -1082,7 +1111,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         // 快通道就绪：瞬间移除遮罩，用户 150ms 即可查阅复制
         setLoading(false);
 
-        // ── Stage-2: 慢通道 (后台异步大模型精翻与平滑无缝升级) ──
+        // ── Stage-2: 慢通道 (仅在有真正配置好可用的大模型时后台异步精翻与平滑无缝升级) ──
         if (isProgressive) {
           setIsAiRefining(true);
           (async () => {
@@ -1094,8 +1123,13 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
               if (seq !== translationSeqRef.current) return;
 
               const aiEngine = aiRes.engines.find(
-                (e) => (e.sourceTier === 'LLM API' || e.engineName.includes('AI') || e.engineName.includes('LLM') || e.engineName.includes('深度翻译')) &&
-                  !e.translated.includes('点击重试') && e.translated.trim()
+                (e) =>
+                  (e.sourceTier === 'LLM API' || e.engineName.includes('深度翻译') || e.engineName.includes('AI')) &&
+                  e.sourceTier !== 'LLM (Config Required)' &&
+                  e.sourceTier !== 'LLM (Auth Error)' &&
+                  e.sourceTier !== 'LLM (Quota Error)' &&
+                  !isFaultyOrUnconfiguredTranslation(e.translated) &&
+                  e.translated.trim().length > 0
               );
 
               if (aiEngine) {
@@ -1122,6 +1156,8 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 }
 
                 saveTranslationHistory(trimmed, formattedAiEngine.translated, `${formattedAiEngine.engineName} (AI 精翻 ✨)`, true).catch(console.warn);
+              } else {
+                console.info('[DualPaneTranslator] AI refine returned no valid translation, keeping existing machine translation intact.');
               }
             } catch (aiErr) {
               console.warn('[DualPaneTranslator] Progressive AI refine failed:', aiErr);
@@ -1469,24 +1505,16 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       ? settings.llmConfigs
       : settings.llmConfig ? [settings.llmConfig] : [];
 
-    const readyPool = pool.filter((cfg) => {
-      if (cfg.enabled === false) return false;
-      const ep = cfg.endpoint || '';
-      const isLocal = ep.includes('localhost') || ep.includes('127.0.0.1');
-      return !!ep.trim() && (!!cfg.apiKey?.trim() || isLocal);
-    });
+    const readyPool = pool.filter(isConfiguredLlm);
 
     if (readyPool.length > 0) {
       for (const cfg of readyPool) {
         const label = cfg.model && cfg.model !== 'custom-model' ? cfg.model : (cfg.provider || 'AI');
         tabs.push({ name: `${label} 深度翻译`, icon: Bot });
       }
-    } else if (settings.llmConfig && settings.llmConfig.enabled !== false) {
-      const isLlmConfigured = (settings.llmConfig.endpoint?.includes('localhost') || settings.llmConfig.endpoint?.includes('127.0.0.1')) || !!settings.llmConfig.apiKey?.trim();
-      if (isLlmConfigured) {
-        const label = settings.llmConfig.model && settings.llmConfig.model !== 'custom-model' ? settings.llmConfig.model : (settings.llmConfig.provider || 'AI');
-        tabs.push({ name: `${label} 深度翻译`, icon: Bot });
-      }
+    } else if (settings.llmConfig && isConfiguredLlm(settings.llmConfig)) {
+      const label = settings.llmConfig.model && settings.llmConfig.model !== 'custom-model' ? settings.llmConfig.model : (settings.llmConfig.provider || 'AI');
+      tabs.push({ name: `${label} 深度翻译`, icon: Bot });
     }
 
     const dicts = settings.presetDicts;
@@ -2184,14 +2212,31 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   onClick={() => {
                     setPreferredEngine('auto');
                     try { localStorage.setItem('maobu_preferred_engine', 'auto'); } catch {}
-                    if (response?.engines) {
-                      const validIdx = response.engines.findIndex(
-                        (e) =>
-                          e.translated === response.mainTranslation &&
-                          e.sourceTier !== 'Online (Retry)' &&
-                          !e.translated.includes('点击重试')
+                    if (response?.engines && response.engines.length > 0) {
+                      const isFaultyOrUnconfigured = (e: import('../../services/types').MultiEngineTranslation) =>
+                        e.sourceTier === 'Online (Retry)' ||
+                        e.sourceTier === 'LLM (Config Required)' ||
+                        e.sourceTier === 'LLM (Auth Error)' ||
+                        e.sourceTier === 'LLM (Quota Error)' ||
+                        e.sourceTier === 'Online (Unconfigured)' ||
+                        e.translated.includes('点击重试') ||
+                        e.translated.includes('网络连接超时') ||
+                        e.translated.includes('未配置') ||
+                        e.translated.includes('需配置') ||
+                        e.translated.includes('API Key') ||
+                        e.translated.includes('额度不足') ||
+                        e.translated.includes('鉴权失败') ||
+                        !e.translated.trim();
+
+                      let validIdx = response.engines.findIndex(
+                        (e) => e.translated === response.mainTranslation && !isFaultyOrUnconfigured(e)
                       );
+                      if (validIdx === -1) {
+                        validIdx = response.engines.findIndex((e) => !isFaultyOrUnconfigured(e));
+                      }
                       setSelectedEngineIndex(validIdx >= 0 ? validIdx : 0);
+                    } else if (sourceText.trim()) {
+                      performTranslation(sourceText, sourceLang, targetLang);
                     }
                   }}
                   title="智能多级自动择优推荐 (点击清除固定渠道)"

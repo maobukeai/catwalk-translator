@@ -17,48 +17,47 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
     cleanup();
     localStorage.clear();
     delete (window as any).__TAURI_INTERNALS__;
-    // Reset Zustand store state before each test
+    const initialLlm = {
+      provider: 'DeepSeek',
+      apiKey: '',
+      model: 'deepseek-chat',
+      endpoint: 'https://api.deepseek.com/v1',
+    };
+    const initialAiProviders = [
+      {
+        id: 'provider-deepseek',
+        name: 'DeepSeek',
+        providerType: 'DeepSeek',
+        apiKey: '',
+        endpoint: 'https://api.deepseek.com/v1',
+        enabled: true,
+        defaultModelId: 'deepseek-chat',
+        models: [
+          { id: 'deepseek-chat', modelId: 'deepseek-chat', displayName: 'DeepSeek V3', enabled: true },
+        ],
+      },
+    ];
+    const initialTestSettings = {
+      theme: 'system',
+      hotkey: 'F4',
+      defaultPreset: 'blender',
+      llmConfig: initialLlm,
+      aiProviders: initialAiProviders,
+      llmConfigs: [initialLlm],
+      translationTiers: ['Preset Dictionary', 'LLM API', 'Online Fallback'],
+      presetDicts: {
+        blender: true,
+        substance: true,
+        unity: true,
+        unreal: true,
+        maya: true,
+        houdini: true,
+      },
+    };
+    localStorage.setItem('cg_translator_settings_v2', JSON.stringify(initialTestSettings));
     useSettingsStore.setState({
-      settings: {
-        theme: 'system',
-        hotkey: 'F4',
-        defaultPreset: 'blender',
-        llmConfig: {
-          provider: 'DeepSeek',
-          apiKey: '',
-          model: 'deepseek-chat',
-          endpoint: 'https://api.deepseek.com/v1',
-        },
-        translationTiers: ['Preset Dictionary', 'LLM API', 'Online Fallback'],
-        presetDicts: {
-          blender: true,
-          substance: true,
-          unity: true,
-          unreal: true,
-          maya: true,
-          houdini: true,
-        },
-      },
-      initialSettings: {
-        theme: 'system',
-        hotkey: 'F4',
-        defaultPreset: 'blender',
-        llmConfig: {
-          provider: 'DeepSeek',
-          apiKey: '',
-          model: 'deepseek-chat',
-          endpoint: 'https://api.deepseek.com/v1',
-        },
-        translationTiers: ['Preset Dictionary', 'LLM API', 'Online Fallback'],
-        presetDicts: {
-          blender: true,
-          substance: true,
-          unity: true,
-          unreal: true,
-          maya: true,
-          houdini: true,
-        },
-      },
+      settings: initialTestSettings as any,
+      initialSettings: initialTestSettings as any,
       isDirty: false,
       isLoading: false,
       isSaving: false,

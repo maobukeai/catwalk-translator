@@ -118,8 +118,8 @@ fn test_serde_camel_case_app_settings_full_roundtrip() {
 
     // Verify all camelCase field names in JSON string
     assert!(json.contains(r#""defaultPreset": "blender""#));
-    assert!(json.contains(r#""llmConfig": {"#));
-    assert!(json.contains(r#""apiKey": ""#));
+    assert!(json.contains(r#""llmConfig": null"#));
+    assert!(json.contains(r#""llmConfigs": []"#));
     assert!(json.contains(r#""translationTiers": ["#));
     assert!(json.contains(r#""presetDicts": {"#));
 

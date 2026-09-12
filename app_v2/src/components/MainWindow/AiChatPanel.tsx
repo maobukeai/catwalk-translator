@@ -26,10 +26,12 @@ import {
   Maximize2,
   ChevronsUp,
   ChevronsDown,
+  Plus,
 } from 'lucide-react';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { useAppTheme } from '../../hooks/useAppTheme';
 import { GlassSelect } from '../Common/GlassSelect';
+import { CascadingModelSelect } from './CascadingModelSelect';
 import { resolveVendor, resolveModelLabel } from '../../services/defaultSettings';
 import type { ChatMessage, LlmConfig } from '../../services/types';
 import { cmdChatLlm, cmdChatLlmStream } from '../../services/tauri';
@@ -242,21 +244,18 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
   const { settings, setLlmConfig } = useSettingsStore();
   const { isLight } = useAppTheme();
 
-  const llm = settings.llmConfig || {
-    provider: 'DeepSeek',
-    apiKey: '',
-    model: 'deepseek-chat',
-    endpoint: 'https://api.deepseek.com/v1',
-  };
+  const llm = settings.llmConfig || null;
 
-  const isModelConfigured = (cfg: LlmConfig) =>
-    !!cfg.apiKey?.trim() || cfg.endpoint?.includes('localhost') || cfg.endpoint?.includes('127.0.0.1');
+  const isModelConfigured = (cfg: LlmConfig | null | undefined) =>
+    !!cfg && (!!cfg.apiKey?.trim() || cfg.endpoint?.includes('localhost') || cfg.endpoint?.includes('127.0.0.1'));
 
   const configuredLlmConfigs = (settings.llmConfigs || []).filter(isModelConfigured);
 
-  // 所有可用大模型配置（若无可用配置池则以当前 llm 兜底）
+  // 所有可用大模型配置（若无可用配置池且当前有选定 llm 则使用 llm；若均无则为空数组）
   const allAvailableConfigs = React.useMemo(() => {
-    return configuredLlmConfigs.length > 0 ? configuredLlmConfigs : [llm];
+    if (configuredLlmConfigs.length > 0) return configuredLlmConfigs;
+    if (llm) return [llm];
+    return [];
   }, [configuredLlmConfigs, llm]);
 
   // 按真实 AI 厂商（Vendor）对大模型进行聚类分组（消除 Custom，按厂商分类）
@@ -278,6 +277,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
 
   // 当前选中的厂商
   const activeVendor = React.useMemo(() => {
+    if (!llm) return vendorGroups[0]?.vendor || '未配置厂商';
     const currentVendor = resolveVendor(llm);
     const matched = vendorGroups.some((g) => g.vendor === currentVendor);
     return matched ? currentVendor : (vendorGroups[0]?.vendor || currentVendor);
@@ -286,7 +286,8 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
   // 当前厂商旗下的具体模型列表
   const modelsInActiveVendor = React.useMemo(() => {
     const group = vendorGroups.find((g) => g.vendor === activeVendor);
-    return group && group.models.length > 0 ? group.models : [llm];
+    if (group && group.models.length > 0) return group.models;
+    return llm ? [llm] : [];
   }, [vendorGroups, activeVendor, llm]);
 
   // 配置唯一标识 Key 计算
@@ -296,11 +297,12 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
 
   // 当前厂商下选中的模型 Key
   const activeModelKey = React.useMemo(() => {
+    if (!llm) return '';
     const currentKey = getConfigKey(llm);
     const matched = modelsInActiveVendor.find(
       (c) => getConfigKey(c) === currentKey || c.model === llm.model
     );
-    return matched ? getConfigKey(matched) : getConfigKey(modelsInActiveVendor[0] || llm);
+    return matched ? getConfigKey(matched) : (modelsInActiveVendor[0] ? getConfigKey(modelsInActiveVendor[0]) : '');
   }, [llm, modelsInActiveVendor, getConfigKey]);
 
   // 切换厂商联动处理：自动切换到所选厂商旗下的首选模型
@@ -308,7 +310,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
     const group = vendorGroups.find((g) => g.vendor === newVendor);
     if (!group || group.models.length === 0) return;
     const sameModel = group.models.find(
-      (c) => getConfigKey(c) === getConfigKey(llm) || c.model === llm.model
+      (c) => (llm && getConfigKey(c) === getConfigKey(llm)) || (llm && c.model === llm.model)
     );
     const target = sameModel || group.models[0];
     setLlmConfig(target);
@@ -624,6 +626,21 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
       timestamp: nowTime(),
       mode: modeBadge,
     };
+
+    // Pre-flight check for zero model
+    if (!llm || allAvailableConfigs.length === 0) {
+      const warnMsg: ChatMessage = {
+        id: `ai_${Date.now() + 1}`,
+        role: 'assistant',
+        content: `⚠️ 当前尚未配置任何 AI 大语言模型。\n\n猫步翻译开箱即用默认支持专业 CG 词典和极速机翻。如需使用智能对话助手，请点击下方或顶栏的【前往设置】添加服务商与模型。`,
+        timestamp: nowTime(),
+        model: '未配置模型',
+      };
+      upsertSession(activeSessionId, (msgs) => [...msgs, userMsg, warnMsg]);
+      if (!textToSend) setInput('');
+      setErrorMsg('未配置任何 AI 大模型。请点击【前往设置】添加。');
+      return;
+    }
 
     // Pre-flight check for missing API Key
     const isLocalEndpoint = llm.endpoint.includes('localhost') || llm.endpoint.includes('127.0.0.1');
@@ -1031,62 +1048,56 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
               <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                 <h2 className="text-xs sm:text-sm font-bold shrink-0">AI 智能对话</h2>
 
-                {/* 厂商与厂商旗下模型二级分类选择（彻底不显示 Custom，按厂商分类选模型） */}
-                <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
-                  {/* 1. 厂商选择器 */}
-                  <div className="flex items-center space-x-1 shrink-0">
-                    <span className="text-[10px] sm:text-[11px] font-medium text-[var(--g-text-3)] select-none">厂商:</span>
-                    {vendorGroups.length > 1 ? (
-                      <GlassSelect
-                        value={activeVendor}
-                        onChange={handleVendorChange}
-                        direction="down"
-                        size="sm"
-                        title="快速切换 AI 厂商"
-                        options={vendorGroups.map((g) => ({
-                          value: g.vendor,
-                          label: g.vendor,
-                          sub: `${g.models.length} 个可用模型`,
-                        }))}
-                      />
-                    ) : (
-                      <span className="lg-pill font-semibold text-[11px] py-0.5 px-2">
-                        {activeVendor}
-                      </span>
+                {/* 级联分类选择器 或 0 模型未配置引导 */}
+                {allAvailableConfigs.length === 0 || !llm ? (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-500 text-[11px] font-semibold">
+                    <span>未配置 AI 模型</span>
+                    {onOpenSettings && (
+                      <button
+                        type="button"
+                        onClick={onOpenSettings}
+                        className="underline hover:text-amber-400 cursor-pointer font-bold ml-0.5"
+                      >
+                        + 前往添加
+                      </button>
                     )}
                   </div>
-
-                  {/* 2. 所选厂商旗下的模型分类选择器 */}
-                  <div className="flex items-center space-x-1 shrink-0">
-                    <span className="text-[10px] sm:text-[11px] font-medium text-[var(--g-text-3)] select-none">模型:</span>
-                    <GlassSelect
-                      value={activeModelKey}
-                      onChange={handleModelChange}
-                      direction="down"
-                      size="sm"
-                      title="快速切换当前对话所使用的大模型"
-                      options={modelsInActiveVendor.map((cfg) => ({
-                        value: getConfigKey(cfg),
-                        label: resolveModelLabel(cfg),
-                        sub: cfg.endpoint?.includes('localhost') ? '本地服务' : undefined,
-                      }))}
-                    />
-                  </div>
-                </div>
+                ) : (
+                  <CascadingModelSelect
+                    activeVendor={activeVendor}
+                    activeModelLabel={resolveModelLabel(llm)}
+                    activeModelKey={activeModelKey}
+                    vendorGroups={vendorGroups}
+                    onSelectModel={(cfg) => {
+                      setLlmConfig(cfg);
+                      setErrorMsg(null);
+                    }}
+                    onSelectVendor={(v) => {
+                      handleVendorChange(v);
+                    }}
+                    getConfigKey={getConfigKey}
+                  />
+                )}
               </div>
               <p className="text-[10px] font-mono flex items-center gap-1.5 flex-wrap leading-none mt-0.5" style={{ color: 'var(--g-text-3)' }}>
-                <span>厂商: <span className="font-semibold" style={{ color: 'var(--g-text-2)' }}>{activeVendor}</span></span>
-                <span>·</span>
-                <span>Model: <span className="font-semibold" style={{ color: 'var(--g-text-2)' }}>{resolveModelLabel(llm)}</span></span>
-                {!isModelConfigured(llm) && onOpenSettings && (
-                  <button
-                    type="button"
-                    onClick={onOpenSettings}
-                    className="text-amber-500 hover:underline cursor-pointer font-sans text-[10px] font-semibold flex items-center gap-0.5"
-                  >
-                    <span>⚠️ 未配置 Key</span>
-                    <span>(前往设置)</span>
-                  </button>
+                {llm && allAvailableConfigs.length > 0 ? (
+                  <>
+                    <span>厂商: <span className="font-semibold" style={{ color: 'var(--g-text-2)' }}>{activeVendor}</span></span>
+                    <span>·</span>
+                    <span>Model: <span className="font-semibold" style={{ color: 'var(--g-text-2)' }}>{resolveModelLabel(llm)}</span></span>
+                    {!isModelConfigured(llm) && onOpenSettings && (
+                      <button
+                        type="button"
+                        onClick={onOpenSettings}
+                        className="text-amber-500 hover:underline cursor-pointer font-sans text-[10px] font-semibold flex items-center gap-0.5"
+                      >
+                        <span>⚠️ 未配置 Key</span>
+                        <span>(前往设置)</span>
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <span>暂未配置大模型，点击上方按钮前往设置添加</span>
                 )}
               </p>
             </div>
@@ -1316,11 +1327,34 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
               </div>
 
               <div className="space-y-1 max-w-md">
-                <h3 className="text-sm font-bold">猫步 AI 智能对话助手就绪</h3>
+                <h3 className="text-sm font-bold">
+                  {allAvailableConfigs.length === 0 || !llm ? '暂未配置 AI 大语言模型' : '猫步 AI 智能对话助手就绪'}
+                </h3>
                 <p className="text-xs leading-relaxed" style={{ color: 'var(--g-text-2)' }}>
-                  当前准备调用 <span className="font-mono font-semibold" style={{ color: 'var(--accent-text)' }}>{activeVendor} - {resolveModelLabel(llm)}</span> 大模型
+                  {allAvailableConfigs.length === 0 || !llm ? (
+                    <>
+                      猫步翻译已默认集成专业 CG 词库与多引擎在线机翻。如需开启深度对话、AI 智能翻译与学术润色，请点击下方前往设置添加服务商（支持 DeepSeek、OpenAI、本地 Ollama 等）：
+                    </>
+                  ) : (
+                    <>
+                      当前准备调用 <span className="font-mono font-semibold" style={{ color: 'var(--accent-text)' }}>{activeVendor} - {resolveModelLabel(llm)}</span> 大模型
+                    </>
+                  )}
                 </p>
               </div>
+
+              {(allAvailableConfigs.length === 0 || !llm) && onOpenSettings && (
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={onOpenSettings}
+                    className="lg-btn lg-btn-primary !px-4 !py-2 text-xs font-semibold flex items-center gap-1.5 shadow-sm cursor-pointer"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>前往设置添加 AI 模型</span>
+                  </button>
+                </div>
+              )}
 
               {/* Quick Starter Prompt Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full max-w-xl pt-2">
@@ -1495,7 +1529,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                                       <div className="space-y-1 py-1 text-[11px] font-sans" style={{ color: 'var(--g-text-3)' }}>
                                         <div className="flex items-center space-x-2">
                                           <span className="h-1.5 w-1.5 rounded-full animate-ping" style={{ background: 'var(--accent)' }} />
-                                          <span className="font-medium">正在建立端到端流式通道，连接推理模型 ({llm.model || 'SenseNova'})...</span>
+                                          <span className="font-medium">正在建立端到端流式通道，连接推理模型 ({llm?.model || 'AI'})...</span>
                                         </div>
                                         <div className="text-[10.5px] opacity-75 pl-3.5">
                                           已耗时 {waitingSeconds}s · 正在接收模型实时思维链，推理细节将逐字跳动上屏

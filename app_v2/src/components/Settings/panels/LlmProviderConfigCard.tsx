@@ -4,13 +4,17 @@ import {
   Star, Sparkles, Server, CheckCircle2, AlertCircle, Layers
 } from 'lucide-react';
 import { useLlmPanelState, PROVIDER_PRESET_MODELS } from './useLlmPanelState';
+import { useAppTheme } from '../../../hooks/useAppTheme';
+import { PRESET_AI_PROVIDER_TEMPLATES } from '../../../services/defaultSettings';
 import type { AiModelItem } from '../../../services/types';
 
 interface LlmProviderConfigCardProps {
-  isLight: boolean;
+  isLight?: boolean;
 }
 
-export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ isLight }) => {
+export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ isLight: propIsLight }) => {
+  const { isLight: hookIsLight } = useAppTheme();
+  const isLight = propIsLight ?? hookIsLight;
   const {
     providers,
     selectedProviderId,
@@ -24,6 +28,7 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
     handleSetDefaultModelInCurrent,
     handleAddNewProvider,
     handleDeleteCurrentProvider,
+    handleAddPresetProvider,
     showApiKey,
     setShowApiKey,
     testLatency,
@@ -42,12 +47,13 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
   const [newModelDisplayName, setNewModelDisplayName] = useState('');
   const [selectedRemoteModel, setSelectedRemoteModel] = useState('');
   const [showAddProviderModal, setShowAddProviderModal] = useState(false);
+  const [showTemplateMenu, setShowTemplateMenu] = useState(false);
   const [customProvName, setCustomProvName] = useState('');
   const [customProvEndpoint, setCustomProvEndpoint] = useState('');
 
   // 推荐未添加的模型
-  const currentModelIds = new Set(currentModels.map((m) => m.modelId));
-  const presetList = PROVIDER_PRESET_MODELS[currentProvider.providerType || currentProvider.name] || [];
+  const currentModelIds = new Set((currentModels || []).map((m) => m.modelId));
+  const presetList = currentProvider ? (PROVIDER_PRESET_MODELS[currentProvider.providerType || currentProvider.name] || []) : [];
   const unaddedPresets = presetList.filter((m) => !currentModelIds.has(m));
 
   const handleManualAddModel = (e: React.FormEvent) => {
@@ -106,7 +112,7 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
           <button
             type="button"
             onClick={handleFetchModels}
-            disabled={isFetchingModels || !currentProvider.endpoint}
+            disabled={isFetchingModels || !currentProvider || !currentProvider.endpoint}
             className={`rounded-xl border px-3.5 py-1.5 text-xs font-medium disabled:opacity-40 transition flex items-center gap-1.5 cursor-pointer ${
               isLight
                 ? 'bg-slate-100 border-slate-300 text-blue-700 hover:bg-slate-200'
@@ -121,7 +127,7 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
           <button
             type="button"
             onClick={handleTestLlmConnection}
-            disabled={isTestingLlm}
+            disabled={isTestingLlm || !currentProvider || !currentProvider.endpoint}
             className={`rounded-xl border px-3.5 py-1.5 text-xs font-medium disabled:opacity-40 transition flex items-center gap-1.5 cursor-pointer ${
               isLight
                 ? 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-slate-200'
@@ -165,42 +171,214 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
         </div>
       )}
 
-      {/* 供应商选择导航条 (水平卡片切换) */}
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
-          <div className="flex items-center gap-2">
-            <span className={isLight ? 'text-slate-800' : 'text-zinc-200'}>选择服务提供商 (Provider)</span>
-            <select
-              aria-label="服务提供商"
-              data-testid="provider-select"
-              value={currentProvider.providerType || currentProvider.name}
-              onChange={handleProviderChange}
-              className={`px-2 py-0.5 rounded-lg border text-xs font-medium cursor-pointer transition ${
+      {/* 0 模型干净空状态 vs 供应商多模型体系 */}
+      {providers.length === 0 || !currentProvider ? (
+        <div
+          data-testid="zero-model-empty-state"
+          className={`rounded-2xl border p-6 sm:p-8 text-center space-y-5 ${
+            isLight ? 'bg-slate-50/80 border-slate-200 shadow-xs' : 'bg-zinc-950/60 border-white/[0.08]'
+          }`}
+        >
+          <div className="mx-auto w-12 h-12 rounded-2xl flex items-center justify-center bg-indigo-500/10 text-indigo-500 border border-indigo-500/20">
+            <Bot className="h-6 w-6" />
+          </div>
+          <div className="space-y-1.5 max-w-lg mx-auto">
+            <h3 className="text-sm sm:text-base font-bold">暂未添加任何 AI 大语言模型</h3>
+            <p className={`text-xs leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+              猫步翻译开箱即用，默认基于专业 CG 术语词库与多引擎在线机翻（Google、微软 Bing、网易有道等）毫秒级直出。
+              <br />
+              如需使用 AI 进行学术润色、长文本精翻或在对话面板中与大模型交互，请点击下方常用预设服务商一键添加：
+            </p>
+          </div>
+
+          {/* 预设服务商一键添加芯片组 */}
+          <div className="pt-2 flex flex-wrap justify-center gap-2 max-w-2xl mx-auto">
+            {PRESET_AI_PROVIDER_TEMPLATES.map((tmpl) => (
+              <button
+                key={tmpl.id}
+                type="button"
+                onClick={() => handleAddPresetProvider(tmpl)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-medium transition cursor-pointer shadow-xs ${
+                  isLight
+                    ? 'bg-white hover:bg-blue-50 border-slate-200 hover:border-blue-300 text-slate-700 hover:text-blue-600'
+                    : 'bg-zinc-900/90 hover:bg-zinc-800 border-white/10 hover:border-white/25 text-zinc-200 hover:text-white'
+                }`}
+              >
+                <Plus className="h-3.5 w-3.5 text-blue-500" />
+                <span>{tmpl.name}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => setShowAddProviderModal(!showAddProviderModal)}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium transition cursor-pointer border ${
                 isLight
-                  ? 'bg-white border-slate-300 text-slate-700 hover:border-blue-400'
-                  : 'bg-zinc-800 border-white/10 text-zinc-200 hover:border-white/20'
+                  ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                  : 'bg-blue-500/10 border-blue-400/30 text-blue-300 hover:bg-blue-500/20'
               }`}
             >
-              {providers.map((p) => (
-                <option key={p.id} value={p.providerType || p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              <Plus className="h-4 w-4" />
+              <span>添加自定义 OpenAI 兼容网关 (中转服务)</span>
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowAddProviderModal(!showAddProviderModal)}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer border ${
-              isLight
-                ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
-                : 'bg-blue-500/10 border-blue-400/30 text-blue-300 hover:bg-blue-500/20'
-            }`}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>添加自定义供应商</span>
-          </button>
+
+          {showAddProviderModal && (
+            <form
+              onSubmit={handleCreateCustomProvider}
+              className={`p-3 rounded-xl border flex flex-wrap items-center gap-2 text-xs max-w-xl mx-auto text-left ${
+                isLight ? 'bg-white border-slate-300' : 'bg-zinc-900 border-white/10'
+              }`}
+            >
+              <input
+                type="text"
+                value={customProvName}
+                onChange={(e) => setCustomProvName(e.target.value)}
+                placeholder="供应商名称 (如: 我的企业网关)"
+                required
+                className={`px-3 py-1.5 rounded-lg border text-xs flex-1 min-w-[140px] ${
+                  isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-800 border-zinc-700 text-zinc-100'
+                }`}
+              />
+              <input
+                type="text"
+                value={customProvEndpoint}
+                onChange={(e) => setCustomProvEndpoint(e.target.value)}
+                placeholder="API 接口地址 (如: https://api.my-gateway.com/v1)"
+                required
+                className={`px-3 py-1.5 rounded-lg border text-xs flex-1 min-w-[220px] font-mono ${
+                  isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-800 border-zinc-700 text-zinc-100'
+                }`}
+              />
+              <button
+                type="submit"
+                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs cursor-pointer shadow-xs"
+              >
+                确认添加
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAddProviderModal(false)}
+                className={`px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer ${
+                  isLight ? 'bg-white border-slate-200 text-slate-600' : 'bg-zinc-800 border-zinc-700 text-zinc-300'
+                }`}
+              >
+                取消
+              </button>
+            </form>
+          )}
         </div>
+      ) : (
+        <>
+          {/* 供应商选择导航条 (水平卡片切换) */}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
+              <div className="flex items-center gap-2">
+                <span className={isLight ? 'text-slate-800' : 'text-zinc-200'}>选择服务提供商 (Provider)</span>
+                <select
+                  aria-label="服务提供商"
+                  data-testid="provider-select"
+                  value={currentProvider.providerType || currentProvider.name}
+                  onChange={handleProviderChange}
+                  className={`px-2 py-0.5 rounded-lg border text-xs font-medium cursor-pointer transition ${
+                    isLight
+                      ? 'bg-white border-slate-300 text-slate-700 hover:border-blue-400'
+                      : 'bg-zinc-800 border-white/10 text-zinc-200 hover:border-white/20'
+                  }`}
+                >
+                  <optgroup label="已配置服务商">
+                    {providers.map((p) => (
+                      <option key={p.id} value={p.providerType || p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {PRESET_AI_PROVIDER_TEMPLATES.filter(
+                    (tmpl) => !providers.some((p) => (p.providerType || p.name) === tmpl.name || (p.providerType || p.name) === tmpl.providerType)
+                  ).length > 0 && (
+                    <optgroup label="切换至其他服务商">
+                      {PRESET_AI_PROVIDER_TEMPLATES.filter(
+                        (tmpl) => !providers.some((p) => (p.providerType || p.name) === tmpl.name || (p.providerType || p.name) === tmpl.providerType)
+                      ).map((tmpl) => (
+                        <option key={tmpl.id} value={tmpl.providerType || tmpl.name}>
+                          {tmpl.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* 从模板添加下拉菜单 */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowTemplateMenu(!showTemplateMenu)}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer border ${
+                      isLight
+                        ? 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
+                        : 'bg-zinc-800 border-white/10 text-zinc-200 hover:bg-zinc-700'
+                    }`}
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
+                    <span>从模板添加</span>
+                  </button>
+
+                  {showTemplateMenu && (
+                    <div
+                      className={`absolute right-0 mt-1 w-52 rounded-xl border p-1 shadow-lg z-30 ${
+                        isLight ? 'bg-white border-slate-200' : 'bg-zinc-900 border-zinc-700'
+                      }`}
+                    >
+                      <div className="px-2 py-1 text-[10px] font-semibold text-zinc-400">选择常用服务商模板</div>
+                      <div className="max-h-56 overflow-y-auto space-y-0.5">
+                        {PRESET_AI_PROVIDER_TEMPLATES.map((tmpl) => {
+                          const alreadyAdded = providers.some(
+                            (p) => p.providerType === tmpl.providerType || p.name === tmpl.name
+                          );
+                          return (
+                            <button
+                              key={tmpl.id}
+                              type="button"
+                              onClick={() => {
+                                handleAddPresetProvider(tmpl);
+                                setShowTemplateMenu(false);
+                              }}
+                              className={`w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center justify-between transition cursor-pointer ${
+                                alreadyAdded
+                                  ? 'opacity-50 text-zinc-400 cursor-default'
+                                  : isLight
+                                  ? 'hover:bg-blue-50 text-slate-700 hover:text-blue-600'
+                                  : 'hover:bg-zinc-800 text-zinc-200 hover:text-white'
+                              }`}
+                            >
+                              <span>{tmpl.name}</span>
+                              {alreadyAdded && <span className="text-[10px]">已添加</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAddProviderModal(!showAddProviderModal)}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer border ${
+                    isLight
+                      ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                      : 'bg-blue-500/10 border-blue-400/30 text-blue-300 hover:bg-blue-500/20'
+                  }`}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>添加自定义供应商</span>
+                </button>
+              </div>
+            </div>
 
         {/* 自定义供应商添加表单 (展开状态) */}
         {showAddProviderModal && (
@@ -364,13 +542,13 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
               </button>
             </div>
 
-            {/* 若为自定义供应商，支持删除 */}
-            {providers.length > 1 && (currentProvider.providerType === 'Custom' || currentProvider.id.startsWith('provider-custom')) && (
+            {/* 支持删除当前供应商 */}
+            {currentProvider && (
               <button
                 type="button"
                 onClick={handleDeleteCurrentProvider}
                 className="flex items-center gap-1 px-2 py-1 rounded-lg text-rose-500 hover:bg-rose-500/10 text-xs transition cursor-pointer"
-                title="删除该自定义供应商"
+                title={`删除 ${currentProvider.name} 及其所有模型`}
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 <span>删除供应商</span>
@@ -628,6 +806,8 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
           </form>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 };
