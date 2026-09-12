@@ -822,35 +822,45 @@ pub async fn cmd_download_and_install_update(
                 .unwrap_or_else(|_| r"C:\Program Files\猫步翻译\MaobuTranslator.exe".to_string())
         };
 
-        // 统一生成独立临时升级批处理脚本，彻底消除通过 cmd.exe /c 命令行传递复合指令时的嵌套引号与反斜杠解析异常
-        let bat_path = std::env::temp_dir().join(format!("maobu_update_{timestamp}.bat"));
-        let bat_content = if is_silent {
+        // 统一生成原生支持 Unicode 中文字符的 PowerShell 升级执行脚本，彻底根治 Windows 默认代码页 (GBK 936) 导致的「鐚缈昏瘧」乱码找不到文件问题
+        let ps_script_path = std::env::temp_dir().join(format!("maobu_update_{timestamp}.ps1"));
+        let ps_content = if is_silent {
             format!(
-                "@echo off\r\n\
-                 ping 127.0.0.1 -n 2 >nul\r\n\
-                 start /wait \"\" \"{}\" /S\r\n\
-                 ping 127.0.0.1 -n 2 >nul\r\n\
-                 start \"\" \"{}\"\r\n\
-                 del \"%~f0\"\r\n",
+                "Start-Sleep -Seconds 2;\r\n\
+                 Start-Process -FilePath '{}' -ArgumentList '/S' -Wait;\r\n\
+                 Start-Sleep -Seconds 1;\r\n\
+                 Start-Process -FilePath '{}';\r\n\
+                 Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue;\r\n",
                 temp_installer.to_string_lossy(),
                 target_exe
             )
         } else {
             format!(
-                "@echo off\r\n\
-                 ping 127.0.0.1 -n 2 >nul\r\n\
-                 start \"\" \"{}\"\r\n\
-                 del \"%~f0\"\r\n",
+                "Start-Sleep -Seconds 2;\r\n\
+                 Start-Process -FilePath '{}';\r\n\
+                 Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue;\r\n",
                 temp_installer.to_string_lossy()
             )
         };
 
-        if let Err(e) = std::fs::write(&bat_path, bat_content) {
-            eprintln!("[Updater] 写入更新脚本失败: {e}，回退直接启动安装包");
+        // 写入带 UTF-8 BOM 的脚本（PowerShell 5.1/7+ 均原生识别 UTF-8）
+        let mut ps_bytes = vec![0xEF, 0xBB, 0xBF];
+        ps_bytes.extend_from_slice(ps_content.as_bytes());
+
+        if let Err(e) = std::fs::write(&ps_script_path, ps_bytes) {
+            eprintln!("[Updater] 写入 PowerShell 升级脚本失败: {e}，回退直接启动安装包");
             let _ = std::process::Command::new(&temp_installer).spawn();
         } else {
-            std::process::Command::new("cmd")
-                .args(["/c", bat_path.to_string_lossy().as_ref()])
+            std::process::Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    ps_script_path.to_string_lossy().as_ref(),
+                ])
                 .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
                 .map_err(|e| format!("启动升级脚本失败: {e}"))?;
