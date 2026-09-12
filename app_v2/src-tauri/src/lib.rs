@@ -814,7 +814,7 @@ pub fn run() {
 }
 
 #[cfg(target_os = "windows")]
-pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, _enable: bool, is_dark: bool) {
+pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark: bool) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 
@@ -822,14 +822,8 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, _enable: bool, is_dar
         let hwnd = HWND(raw_hwnd.0 as _);
         unsafe {
             // 1. Windows 11 DWM System Backdrop:
-            // 必须强制设为 1 (DWMSBT_NONE)！
-            // 严禁设为 3 (DWMSBT_TRANSIENTWINDOW / Acrylic) 或 2 (DWMSBT_MAINWINDOW / Mica)！
-            // 因为在透明无边框窗口 (transparent: true, decorations: false) 且具备自定义前端圆角时，
-            // DWM System Backdrop 会作用于整个 90 度直角 HWND 物理画板，
-            // 导致前端 CSS 圆角外侧的四个死角强行被填满直角灰色亚克力磨砂，破坏大圆角浮动质感！
-            // 猫步翻译窗口自带高保真 Liquid Glass 渲染层（极光渐变 + 喷砂微粒 + 玻璃反光发丝边框），
-            // 将 DWM Backdrop 设为 DWMSBT_NONE 可确保 4 个圆角外侧像素 100% 纯净透明穿透至桌面！
-            let backdrop_type: u32 = 1;
+            // 38 = DWMWA_SYSTEMBACKDROP_TYPE: 3 = DWMSBT_TRANSIENTWINDOW (Acrylic 亚克力毛玻璃磨砂), 1 = DWMSBT_NONE
+            let backdrop_type: u32 = if enable { 3 } else { 1 };
             let hr_backdrop = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(38),
@@ -855,10 +849,10 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, _enable: bool, is_dar
                 std::mem::size_of::<u32>() as u32,
             );
 
-            // 33 = DWMWA_WINDOW_CORNER_PREFERENCE: 1 = DWMWCP_DONOTROUND
-            // 严禁 Win11 DWM 进行 8px 系统圆角强制硬裁剪，将圆角全权交由前端 CSS 与 DirectComposition 抗锯齿透明通道渲染，
-            // 确保 Windows 10 与 Windows 11 的圆角弧度、发丝边框与无残留透明边缘 100% 统一精致！
-            let corner_pref: u32 = 1;
+            // 33 = DWMWA_WINDOW_CORNER_PREFERENCE: 2 = DWMWCP_ROUND (Win11 硬件级标准大圆角裁切，与 CSS 8px 完美对齐)
+            // 开启毛玻璃时设置 DWMWCP_ROUND，让 DWM Acrylic 磨砂层与窗口边界严格同步裁切为标准圆角；
+            // 严禁设置 DWMWCP_DONOTROUND 避免 90 度直角方角外露！
+            let corner_pref: u32 = if enable { 2 } else { 1 };
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(33),
@@ -867,8 +861,8 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, _enable: bool, is_dar
             );
 
             // 2. Windows 10 SetWindowCompositionAttribute fallback
-            // 在 Windows 10 下同样彻底禁用系统级硬直角 Accent 模糊，设为 accent_state: 0，
-            // 确保 Windows 10 与 Windows 11 的圆角外侧 100% 纯透明无直角瑕疵！
+            // 在 Windows 10 下彻底禁用系统级硬直角 Accent 模糊，设为 accent_state: 0，
+            // 确保 Windows 10 下由前端 CSS 与极光喷砂呈现平滑圆角，杜绝 Win10 直角外溢
             if hr_backdrop.is_err() {
                 #[repr(C)]
                 struct ACCENT_POLICY {

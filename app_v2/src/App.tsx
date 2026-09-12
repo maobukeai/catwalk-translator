@@ -411,8 +411,8 @@ function App() {
         backgroundColor: isSolid
           ? (isLight ? '#f8fafc' : '#0f1015')
           : (isLight
-              ? 'rgba(255, 255, 255, 0.92)'
-              : 'rgba(18, 22, 34, 0.94)'),
+              ? 'rgba(255, 255, 255, 0.72)'
+              : 'rgba(18, 22, 34, 0.76)'),
         backdropFilter: blurFilterVal,
         WebkitBackdropFilter: blurFilterVal,
         boxShadow: isFloatingWindow && !isOverlayOpen
@@ -438,7 +438,7 @@ function App() {
         isOverlayOpen
           ? 'bg-transparent'
           : isFloatingWindow
-          ? 'rounded-[16px] border border-black/[0.08] dark:border-white/[0.14]'
+          ? 'rounded-[8px] border border-black/[0.08] dark:border-white/[0.14]'
           : 'rounded-none border-none'
       }`}
     >
