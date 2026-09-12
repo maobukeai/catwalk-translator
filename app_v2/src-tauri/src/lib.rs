@@ -24,6 +24,7 @@ pub mod updater;
 pub mod webdav;
 pub mod anki;
 pub mod glossary;
+pub mod autostart;
 
 use commands::AppState;
 use std::str::FromStr;
@@ -291,8 +292,29 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec!["--autostart", "--minimized"]),
         ))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+                #[cfg(target_os = "windows")]
+                if let Ok(hwnd) = window.hwnd() {
+                    unsafe {
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            BringWindowToTop, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+                        };
+                        use windows::Win32::Foundation::HWND;
+                        let h = HWND(hwnd.0 as _);
+                        let _ = ShowWindow(h, SW_RESTORE);
+                        let _ = ShowWindow(h, SW_SHOW);
+                        let _ = BringWindowToTop(h);
+                        let _ = SetForegroundWindow(h);
+                    }
+                }
+            }
+        }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -620,20 +642,28 @@ pub fn run() {
                     commands::glass_enabled_for_settings(&current_settings),
                     commands::is_dark_for_settings(&current_settings),
                 );
-                let _ = main_win.center();
-                let _ = main_win.show();
-                let _ = main_win.unminimize();
-                let _ = main_win.set_focus();
-                #[cfg(target_os = "windows")]
-                if let Ok(hwnd) = main_win.hwnd() {
-                    unsafe {
-                        use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW};
-                        use windows::Win32::Foundation::HWND;
-                        let h = HWND(hwnd.0 as _);
-                        let _ = ShowWindow(h, SW_RESTORE);
-                        let _ = ShowWindow(h, SW_SHOW);
-                        let _ = BringWindowToTop(h);
-                        let _ = SetForegroundWindow(h);
+                let is_silent_launch = std::env::args().any(|arg| autostart::is_silent_launch_arg(&arg));
+                if is_silent_launch {
+                    eprintln!("[Startup] Launched with autostart/silent flag: window will stay hidden in background tray.");
+                    commands::set_was_main_window_visible(false);
+                } else {
+                    let _ = main_win.center();
+                    let _ = main_win.show();
+                    let _ = main_win.unminimize();
+                    let _ = main_win.set_focus();
+                    #[cfg(target_os = "windows")]
+                    if let Ok(hwnd) = main_win.hwnd() {
+                        unsafe {
+                            use windows::Win32::UI::WindowsAndMessaging::{
+                                BringWindowToTop, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+                            };
+                            use windows::Win32::Foundation::HWND;
+                            let h = HWND(hwnd.0 as _);
+                            let _ = ShowWindow(h, SW_RESTORE);
+                            let _ = ShowWindow(h, SW_SHOW);
+                            let _ = BringWindowToTop(h);
+                            let _ = SetForegroundWindow(h);
+                        }
                     }
                 }
             }
@@ -776,13 +806,15 @@ pub fn run() {
             updater::cmd_get_app_info,
             updater::cmd_open_external_url,
             updater::cmd_download_and_install_update,
+            autostart::cmd_get_autostart,
+            autostart::cmd_set_autostart,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 #[cfg(target_os = "windows")]
-pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark: bool) {
+pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, _enable: bool, is_dark: bool) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 
@@ -790,8 +822,14 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
         let hwnd = HWND(raw_hwnd.0 as _);
         unsafe {
             // 1. Windows 11 DWM System Backdrop:
-            // 38 = DWMWA_SYSTEMBACKDROP_TYPE: 3 = DWMSBT_TRANSIENTWINDOW (Acrylic), 1 = DWMSBT_NONE
-            let backdrop_type: u32 = if enable { 3 } else { 1 };
+            // 必须强制设为 1 (DWMSBT_NONE)！
+            // 严禁设为 3 (DWMSBT_TRANSIENTWINDOW / Acrylic) 或 2 (DWMSBT_MAINWINDOW / Mica)！
+            // 因为在透明无边框窗口 (transparent: true, decorations: false) 且具备自定义前端圆角时，
+            // DWM System Backdrop 会作用于整个 90 度直角 HWND 物理画板，
+            // 导致前端 CSS 圆角外侧的四个死角强行被填满直角灰色亚克力磨砂，破坏大圆角浮动质感！
+            // 猫步翻译窗口自带高保真 Liquid Glass 渲染层（极光渐变 + 喷砂微粒 + 玻璃反光发丝边框），
+            // 将 DWM Backdrop 设为 DWMSBT_NONE 可确保 4 个圆角外侧像素 100% 纯净透明穿透至桌面！
+            let backdrop_type: u32 = 1;
             let hr_backdrop = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(38),
@@ -829,7 +867,9 @@ pub fn set_windows_dwm_blur(window: &tauri::WebviewWindow, enable: bool, is_dark
             );
 
             // 2. Windows 10 SetWindowCompositionAttribute fallback
-            if hr_backdrop.is_err() || !enable {
+            // 在 Windows 10 下同样彻底禁用系统级硬直角 Accent 模糊，设为 accent_state: 0，
+            // 确保 Windows 10 与 Windows 11 的圆角外侧 100% 纯透明无直角瑕疵！
+            if hr_backdrop.is_err() {
                 #[repr(C)]
                 struct ACCENT_POLICY {
                     accent_state: u32,

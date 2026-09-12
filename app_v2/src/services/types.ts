@@ -406,8 +406,49 @@ export interface AppSettings {
   backupSettings?: BackupSettings;
   /** WebDAV 云同步配置 */
   webdavConfig?: WebdavConfig;
-  /** AnkiConnect 本地同步配置 */
+  /** 启动时是否自动检查更新（默认开启） */
+  autoCheckUpdate?: boolean;
+  /** 是否开启全自动静默升级（下载完成后无需人工点击下一步，自动重启至新版） */
+  autoSilentUpdate?: boolean;
+  /** Anki 卡片制卡与同步设置 */
   ankiSettings?: AnkiSettings;
+}
+
+export interface UpdateAssetInfo {
+  name: string;
+  url: string;
+  size: number;
+  sha256?: string | null;
+}
+
+export interface UpdateInfo {
+  version: string;
+  release_date: string;
+  download_url: string;
+  sha256?: string | null;
+  release_notes: string;
+  assets: UpdateAssetInfo[];
+}
+
+export interface UpdateCheckResult {
+  latest?: UpdateInfo | null;
+  has_update: boolean;
+  current_version: string;
+  error?: string | null;
+}
+
+export interface AppInfo {
+  name: string;
+  version: string;
+  repo_url: string;
+}
+
+export interface UpdateDownloadProgress {
+  percentage: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  speedBytesPerSec: number;
+  stage: string;
 }
 
 export interface AnkiSettings {

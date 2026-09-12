@@ -1,9 +1,17 @@
 import { create } from 'zustand';
 import { cmdGetSettings, cmdSaveSettings } from '../services/tauri';
-import { DEFAULT_APPEARANCE, DEFAULT_SETTINGS } from '../services/defaultSettings';
+import {
+  DEFAULT_APPEARANCE,
+  DEFAULT_SETTINGS,
+  defaultAiProviders,
+  flattenAiProvidersToLlmConfigs,
+  migrateLlmConfigsToAiProviders,
+} from '../services/defaultSettings';
 import type {
   AppSettings,
   LlmConfig,
+  AiProviderConfig,
+  AiModelItem,
   PresetDicts,
   OnlineEngines,
   AppearanceSettings,
@@ -45,6 +53,15 @@ interface SettingsState {
   deleteLlmConfig: (id: string) => void;
   setActiveLlmConfig: (id: string) => void;
   toggleLlmConfigEnabled: (id: string) => void;
+  // AI Provider (1) ➔ Models (N) CRUD
+  setAiProviders: (providers: AiProviderConfig[]) => void;
+  updateAiProvider: (providerId: string, updates: Partial<AiProviderConfig>) => void;
+  addAiProvider: (provider: Partial<AiProviderConfig>) => void;
+  deleteAiProvider: (providerId: string) => void;
+  addModelToProvider: (providerId: string, model: { modelId: string; displayName?: string; enabled?: boolean }) => void;
+  removeModelFromProvider: (providerId: string, modelId: string) => void;
+  toggleModelEnabled: (providerId: string, modelId: string) => void;
+  setDefaultModelForProvider: (providerId: string, modelId: string) => void;
   setPresetDictToggle: (dict: keyof PresetDicts, enabled: boolean) => void;
   setOnlineEngineToggle: (engine: keyof OnlineEngines, enabled: boolean) => void;
   setAllOnlineEngines: (mode: 'all' | 'recommended' | 'domestic' | 'none') => void;
@@ -101,6 +118,8 @@ interface SettingsState {
   setHoverLookupModifier: (modifier: 'ctrl' | 'alt' | 'shift') => void;
   setWebdavConfig: (patch: Partial<WebdavConfig>) => void;
   setAnkiSettings: (patch: Partial<AnkiSettings>) => void;
+  setAutoCheckUpdate: (enabled: boolean) => void;
+  setAutoSilentUpdate: (enabled: boolean) => void;
   resetSettings: () => void;
   clearToast: () => void;
 }
@@ -172,9 +191,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     set({ isLoading: true });
     try {
       const fetched = await cmdGetSettings();
-      const fetchedPool = fetched.llmConfigs && fetched.llmConfigs.length > 0
+      const rawPool = fetched.llmConfigs && fetched.llmConfigs.length > 0
         ? fetched.llmConfigs
         : (fetched.llmConfig ? [fetched.llmConfig] : []);
+      const providers = migrateLlmConfigsToAiProviders(rawPool, fetched.aiProviders);
+      const fetchedPool = flattenAiProvidersToLlmConfigs(providers);
       const rawTheme = fetched.appearance?.theme || fetched.theme || 'system';
       const normalizedTheme: ThemeMode = (rawTheme === 'fluent-dark' ? 'dark' : rawTheme) as ThemeMode;
       const initialAppearance: AppearanceSettings = {
@@ -201,6 +222,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         toggleWindowHotkeyEnabled: fetched.toggleWindowHotkeyEnabled ?? false,
         quickWindowHotkeyEnabled: fetched.quickWindowHotkeyEnabled ?? false,
         appearance: initialAppearance,
+        aiProviders: providers,
         llmConfig: fetched.llmConfig || fetchedPool[0] || null,
         llmConfigs: fetchedPool,
         overlayViewMode: fetched.overlayViewMode || 'cover',
@@ -399,6 +421,259 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
+  },
+
+  setAiProviders: (providers: AiProviderConfig[]) => {
+    const { settings, initialSettings } = get();
+    const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(providers);
+    let newActive = settings.llmConfig;
+    if (newActive && !synchronizedLlmConfigs.some(c => c.id === newActive?.id || (c.provider === newActive?.provider && c.model === newActive?.model))) {
+      newActive = synchronizedLlmConfigs[0] || null;
+    }
+    const updated: AppSettings = {
+      ...settings,
+      aiProviders: providers,
+      llmConfigs: synchronizedLlmConfigs,
+      llmConfig: newActive,
+    };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    debouncedSaveSettings(get, set);
+  },
+
+  updateAiProvider: (providerId: string, updates: Partial<AiProviderConfig>) => {
+    const { settings, initialSettings } = get();
+    const providers = settings.aiProviders && settings.aiProviders.length > 0
+      ? settings.aiProviders
+      : defaultAiProviders;
+
+    const updatedProviders = providers.map((p) => {
+      if (p.id === providerId) {
+        return { ...p, ...updates };
+      }
+      return p;
+    });
+
+    const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    let newActive = settings.llmConfig;
+    if (newActive) {
+      const match = synchronizedLlmConfigs.find(
+        (c) => c.id === newActive?.id || (c.provider === newActive?.provider && c.model === newActive?.model)
+      );
+      if (match) {
+        newActive = match;
+      }
+    } else if (synchronizedLlmConfigs.length > 0) {
+      newActive = synchronizedLlmConfigs[0];
+    }
+
+    const updated: AppSettings = {
+      ...settings,
+      aiProviders: updatedProviders,
+      llmConfigs: synchronizedLlmConfigs,
+      llmConfig: newActive,
+    };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    debouncedSaveSettings(get, set);
+  },
+
+  addAiProvider: (provider: Partial<AiProviderConfig>) => {
+    const { settings, initialSettings } = get();
+    const providers = settings.aiProviders && settings.aiProviders.length > 0
+      ? settings.aiProviders
+      : defaultAiProviders;
+
+    const name = provider.name || provider.providerType || '自定义供应商';
+    const id = provider.id || `provider-${Date.now().toString(36)}`;
+    const newProvider: AiProviderConfig = {
+      id,
+      name,
+      providerType: provider.providerType || name,
+      endpoint: provider.endpoint || '',
+      apiKey: provider.apiKey || '',
+      enabled: provider.enabled ?? true,
+      defaultModelId: provider.defaultModelId || provider.models?.[0]?.modelId,
+      models: provider.models || [],
+    };
+
+    const updatedProviders = [...providers, newProvider];
+    const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    const updated: AppSettings = {
+      ...settings,
+      aiProviders: updatedProviders,
+      llmConfigs: synchronizedLlmConfigs,
+    };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    debouncedSaveSettings(get, set);
+  },
+
+  deleteAiProvider: (providerId: string) => {
+    const { settings, initialSettings } = get();
+    const providers = settings.aiProviders && settings.aiProviders.length > 0
+      ? settings.aiProviders
+      : defaultAiProviders;
+
+    const updatedProviders = providers.filter((p) => p.id !== providerId);
+    const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    let newActive = settings.llmConfig;
+    if (newActive && newActive.id && newActive.id.startsWith(providerId)) {
+      newActive = synchronizedLlmConfigs[0] || null;
+    }
+    const updated: AppSettings = {
+      ...settings,
+      aiProviders: updatedProviders,
+      llmConfigs: synchronizedLlmConfigs,
+      llmConfig: newActive,
+    };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    debouncedSaveSettings(get, set);
+  },
+
+  addModelToProvider: (providerId: string, model: { modelId: string; displayName?: string; enabled?: boolean }) => {
+    const { settings, initialSettings } = get();
+    const providers = settings.aiProviders && settings.aiProviders.length > 0
+      ? settings.aiProviders
+      : defaultAiProviders;
+
+    const trimmedModelId = model.modelId.trim();
+    if (!trimmedModelId) return;
+
+    const updatedProviders = providers.map((p) => {
+      if (p.id === providerId) {
+        if (p.models.some((m) => m.modelId === trimmedModelId)) {
+          return p;
+        }
+        const newModel: AiModelItem = {
+          id: trimmedModelId,
+          modelId: trimmedModelId,
+          displayName: model.displayName?.trim() || trimmedModelId,
+          enabled: model.enabled ?? true,
+        };
+        return {
+          ...p,
+          models: [...p.models, newModel],
+        };
+      }
+      return p;
+    });
+
+    const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    const updated: AppSettings = {
+      ...settings,
+      aiProviders: updatedProviders,
+      llmConfigs: synchronizedLlmConfigs,
+    };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    debouncedSaveSettings(get, set);
+  },
+
+  removeModelFromProvider: (providerId: string, modelId: string) => {
+    const { settings, initialSettings } = get();
+    const providers = settings.aiProviders && settings.aiProviders.length > 0
+      ? settings.aiProviders
+      : defaultAiProviders;
+
+    const updatedProviders = providers.map((p) => {
+      if (p.id === providerId) {
+        return {
+          ...p,
+          models: p.models.filter((m) => m.id !== modelId && m.modelId !== modelId),
+        };
+      }
+      return p;
+    });
+
+    const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    let newActive = settings.llmConfig;
+    if (newActive && (newActive.model === modelId || (newActive.id && newActive.id.includes(modelId)))) {
+      newActive = synchronizedLlmConfigs[0] || null;
+    }
+
+    const updated: AppSettings = {
+      ...settings,
+      aiProviders: updatedProviders,
+      llmConfigs: synchronizedLlmConfigs,
+      llmConfig: newActive,
+    };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    debouncedSaveSettings(get, set);
+  },
+
+  toggleModelEnabled: (providerId: string, modelId: string) => {
+    const { settings, initialSettings } = get();
+    const providers = settings.aiProviders && settings.aiProviders.length > 0
+      ? settings.aiProviders
+      : defaultAiProviders;
+
+    const updatedProviders = providers.map((p) => {
+      if (p.id === providerId) {
+        return {
+          ...p,
+          models: p.models.map((m) => {
+            if (m.id === modelId || m.modelId === modelId) {
+              return { ...m, enabled: !m.enabled };
+            }
+            return m;
+          }),
+        };
+      }
+      return p;
+    });
+
+    const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    const updated: AppSettings = {
+      ...settings,
+      aiProviders: updatedProviders,
+      llmConfigs: synchronizedLlmConfigs,
+    };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    debouncedSaveSettings(get, set);
+  },
+
+  setDefaultModelForProvider: (providerId: string, modelId: string) => {
+    const { settings, initialSettings } = get();
+    const providers = settings.aiProviders && settings.aiProviders.length > 0
+      ? settings.aiProviders
+      : defaultAiProviders;
+
+    const updatedProviders = providers.map((p) => {
+      if (p.id === providerId) {
+        return { ...p, defaultModelId: modelId };
+      }
+      return p;
+    });
+
+    const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    const updated: AppSettings = {
+      ...settings,
+      aiProviders: updatedProviders,
+      llmConfigs: synchronizedLlmConfigs,
+    };
+    set({
+      settings: updated,
+      isDirty: checkIsDirty(updated, initialSettings),
+    });
+    debouncedSaveSettings(get, set);
   },
 
   setDefaultPreset: (preset: string) => applyPatch({ defaultPreset: preset }, 'none'),
@@ -849,6 +1124,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   setAnkiSettings: (patch) =>
     applyPatch({ ankiSettings: { ...get().settings.ankiSettings, ...patch } }),
+
+  setAutoCheckUpdate: (enabled) => applyPatch({ autoCheckUpdate: enabled }),
+  setAutoSilentUpdate: (enabled) => applyPatch({ autoSilentUpdate: enabled }),
 
   clearToast: () => {
     set({ toastMessage: null });

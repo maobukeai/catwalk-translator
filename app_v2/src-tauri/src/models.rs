@@ -680,6 +680,12 @@ pub struct AppSettings {
     /// AnkiConnect 本地同步配置
     #[serde(default)]
     pub anki_settings: Option<AnkiSettings>,
+    /// 启动时自动检查更新（默认开启）
+    #[serde(default)]
+    pub auto_check_update: Option<bool>,
+    /// 全自动静默更新：无需人工点击，后台自动静默安装覆盖并重启
+    #[serde(default)]
+    pub auto_silent_update: Option<bool>,
 }
 
 impl Default for AppSettings {
@@ -774,6 +780,8 @@ impl Default for AppSettings {
             webdav_config: None,
             custom_dict_items: Vec::new(),
             anki_settings: Some(AnkiSettings::default()),
+            auto_check_update: Some(true),
+            auto_silent_update: Some(false),
         }
     }
 }

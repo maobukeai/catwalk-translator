@@ -20,7 +20,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
 export const defaultAiProviders: AiProviderConfig[] = [
   {
     id: 'provider-deepseek',
-    name: 'DeepSeek (官方)',
+    name: 'DeepSeek',
     providerType: 'DeepSeek',
     apiKey: '',
     endpoint: 'https://api.deepseek.com/v1',
@@ -134,9 +134,9 @@ export function flattenAiProvidersToLlmConfigs(providers: AiProviderConfig[]): L
   for (const p of providers) {
     for (const m of p.models) {
       list.push({
-        id: `${p.id}__${m.id}`,
+        id: m.id || `${p.id}__${m.modelId}`,
         name: m.displayName || m.modelId,
-        provider: p.name || p.providerType,
+        provider: p.providerType && p.providerType !== 'Custom' ? p.providerType : (p.name || p.providerType),
         apiKey: p.apiKey,
         model: m.modelId,
         endpoint: p.endpoint,
@@ -152,14 +152,15 @@ export function migrateLlmConfigsToAiProviders(
   llmConfigs?: LlmConfig[] | null,
   existingProviders?: AiProviderConfig[]
 ): AiProviderConfig[] {
-  const baseProviders: AiProviderConfig[] =
-    existingProviders && existingProviders.length > 0
-      ? JSON.parse(JSON.stringify(existingProviders))
-      : JSON.parse(JSON.stringify(defaultAiProviders));
+  if (existingProviders && existingProviders.length > 0) {
+    return JSON.parse(JSON.stringify(existingProviders));
+  }
 
   if (!llmConfigs || llmConfigs.length === 0) {
-    return baseProviders;
+    return JSON.parse(JSON.stringify(defaultAiProviders));
   }
+
+  const baseProviders: AiProviderConfig[] = [];
 
   for (const cfg of llmConfigs) {
     if (!cfg.provider) continue;
@@ -169,39 +170,38 @@ export function migrateLlmConfigsToAiProviders(
         bp.name.toLowerCase() === cfg.provider.toLowerCase()
     );
 
-    if (p) {
-      if (cfg.apiKey && !p.apiKey) p.apiKey = cfg.apiKey;
-      if (cfg.endpoint && (!p.endpoint || p.endpoint.includes('custom-llm'))) p.endpoint = cfg.endpoint;
-      if (cfg.model) {
-        const existingModel = p.models.find((m) => m.modelId === cfg.model || m.id === cfg.model);
-        if (!existingModel) {
-          p.models.push({
-            id: cfg.model,
-            modelId: cfg.model,
-            displayName: cfg.name || cfg.model,
-            enabled: cfg.enabled ?? true,
-          });
-        }
-      }
-    } else {
-      const pid = `provider-${cfg.provider.toLowerCase().replace(/[\s\u4e00-\u9fff]+/g, '-')}-${Date.now().toString(36)}`;
-      baseProviders.push({
-        id: pid,
-        name: cfg.provider,
-        providerType: cfg.provider,
+    if (!p) {
+      const defaultPreset = defaultAiProviders.find(
+        (dp) =>
+          dp.providerType.toLowerCase() === cfg.provider.toLowerCase() ||
+          dp.name.toLowerCase() === cfg.provider.toLowerCase()
+      );
+      p = {
+        id: defaultPreset ? defaultPreset.id : `provider-${cfg.provider.toLowerCase().replace(/[\s\u4e00-\u9fff]+/g, '-')}-${Date.now().toString(36)}`,
+        name: defaultPreset ? defaultPreset.name : cfg.provider,
+        providerType: defaultPreset ? defaultPreset.providerType : cfg.provider,
+        endpoint: cfg.endpoint || defaultPreset?.endpoint || '',
         apiKey: cfg.apiKey || '',
-        endpoint: cfg.endpoint || '',
         enabled: cfg.enabled ?? true,
         defaultModelId: cfg.model || '',
-        models: [
-          {
-            id: cfg.model || 'default-model',
-            modelId: cfg.model || 'default-model',
-            displayName: cfg.name || cfg.model || '默认模型',
-            enabled: cfg.enabled ?? true,
-          },
-        ],
-      });
+        models: [],
+      };
+      baseProviders.push(p);
+    } else {
+      if (cfg.apiKey && !p.apiKey) p.apiKey = cfg.apiKey;
+      if (cfg.endpoint && (!p.endpoint || p.endpoint.includes('custom-llm'))) p.endpoint = cfg.endpoint;
+    }
+
+    if (cfg.model) {
+      const existingModel = p.models.find((m) => m.id === cfg.id || m.modelId === cfg.model);
+      if (!existingModel) {
+        p.models.push({
+          id: cfg.id || cfg.model,
+          modelId: cfg.model,
+          displayName: cfg.name || cfg.model,
+          enabled: cfg.enabled ?? true,
+        });
+      }
     }
   }
 
@@ -343,4 +343,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     autoSyncOnStar: false,
     tags: ['Catwalk'],
   },
+  autoCheckUpdate: true,
+  autoSilentUpdate: false,
 };

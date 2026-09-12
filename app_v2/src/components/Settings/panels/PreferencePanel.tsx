@@ -56,6 +56,8 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
     setTtsRate,
     setEnableLlmProgressiveRefine,
     setAutoFavoriteQualityTerms,
+    setAutoCheckUpdate,
+    setAutoSilentUpdate,
   } = useSettingsStore();
 
   const appearance = settings.appearance || {
@@ -646,6 +648,47 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                             onChange={(e) => setAlwaysOnTop(e.target.checked)}
                             className="sr-only peer"
                             data-testid="always-on-top-toggle"
+                          />
+                          <div className="w-9 h-5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* 自动检查更新与静默升级 */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-slate-200/60 dark:border-white/[0.06]">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className={`text-xs font-bold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>启动时自动检查更新</div>
+                          <div className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-600 font-medium' : 'text-zinc-400'}`}>
+                            软件启动后静默探测新版本，发现新版弹窗提醒
+                          </div>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={settings.autoCheckUpdate ?? true}
+                            onChange={(e) => setAutoCheckUpdate(e.target.checked)}
+                            className="sr-only peer"
+                            data-testid="auto-check-update-toggle"
+                          />
+                          <div className="w-9 h-5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className={`text-xs font-bold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>全自动静默无感升级</div>
+                          <div className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-600 font-medium' : 'text-zinc-400'}`}>
+                            下载后无需点击下一步，自动安装并重启进入最新版
+                          </div>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={settings.autoSilentUpdate ?? false}
+                            onChange={(e) => setAutoSilentUpdate(e.target.checked)}
+                            className="sr-only peer"
+                            data-testid="auto-silent-update-toggle"
                           />
                           <div className="w-9 h-5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
                         </label>

@@ -1,7 +1,9 @@
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::time::Duration;
+use tauri::Emitter;
 
 pub const GITHUB_OWNER: &str = "maobukeai";
 pub const GITHUB_REPO: &str = "catwalk-translator";
@@ -30,6 +32,16 @@ const USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (+https://github.com/maobukeai/catwalk-translator)"
 );
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDownloadProgress {
+    pub percentage: f32,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub speed_bytes_per_sec: u64,
+    pub stage: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateAssetInfo {
@@ -621,6 +633,7 @@ pub fn build_candidate_download_urls(raw_url: &str) -> Vec<String> {
 pub async fn cmd_download_and_install_update(
     app: tauri::AppHandle,
     url: String,
+    silent: Option<bool>,
 ) -> Result<String, String> {
     if url.trim().is_empty() {
         return Err("下载地址为空".to_string());
@@ -629,21 +642,124 @@ pub async fn cmd_download_and_install_update(
     let client = build_download_client()?;
     let candidate_urls = build_candidate_download_urls(&url);
     let mut last_error = String::new();
-    let mut downloaded_bytes: Option<Vec<u8>> = None;
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let temp_installer = std::env::temp_dir().join(format!("MaobuTranslator_Setup_Update_{timestamp}.exe"));
+
+    let mut download_succeeded = false;
 
     for target_url in candidate_urls {
+        eprintln!("[Updater] 尝试下载更新包: {}", target_url);
         match client.get(&target_url).send().await {
             Ok(resp) => {
-                if resp.status().is_success() {
-                    if let Ok(b) = resp.bytes().await {
-                        // 确保不是被网页拦截返回的 404 HTML，安装包 exe 正常体积在 1MB 以上
-                        if b.len() > 1024 * 512 {
-                            downloaded_bytes = Some(b.to_vec());
+                if !resp.status().is_success() {
+                    last_error = format!("HTTP {}", resp.status().as_u16());
+                    continue;
+                }
+
+                let total_bytes = resp.content_length().unwrap_or(0);
+                let mut stream = resp.bytes_stream();
+
+                let mut file = match std::fs::File::create(&temp_installer) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        last_error = format!("创建本地临时安装包失败: {e}");
+                        continue;
+                    }
+                };
+
+                use std::io::Write;
+                let mut downloaded_bytes: u64 = 0;
+                let mut last_emit_time = std::time::Instant::now();
+                let mut last_emit_bytes: u64 = 0;
+                let mut chunk_error = false;
+
+                // 首次广播：开始连接/下载
+                let _ = app.emit(
+                    "update-download-progress",
+                    UpdateDownloadProgress {
+                        percentage: 0.0,
+                        downloaded_bytes: 0,
+                        total_bytes,
+                        speed_bytes_per_sec: 0,
+                        stage: "downloading".to_string(),
+                    },
+                );
+
+                while let Some(chunk_res) = stream.next().await {
+                    match chunk_res {
+                        Ok(chunk) => {
+                            if let Err(e) = file.write_all(&chunk) {
+                                last_error = format!("写入安装包数据失败: {e}");
+                                chunk_error = true;
+                                break;
+                            }
+                            downloaded_bytes += chunk.len() as u64;
+
+                            let now = std::time::Instant::now();
+                            let elapsed = now.duration_since(last_emit_time).as_secs_f64();
+                            if elapsed >= 0.08 || (total_bytes > 0 && downloaded_bytes >= total_bytes) {
+                                let speed = if elapsed > 0.0 {
+                                    (downloaded_bytes.saturating_sub(last_emit_bytes) as f64 / elapsed) as u64
+                                } else {
+                                    0
+                                };
+                                let percentage = if total_bytes > 0 {
+                                    ((downloaded_bytes as f64 / total_bytes as f64) * 100.0) as f32
+                                } else {
+                                    0.0
+                                };
+                                let _ = app.emit(
+                                    "update-download-progress",
+                                    UpdateDownloadProgress {
+                                        percentage: percentage.min(99.9),
+                                        downloaded_bytes,
+                                        total_bytes,
+                                        speed_bytes_per_sec: speed,
+                                        stage: "downloading".to_string(),
+                                    },
+                                );
+                                last_emit_time = now;
+                                last_emit_bytes = downloaded_bytes;
+                            }
+                        }
+                        Err(e) => {
+                            last_error = format!("下载数据流中断: {e}");
+                            chunk_error = true;
                             break;
                         }
                     }
+                }
+
+                let _ = file.flush();
+                drop(file);
+
+                if chunk_error {
+                    let _ = std::fs::remove_file(&temp_installer);
+                    continue;
+                }
+
+                // 确保安装包体积正常（> 512KB），不是 404 HTML
+                if downloaded_bytes > 1024 * 512 {
+                    download_succeeded = true;
+                    // 发送 100% 下载完成通知
+                    let _ = app.emit(
+                        "update-download-progress",
+                        UpdateDownloadProgress {
+                            percentage: 100.0,
+                            downloaded_bytes,
+                            total_bytes: downloaded_bytes,
+                            speed_bytes_per_sec: 0,
+                            stage: "installing".to_string(),
+                        },
+                    );
+                    break;
                 } else {
-                    last_error = format!("HTTP {}", resp.status().as_u16());
+                    last_error = format!("下载的文件过小 ({} 字节)，可能非有效安装包", downloaded_bytes);
+                    let _ = std::fs::remove_file(&temp_installer);
                 }
             }
             Err(e) => {
@@ -652,30 +768,69 @@ pub async fn cmd_download_and_install_update(
         }
     }
 
-    let Some(bytes) = downloaded_bytes else {
-        return Err(format!(
+    if !download_succeeded {
+        let err_msg = format!(
             "自动下载失败（已尝试直连及多条国内 CDN 加速源）：{}",
             if last_error.is_empty() { "未获取到有效安装包数据" } else { &last_error }
-        ));
-    };
+        );
+        let _ = app.emit(
+            "update-download-progress",
+            UpdateDownloadProgress {
+                percentage: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                speed_bytes_per_sec: 0,
+                stage: format!("error: {}", err_msg),
+            },
+        );
+        return Err(err_msg);
+    }
 
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let temp_installer = std::env::temp_dir().join(format!("MaobuTranslator_Setup_Update_{timestamp}.exe"));
-    std::fs::write(&temp_installer, bytes).map_err(|e| format!("保存安装包到临时目录失败: {e}"))?;
+    let is_silent = silent.unwrap_or(false);
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new(&temp_installer)
-            .spawn()
-            .map_err(|e| format!("启动安装程序失败: {e}"))?;
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let current_exe_path = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        if is_silent {
+            // 静默更新：使用 cmd 执行 NSIS /S 安装，等待完成后自动重新拉起当前新版本 exe
+            // ping 127.0.0.1 -n 2 提供 1 秒延时，确保旧进程彻底退出且文件锁完全释放
+            let cmd_script = if !current_exe_path.is_empty() {
+                format!(
+                    "ping 127.0.0.1 -n 2 >nul & \"{}\" /S & ping 127.0.0.1 -n 2 >nul & start \"\" \"{}\"",
+                    temp_installer.to_string_lossy(),
+                    current_exe_path
+                )
+            } else {
+                format!("ping 127.0.0.1 -n 2 >nul & \"{}\" /S", temp_installer.to_string_lossy())
+            };
+
+            std::process::Command::new("cmd")
+                .args(["/c", &cmd_script])
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .map_err(|e| format!("启动静默升级脚本失败: {e}"))?;
+        } else {
+            // 常规向导升级：直接启动安装程序向导
+            std::process::Command::new(&temp_installer)
+                .spawn()
+                .map_err(|e| format!("启动安装程序失败: {e}"))?;
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("open").arg(&temp_installer).spawn();
     }
 
     let app_clone = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(800));
+        std::thread::sleep(Duration::from_millis(600));
         crate::translator::shared_pipeline().cache.save_to_disk();
         app_clone.exit(0);
     });

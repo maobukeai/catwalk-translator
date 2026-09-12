@@ -12,6 +12,11 @@ import type {
   BackupEntry,
   RemoteBackupEntry,
   RestoreSummary,
+  UpdateDownloadProgress,
+  UpdateCheckResult,
+  AppInfo,
+  UpdateInfo,
+  UpdateAssetInfo,
 } from './types';
 import { evaluateTranslationQuality } from './smartQualityFilter';
 
@@ -2128,34 +2133,7 @@ export async function cmdChatLlmStream(
   return full;
 }
 
-export interface UpdateAssetInfo {
-  name: string;
-  url: string;
-  size: number;
-  sha256?: string | null;
-}
-
-export interface UpdateInfo {
-  version: string;
-  release_date: string;
-  download_url: string;
-  sha256?: string | null;
-  release_notes: string;
-  assets: UpdateAssetInfo[];
-}
-
-export interface UpdateCheckResult {
-  latest?: UpdateInfo | null;
-  has_update: boolean;
-  current_version: string;
-  error?: string | null;
-}
-
-export interface AppInfo {
-  name: string;
-  version: string;
-  repo_url: string;
-}
+export type { UpdateAssetInfo, UpdateInfo, UpdateCheckResult, AppInfo } from './types';
 
 export async function cmdCheckAppUpdate(): Promise<UpdateCheckResult> {
   if (isTauri()) {
@@ -2297,12 +2275,25 @@ export async function cmdOpenExternalUrl(url: string): Promise<void> {
   }
 }
 
-export async function cmdDownloadAndInstallUpdate(url: string): Promise<string> {
+export async function cmdDownloadAndInstallUpdate(url: string, silent?: boolean): Promise<string> {
   if (isTauri()) {
-    return await invoke<string>('cmd_download_and_install_update', { url });
+    return await invoke<string>('cmd_download_and_install_update', { url, silent });
   }
-  console.log('[Browser Mode] cmdDownloadAndInstallUpdate:', url);
+  console.log('[Browser Mode] cmdDownloadAndInstallUpdate:', url, silent);
   return 'mock_installer.exe';
+}
+
+export async function onUpdateDownloadProgress(
+  callback: (progress: UpdateDownloadProgress) => void
+): Promise<() => void> {
+  if (isTauri()) {
+    const { listen } = await import('@tauri-apps/api/event');
+    const unlisten = await listen<UpdateDownloadProgress>('update-download-progress', (event) => {
+      callback(event.payload);
+    });
+    return unlisten;
+  }
+  return () => {};
 }
 
 
@@ -2408,26 +2399,34 @@ export async function cmdWebdavDelete(name: string): Promise<void> {
   throw new Error(backupDesktopOnly);
 }
 
-// ── 开机自启（tauri-plugin-autostart；OS 级注册表/启动项状态，不落 settings.json） ──
+// ── 开机自启（原生 Windows 注册表 + 托盘静默自启动机制；OS 级启动项，不落 settings.json） ──
 
 export async function cmdGetAutoStart(): Promise<boolean> {
   if (!isTauri()) return false;
   try {
-    const { isEnabled } = await import('@tauri-apps/plugin-autostart');
-    return await isEnabled();
+    return await invoke<boolean>('cmd_get_autostart');
   } catch (err) {
-    console.warn('查询开机自启状态失败:', err);
-    return false;
+    try {
+      const { isEnabled } = await import('@tauri-apps/plugin-autostart');
+      return await isEnabled();
+    } catch {
+      console.warn('查询开机自启状态失败:', err);
+      return false;
+    }
   }
 }
 
 export async function cmdSetAutoStart(enabled: boolean): Promise<void> {
   if (!isTauri()) return;
-  const plugin = await import('@tauri-apps/plugin-autostart');
-  if (enabled) {
-    await plugin.enable();
-  } else {
-    await plugin.disable();
+  try {
+    await invoke('cmd_set_autostart', { enabled });
+  } catch (err) {
+    const plugin = await import('@tauri-apps/plugin-autostart');
+    if (enabled) {
+      await plugin.enable();
+    } else {
+      await plugin.disable();
+    }
   }
 }
 

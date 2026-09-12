@@ -1,6 +1,6 @@
 [package]
 name = "MaobuTranslator"
-version = "0.3.2"
+version = "0.3.4"
 description = "鐚缈昏瘧"
 authors = ["maobukeai"]
 edition = "2021"
@@ -27,6 +27,7 @@ tauri = { version = "2", features = ["tray-icon", "wry", "custom-protocol", "ima
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 csv = "1.3"

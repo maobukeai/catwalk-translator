@@ -973,15 +973,16 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                     title="快速切换当前对话所使用的大模型"
                     options={configuredLlmConfigs.map((cfg) => {
                       const idVal = cfg.id || `${cfg.provider}-${cfg.model}`;
+                      const modelLabel = cfg.name && cfg.name !== cfg.model ? cfg.name : (cfg.model || '默认');
                       return {
                         value: idVal,
-                        label: `${cfg.provider} (${cfg.model || '默认'})`,
+                        label: `${cfg.provider} (${modelLabel})`,
                       };
                     })}
                   />
                 ) : configuredLlmConfigs.length === 1 ? (
                   <span className="lg-pill font-semibold text-[11px] py-0.5 px-2">
-                    {configuredLlmConfigs[0].provider} ({configuredLlmConfigs[0].model || '默认'})
+                    {configuredLlmConfigs[0].provider} ({configuredLlmConfigs[0].name && configuredLlmConfigs[0].name !== configuredLlmConfigs[0].model ? configuredLlmConfigs[0].name : (configuredLlmConfigs[0].model || '默认')})
                   </span>
                 ) : (
                   <span className="lg-pill text-[11px] py-0.5 px-2">{llm.provider}</span>

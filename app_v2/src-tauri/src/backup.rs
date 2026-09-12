@@ -925,6 +925,8 @@ mod tests {
                 created_at: "2026-09-02".to_string(),
             }],
             anki_settings: Some(crate::models::AnkiSettings::default()),
+            auto_check_update: Some(true),
+            auto_silent_update: Some(false),
         }
     }
 

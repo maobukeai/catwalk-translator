@@ -27,9 +27,12 @@ import {
   cmdGetAppInfo,
   cmdOpenExternalUrl,
   cmdDownloadAndInstallUpdate,
+  onUpdateDownloadProgress,
   type AppInfo,
   type UpdateCheckResult,
 } from "../../services/tauri";
+import type { UpdateDownloadProgress } from "../../services/types";
+import { useSettingsStore } from "../../stores/useSettingsStore";
 import appIcon from "../../assets/app_icon_v2.png";
 import { APP_VERSION } from "../../version";
 import contactQr from "../../assets/contact_qr.webp";
@@ -106,6 +109,18 @@ const ENGINE_COMPATIBILITY_LIST: EngineCompatibility[] = [
   },
 ];
 
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let val = bytes;
+  let unitIndex = 0;
+  while (val >= 1024 && unitIndex < units.length - 1) {
+    val /= 1024;
+    unitIndex++;
+  }
+  return `${val.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
 export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
   const { isLight } = useAppTheme();
   const [qrModal, setQrModal] = useState<"contact" | "sponsor" | null>(null);
@@ -114,6 +129,25 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
   const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false);
   const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<UpdateDownloadProgress | null>(null);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    onUpdateDownloadProgress((p) => {
+      setDownloadProgress(p);
+      if (p.stage === "installing") {
+        setDownloadStatus("下载完成，正在自动覆盖升级并重启...");
+      } else if (p.stage.startsWith("error:")) {
+        setDownloadStatus(null);
+        setIsDownloadingUpdate(false);
+      }
+    }).then((u) => {
+      unlisten = u;
+    }).catch(() => {});
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,10 +180,19 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
     }
 
     setIsDownloadingUpdate(true);
-    setDownloadStatus("正在下载新版本安装包并准备覆盖升级...");
+    setDownloadStatus("正在下载新版本安装包...");
+    setDownloadProgress({
+      percentage: 0,
+      downloadedBytes: 0,
+      totalBytes: setupAsset?.size || 0,
+      speedBytesPerSec: 0,
+      stage: "downloading",
+    });
+
+    const isSilent = useSettingsStore.getState().settings.autoSilentUpdate ?? false;
     try {
-      await cmdDownloadAndInstallUpdate(targetUrl);
-      setDownloadStatus("安装程序已启动，正在关闭当前应用进行升级...");
+      await cmdDownloadAndInstallUpdate(targetUrl, isSilent);
+      setDownloadStatus(isSilent ? "正在全自动静默安装并重启..." : "安装程序已启动，正在关闭当前应用进行升级...");
     } catch (err) {
       setDownloadStatus(null);
       alert(`软件内自动下载失败: ${err}\n已为您打开浏览器下载页面。`);
@@ -415,6 +458,36 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
                         <p className="text-[10.5px] line-clamp-3 leading-relaxed opacity-90 whitespace-pre-line bg-black/5 dark:bg-white/5 p-1.5 rounded">
                           {updateResult.latest.release_notes}
                         </p>
+                      )}
+
+                      {isDownloadingUpdate && downloadProgress && (
+                        <div className="space-y-1.5 p-2 rounded-lg bg-black/5 dark:bg-white/5 border border-blue-500/20">
+                          <div className="flex items-center justify-between text-[10.5px]">
+                            <span className="font-semibold text-blue-500">
+                              {downloadProgress.stage === 'installing' ? '正在安装并重启...' : '正在下载...'}
+                            </span>
+                            <span className="font-mono font-bold text-blue-500">
+                              {downloadProgress.percentage.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-zinc-800 overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-all duration-150"
+                              style={{ width: `${Math.max(3, Math.min(100, downloadProgress.percentage))}%` }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] font-mono opacity-80">
+                            <span>
+                              {formatBytes(downloadProgress.downloadedBytes)}
+                              {downloadProgress.totalBytes > 0 && ` / ${formatBytes(downloadProgress.totalBytes)}`}
+                            </span>
+                            {downloadProgress.speedBytesPerSec > 0 && downloadProgress.stage !== 'installing' && (
+                              <span className="text-emerald-500 font-semibold">
+                                {formatBytes(downloadProgress.speedBytesPerSec)}/s
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       )}
 
                       <div className="space-y-1.5 pt-1">

@@ -14,7 +14,9 @@ import { OnboardingModal } from "./components/OnboardingModal";
 import { OcrModelGuideModal } from "./components/OcrModelGuideModal";
 import { ClipboardToast, type ClipboardPayload } from "./components/ClipboardToast";
 import { CloseConfirmModal } from "./components/CloseConfirmModal";
-import { isTauri, cmdQueryText, cmdSetWindowBlur, cmdExitApp, cmdGetAutoStart, cmdSetAutoStart, cmdOpenQuickWindow } from "./services/tauri";
+import { UpdateModal } from "./components/UpdateModal";
+import { isTauri, cmdQueryText, cmdSetWindowBlur, cmdExitApp, cmdGetAutoStart, cmdSetAutoStart, cmdOpenQuickWindow, cmdCheckAppUpdate } from "./services/tauri";
+import type { UpdateInfo } from "./services/types";
 import { matchesHotkey } from "./services/hotkeys";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useAppTheme } from "./hooks/useAppTheme";
@@ -71,6 +73,8 @@ function App() {
   isOverlayOpenRef.current = isOverlayOpen;
 
   const [isMaximized, setIsMaximized] = useState(false);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [pendingUpdate, setPendingUpdate] = useState<UpdateInfo | null>(null);
 
   useEffect(() => {
     fetchSettings();
@@ -78,9 +82,6 @@ function App() {
       let unlistenResize: (() => void) | undefined;
       import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
         const win = getCurrentWindow();
-        win.show().catch(() => {});
-        win.unminimize().catch(() => {});
-        win.setFocus().catch(() => {});
         win.isMaximized().then(setIsMaximized).catch(() => {});
       }).catch(() => {});
 
@@ -101,6 +102,37 @@ function App() {
       };
     }
   }, [fetchSettings]);
+
+  useEffect(() => {
+    // 启动时延迟 3 秒静默探测新版本（避开冷启动 I/O 竞争高峰）
+    const timer = setTimeout(async () => {
+      const curSettings = useSettingsStore.getState().settings;
+      if (curSettings.autoCheckUpdate !== false) {
+        try {
+          const res = await cmdCheckAppUpdate();
+          if (res.has_update && res.latest) {
+            setPendingUpdate(res.latest);
+            setUpdateModalOpen(true);
+          }
+        } catch (err) {
+          console.log('[AutoUpdater] Startup check skipped/failed:', err);
+        }
+      }
+    }, 3000);
+
+    const handleOpenUpdate = (e: CustomEvent<UpdateInfo>) => {
+      if (e.detail) {
+        setPendingUpdate(e.detail);
+      }
+      setUpdateModalOpen(true);
+    };
+    window.addEventListener('open-update-modal' as any, handleOpenUpdate);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('open-update-modal' as any, handleOpenUpdate);
+    };
+  }, []);
 
   const isFloatingWindow = !isOverlayOpen && !isMaximized;
 
@@ -406,7 +438,7 @@ function App() {
         isOverlayOpen
           ? 'bg-transparent'
           : isFloatingWindow
-          ? 'rounded-[14px] border border-black/[0.08] dark:border-white/[0.14]'
+          ? 'rounded-[16px] border border-black/[0.08] dark:border-white/[0.14]'
           : 'rounded-none border-none'
       }`}
     >
@@ -633,6 +665,13 @@ function App() {
       <CloseConfirmModal
         isOpen={isCloseConfirmOpen}
         onClose={() => setIsCloseConfirmOpen(false)}
+      />
+
+      {/* 自动检查更新与升级弹窗 */}
+      <UpdateModal
+        isOpen={updateModalOpen}
+        onClose={() => setUpdateModalOpen(false)}
+        updateInfo={pendingUpdate}
       />
     </div>
   );
