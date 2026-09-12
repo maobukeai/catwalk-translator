@@ -15,6 +15,10 @@ pub const RELEASES_PAGE: &str = "https://github.com/maobukeai/catwalk-translator
 pub const RELEASES_WEB_LATEST_URL: &str =
     "https://github.com/maobukeai/catwalk-translator/releases/latest";
 
+pub const GHFAST_VERSION_URL: &str =
+    "https://ghfast.top/https://raw.githubusercontent.com/maobukeai/catwalk-translator/main/version.json";
+pub const GHPROXY_VERSION_URL: &str =
+    "https://ghproxy.net/https://raw.githubusercontent.com/maobukeai/catwalk-translator/main/version.json";
 pub const JSDELIVR_VERSION_URL: &str =
     "https://cdn.jsdelivr.net/gh/maobukeai/catwalk-translator@main/version.json";
 pub const FASTLY_VERSION_URL: &str =
@@ -163,14 +167,27 @@ pub fn parse_cdn_version_info(body: &str, current: &str) -> Option<UpdateCheckRe
 /// 免限流全球 CDN 探针 (jsDelivr / Fastly 全球节点镜像)
 /// 完全绕过 GitHub API 匿名 60次/小时 的 IP 限流机制与国内网络阻断，秒级返回最新版本
 pub async fn check_update_via_cdn(current: &str) -> Option<UpdateCheckResult> {
+    let mut default_headers = reqwest::header::HeaderMap::new();
+    default_headers.insert(
+        reqwest::header::CACHE_CONTROL,
+        reqwest::header::HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+    );
+    default_headers.insert(
+        reqwest::header::PRAGMA,
+        reqwest::header::HeaderValue::from_static("no-cache"),
+    );
+
     let client = Client::builder()
         .user_agent(USER_AGENT)
+        .default_headers(default_headers)
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(8))
         .build()
         .ok()?;
 
     let cdn_urls = [
+        GHFAST_VERSION_URL,
+        GHPROXY_VERSION_URL,
         JSDELIVR_VERSION_URL,
         FASTLY_VERSION_URL,
         JSDELIVR_PACKAGE_URL,

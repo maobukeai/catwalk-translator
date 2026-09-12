@@ -208,6 +208,9 @@ export const AboutPanel: React.FC<AboutPanelProps> = ({ onOpenSettings }) => {
     try {
       const result = await cmdCheckAppUpdate();
       setUpdateResult(result);
+      if (result.has_update && result.latest) {
+        window.dispatchEvent(new CustomEvent('open-update-modal', { detail: result.latest }));
+      }
     } catch (err) {
       setUpdateResult({
         latest: null,

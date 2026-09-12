@@ -2149,8 +2149,10 @@ export async function cmdCheckAppUpdate(): Promise<UpdateCheckResult> {
     return await invoke<UpdateCheckResult>('cmd_check_app_update');
   }
 
-  // Browser / JSDOM fallback: 优先通过全球免限流 CDN (jsDelivr / Fastly) 获取
+  // Browser / JSDOM fallback: 优先通过免限流镜像与全球 CDN 获取
   const cdnUrls = [
+    'https://ghfast.top/https://raw.githubusercontent.com/maobukeai/catwalk-translator/main/version.json',
+    'https://ghproxy.net/https://raw.githubusercontent.com/maobukeai/catwalk-translator/main/version.json',
     'https://cdn.jsdelivr.net/gh/maobukeai/catwalk-translator@main/version.json',
     'https://fastly.jsdelivr.net/gh/maobukeai/catwalk-translator@main/version.json',
     'https://cdn.jsdelivr.net/gh/maobukeai/catwalk-translator@main/app_v2/package.json',
