@@ -1,21 +1,21 @@
 {
-  "version": "0.3.6",
+  "version": "0.3.7",
   "name": "猫步翻译",
   "release_date": "2026-09-12",
   "download_url": "https://github.com/maobukeai/catwalk-translator/releases",
-  "release_notes": "1. 零延迟自动更新引擎升级：新增全球 GitHub Raw 免缓存高速探针与实时镜像中继，彻底解决边缘 CDN 缓存导致的检测延迟；\n2. 关于面板手动检查即时响应：手动点击「检查更新」发现新版时直接弹出升级弹窗，一键开始应用内升级；\n3. AI 对话模型按厂商级联悬浮交互打磨：自适应屏幕边缘翻转；\n4. Win 10 / Win 11 亚克力磨砂质感与圆角深度融合。",
+  "release_notes": "1. 升级安装启动底层重构：修复 Windows 下 cmd/ShellExecute 命令行复合参数导致的找不到文件错误，采用独立无感批处理平滑接管升级；\n2. 升级弹窗视觉打磨：彻底移除弹窗顶部彩色装饰横条，保持纯净通透的高级质感；\n3. 零延迟自动更新探针：全球 GitHub Raw 免缓存探针与秒级版本探测；\n4. AI 对话模型按厂商级联悬浮展开与 Win 10/11 亚克力磨砂打磨。",
   "assets": [
     {
-      "name": "MaobuTranslator_0.3.6_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.6/MaobuTranslator_0.3.6_x64-setup.exe",
-      "size": 9075924,
-      "sha256": "4877107da7f8c941922e677b9daaac10218c2e4c7b5a3ae4e2d645e4079f0472"
+      "name": "MaobuTranslator_0.3.7_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.7/MaobuTranslator_0.3.7_x64-setup.exe",
+      "size": 9073701,
+      "sha256": "73492a2163d3c50102f1bfbf75fef63c216f228a68f6c509f8276e8424ceb5f7"
     },
     {
-      "name": "猫步翻译_0.3.6_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.6/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.6_x64-setup.exe",
-      "size": 9075924,
-      "sha256": "4877107da7f8c941922e677b9daaac10218c2e4c7b5a3ae4e2d645e4079f0472"
+      "name": "猫步翻译_0.3.7_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.7/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.7_x64-setup.exe",
+      "size": 9073701,
+      "sha256": "73492a2163d3c50102f1bfbf75fef63c216f228a68f6c509f8276e8424ceb5f7"
     }
   ]
 }

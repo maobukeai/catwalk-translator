@@ -548,8 +548,8 @@ pub async fn cmd_get_app_info() -> Result<AppInfo, String> {
 pub fn cmd_open_external_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "", &url])
+        let _ = std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &url])
             .spawn();
     }
     #[cfg(not(target_os = "windows"))]
@@ -814,29 +814,46 @@ pub async fn cmd_download_and_install_update(
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        if is_silent {
-            // 静默更新：使用 cmd 执行 NSIS /S 安装，等待完成后自动重新拉起当前新版本 exe
-            // ping 127.0.0.1 -n 2 提供 1 秒延时，确保旧进程彻底退出且文件锁完全释放
-            let cmd_script = if !current_exe_path.is_empty() {
-                format!(
-                    "ping 127.0.0.1 -n 2 >nul & \"{}\" /S & ping 127.0.0.1 -n 2 >nul & start \"\" \"{}\"",
-                    temp_installer.to_string_lossy(),
-                    current_exe_path
-                )
-            } else {
-                format!("ping 127.0.0.1 -n 2 >nul & \"{}\" /S", temp_installer.to_string_lossy())
-            };
+        let target_exe = if !current_exe_path.is_empty() && !current_exe_path.to_lowercase().contains("temp") {
+            current_exe_path
+        } else {
+            std::env::var("LOCALAPPDATA")
+                .map(|p| std::path::Path::new(&p).join("猫步翻译").join("MaobuTranslator.exe").to_string_lossy().to_string())
+                .unwrap_or_else(|_| r"C:\Program Files\猫步翻译\MaobuTranslator.exe".to_string())
+        };
 
+        // 统一生成独立临时升级批处理脚本，彻底消除通过 cmd.exe /c 命令行传递复合指令时的嵌套引号与反斜杠解析异常
+        let bat_path = std::env::temp_dir().join(format!("maobu_update_{timestamp}.bat"));
+        let bat_content = if is_silent {
+            format!(
+                "@echo off\r\n\
+                 ping 127.0.0.1 -n 2 >nul\r\n\
+                 start /wait \"\" \"{}\" /S\r\n\
+                 ping 127.0.0.1 -n 2 >nul\r\n\
+                 start \"\" \"{}\"\r\n\
+                 del \"%~f0\"\r\n",
+                temp_installer.to_string_lossy(),
+                target_exe
+            )
+        } else {
+            format!(
+                "@echo off\r\n\
+                 ping 127.0.0.1 -n 2 >nul\r\n\
+                 start \"\" \"{}\"\r\n\
+                 del \"%~f0\"\r\n",
+                temp_installer.to_string_lossy()
+            )
+        };
+
+        if let Err(e) = std::fs::write(&bat_path, bat_content) {
+            eprintln!("[Updater] 写入更新脚本失败: {e}，回退直接启动安装包");
+            let _ = std::process::Command::new(&temp_installer).spawn();
+        } else {
             std::process::Command::new("cmd")
-                .args(["/c", &cmd_script])
+                .args(["/c", bat_path.to_string_lossy().as_ref()])
                 .creation_flags(CREATE_NO_WINDOW)
                 .spawn()
-                .map_err(|e| format!("启动静默升级脚本失败: {e}"))?;
-        } else {
-            // 常规向导升级：直接启动安装程序向导
-            std::process::Command::new(&temp_installer)
-                .spawn()
-                .map_err(|e| format!("启动安装程序失败: {e}"))?;
+                .map_err(|e| format!("启动升级脚本失败: {e}"))?;
         }
     }
 

@@ -110,9 +110,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ isOpen, onClose, updat
         }`}
         data-testid="update-modal-dialog"
       >
-        {/* 顶部彩色装饰光效条 */}
-        <div className="h-1.5 w-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500" />
-
         {/* 模态头部 */}
         <div className="p-6 pb-4 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
