@@ -56,7 +56,7 @@ describe('AiChatPanel Component and Interaction Test Suite', () => {
     });
 
     // Should display missing API Key error alert
-    expect(screen.getByText(/未配置 Custom 的 API 密钥/)).toBeTruthy();
+    expect(screen.getByText(/未配置 (Custom|Google Gemini) 的 API 密钥/)).toBeTruthy();
   });
 
   it('allows sending chat messages and rendering replies when configured', async () => {
@@ -95,7 +95,7 @@ describe('AiChatPanel Component and Interaction Test Suite', () => {
     });
   });
 
-  it('allows model switching in header dropdown when multiple models are available', async () => {
+  it('allows model switching in header dropdown by vendor and model categorization', async () => {
     const customSettings: AppSettings = {
       ...useSettingsStore.getState().settings,
       llmConfig: {
@@ -135,21 +135,89 @@ describe('AiChatPanel Component and Interaction Test Suite', () => {
 
     render(<AiChatPanel />);
 
-    const select = screen.getByTitle('快速切换当前对话所使用的大模型') as HTMLSelectElement;
-    expect(select).toBeTruthy();
-    expect(select.value).toBe('deepseek-1');
+    // 1. 厂商选择器
+    const vendorSelect = screen.getByTitle('快速切换 AI 厂商') as HTMLSelectElement;
+    expect(vendorSelect).toBeTruthy();
+    expect(vendorSelect.value).toBe('DeepSeek');
 
-    // Unconfigured model must NOT be in options
+    // 2. 当前厂商下的模型选择器
+    const modelSelect = screen.getByTitle('快速切换当前对话所使用的大模型') as HTMLSelectElement;
+    expect(modelSelect).toBeTruthy();
+    expect(modelSelect.value).toBe('deepseek-1');
+
+    // 未配置的厂商不应在选项中
     expect(screen.queryByText(/Zhipu GLM/)).toBeNull();
 
-    // Configured models must be present
-    expect(screen.getByText('Ollama (llama3)')).toBeTruthy();
-
+    // 切换厂商到本地 Ollama
     act(() => {
-      fireEvent.change(select, { target: { value: 'ollama-1' } });
+      fireEvent.change(vendorSelect, { target: { value: 'Ollama (本地私有化)' } });
     });
 
     expect(useSettingsStore.getState().settings.llmConfig?.model).toBe('llama3');
+  });
+
+  it('never displays raw "Custom" and organizes custom proxy models by intelligent vendor recognition', () => {
+    const customSettings: AppSettings = {
+      ...useSettingsStore.getState().settings,
+      llmConfig: {
+        id: 'custom-gemini',
+        provider: 'Custom',
+        apiKey: 'sk-gemini',
+        model: 'gemini-3.5-flash-lite',
+        endpoint: 'https://gateway.ai.cloudflare.com/v1/.../google-ai-studio',
+      },
+      llmConfigs: [
+        {
+          id: 'custom-gemini',
+          provider: 'Custom',
+          apiKey: 'sk-gemini',
+          model: 'gemini-3.5-flash-lite',
+          endpoint: 'https://gateway.ai.cloudflare.com/v1/.../google-ai-studio',
+        },
+        {
+          id: 'custom-deepseek',
+          provider: 'Custom',
+          apiKey: 'sk-deepseek',
+          model: 'deepseek-v4-flash',
+          endpoint: 'https://gateway.ai.cloudflare.com/v1/.../google-ai-studio',
+        },
+        {
+          id: 'custom-agnes',
+          provider: 'Custom',
+          apiKey: 'sk-agnes',
+          model: 'agnes-2.5-flash',
+          endpoint: 'https://gateway.ai.cloudflare.com/v1/.../google-ai-studio',
+        },
+      ],
+    };
+    act(() => {
+      useSettingsStore.setState({ settings: customSettings });
+    });
+
+    render(<AiChatPanel />);
+
+    // 绝对不应显示未分类的 Custom 厂商文字
+    expect(screen.queryByText(/^Custom$/i)).toBeNull();
+    expect(screen.queryByText(/Custom \(/)).toBeNull();
+
+    // 识别出准确的 厂商分类
+    expect(screen.getAllByText('Google Gemini').length).toBeGreaterThan(0);
+
+    const vendorSelect = screen.getByTitle('快速切换 AI 厂商') as HTMLSelectElement;
+    expect(vendorSelect).toBeTruthy();
+    expect(vendorSelect.value).toBe('Google Gemini');
+
+    // 切换厂商至 DeepSeek
+    act(() => {
+      fireEvent.change(vendorSelect, { target: { value: 'DeepSeek' } });
+    });
+    expect(useSettingsStore.getState().settings.llmConfig?.model).toBe('deepseek-v4-flash');
+
+    // 切换厂商至 Agnes
+    act(() => {
+      fireEvent.change(vendorSelect, { target: { value: 'Agnes' } });
+    });
+    expect(useSettingsStore.getState().settings.llmConfig?.model).toBe('agnes-2.5-flash');
   });
 
   it('automatically applies AI 智能翻译 prompt directive when AI 智能翻译 preset mode is activated', async () => {

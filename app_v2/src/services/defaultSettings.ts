@@ -114,12 +114,26 @@ export const defaultAiProviders: AiProviderConfig[] = [
     ],
   },
   {
+    id: 'provider-gemini',
+    name: 'Google Gemini',
+    providerType: 'Google Gemini',
+    apiKey: '',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    enabled: true,
+    defaultModelId: 'gemini-2.5-flash',
+    models: [
+      { id: 'gemini-2.5-flash', modelId: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash (极速智能)', enabled: true },
+      { id: 'gemini-2.5-pro', modelId: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro (全能旗舰)', enabled: false },
+      { id: 'gemini-1.5-flash', modelId: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash', enabled: false },
+    ],
+  },
+  {
     id: 'provider-ollama',
     name: 'Ollama (本地私有化)',
     providerType: 'Ollama',
     apiKey: '',
     endpoint: 'http://localhost:11434/v1',
-    enabled: true,
+    enabled: false,
     defaultModelId: 'llama3',
     models: [
       { id: 'llama3', modelId: 'llama3', displayName: 'Llama 3 8B', enabled: true },
@@ -128,15 +142,144 @@ export const defaultAiProviders: AiProviderConfig[] = [
   },
 ];
 
+/**
+ * 校验指定大模型配置是否真正处于就绪可用状态：
+ * - 必须启用 (enabled !== false)
+ * - 必须包含有效端点 (endpoint 非空)
+ * - 本地私有化端点 (localhost / 127.0.0.1) 必须显式开启 (enabled === true) 且配置了模型
+ * - 远程在线端点必须已填入非空的有效 API Key
+ */
+export function isConfiguredLlm(cfg?: LlmConfig | null): boolean {
+  if (!cfg || cfg.enabled === false) return false;
+  const ep = cfg.endpoint?.trim() || '';
+  if (!ep) return false;
+  const isLocal = ep.includes('localhost') || ep.includes('127.0.0.1');
+  if (isLocal) {
+    return cfg.enabled === true && !!cfg.model?.trim();
+  }
+  return !!cfg.apiKey?.trim();
+}
+
+/**
+ * 智能解析大模型配置所属的真实厂商/供应商名称，彻底剔除 'Custom' 等生硬未分类字样。
+ * 优先根据 Model ID 关键词识别（即使多个模型经由同一个反向代理/中转网关转发，也能精确区隔厂商），
+ * 其次根据 Endpoint 域名/路径特征匹配，最后根据配置名称或友好备用名称兜底。
+ */
+export function resolveVendor(cfg?: Partial<LlmConfig> | null): string {
+  if (!cfg) return 'DeepSeek';
+  const provider = (cfg.provider || '').trim();
+  const model = (cfg.model || '').trim().toLowerCase();
+  const endpoint = (cfg.endpoint || '').trim().toLowerCase();
+  const name = (cfg.name || '').trim();
+
+  // 若原有 provider 已是具体的非 Custom 厂商，规范化输出
+  if (provider && !/^(custom|自定义|other|其他)$/i.test(provider)) {
+    if (provider === 'Kimi') return 'Moonshot Kimi';
+    if (provider === 'SiliconFlow') return 'SiliconFlow (硅基流动)';
+    if (provider === 'Ollama') return 'Ollama (本地私有化)';
+    if (provider.includes('百度文心')) return '百度文心';
+    return provider;
+  }
+
+  // 1. 优先按照具体模型 Model ID 特征识别厂商（即便使用同一中转 Gateway 也能精准识别各自厂商）
+  if (/^gemini/i.test(model) || model.includes('gemini')) return 'Google Gemini';
+  if (/^deepseek/i.test(model) || model.includes('deepseek')) return 'DeepSeek';
+  if (/^(gpt|o1-|o3-|text-embedding|dall-e|chatgpt)/i.test(model)) return 'OpenAI';
+  if (/^claude/i.test(model) || model.includes('claude')) return 'Anthropic (Claude)';
+  if (/^(glm|chatglm)/i.test(model) || model.includes('glm')) return '智谱 GLM';
+  if (/^qwen/i.test(model) || model.includes('qwen')) return '通义千问';
+  if (/^(ernie|eb-)/i.test(model) || model.includes('ernie')) return '百度文心';
+  if (/^(moonshot|kimi)/i.test(model) || model.includes('moonshot') || model.includes('kimi')) return 'Moonshot Kimi';
+  if (/^doubao/i.test(model) || model.includes('doubao')) return '字节豆包';
+  if (/^hunyuan/i.test(model) || model.includes('hunyuan')) return '腾讯混元';
+  if (/^(mistral|codestral|mixtral)/i.test(model)) return 'Mistral AI';
+  if (/^grok/i.test(model) || model.includes('grok')) return 'xAI (Grok)';
+  if (/^llama/i.test(model) || model.includes('llama')) return 'Meta Llama';
+  if (/^agnes/i.test(model) || model.includes('agnes')) return 'Agnes';
+  if (/^baichuan/i.test(model) || model.includes('baichuan')) return '百川智能';
+  if (/^yi-/i.test(model) || model.includes('01-ai')) return '零一万物';
+  if (/^minicpm/i.test(model) || model.includes('minicpm')) return '面壁智能';
+  if (/^spark/i.test(model) || model.includes('sparkdesk')) return '讯飞星火';
+
+  // 2. 按照 Endpoint 域名与路径特征识别厂商
+  if (endpoint.includes('generativelanguage.googleapis.com') || endpoint.includes('google-ai-studio') || endpoint.includes('gemini')) {
+    return 'Google Gemini';
+  }
+  if (endpoint.includes('deepseek.com') || endpoint.includes('deepseek')) {
+    return 'DeepSeek';
+  }
+  if (endpoint.includes('openai.com')) {
+    return 'OpenAI';
+  }
+  if (endpoint.includes('anthropic.com')) {
+    return 'Anthropic (Claude)';
+  }
+  if (endpoint.includes('bigmodel.cn') || endpoint.includes('zhipu')) {
+    return '智谱 GLM';
+  }
+  if (endpoint.includes('dashscope') || endpoint.includes('aliyuncs')) {
+    return '通义千问';
+  }
+  if (endpoint.includes('qianfan') || endpoint.includes('baidubce')) {
+    return '百度文心';
+  }
+  if (endpoint.includes('moonshot.cn')) {
+    return 'Moonshot Kimi';
+  }
+  if (endpoint.includes('volces.com') || endpoint.includes('volcengine')) {
+    return '字节豆包';
+  }
+  if (endpoint.includes('tencent') || endpoint.includes('tencentcloud')) {
+    return '腾讯混元';
+  }
+  if (endpoint.includes('siliconflow')) {
+    return 'SiliconFlow (硅基流动)';
+  }
+  if (endpoint.includes('localhost') || endpoint.includes('127.0.0.1') || endpoint.includes('11434')) {
+    return 'Ollama (本地私有化)';
+  }
+  if (endpoint.includes('cloudflare')) {
+    return 'Cloudflare AI';
+  }
+
+  // 3. 用户若指定了有意义的自定义厂商别名
+  if (name && !/^(custom|自定义|默认|未命名|model)$/i.test(name) && name !== cfg.model) {
+    return name;
+  }
+
+  return '第三方厂商';
+}
+
+/**
+ * 纯净解析模型显示名称，剔除生硬的前缀
+ */
+export function resolveModelLabel(cfg?: Partial<LlmConfig> | null): string {
+  if (!cfg) return '默认模型';
+  const name = (cfg.name || '').trim();
+  const model = (cfg.model || '').trim();
+  if (name && !/^(custom|自定义|默认)$/i.test(name) && name !== model) {
+    return name;
+  }
+  return model || '默认模型';
+}
+
 /** 将结构化的 AiProviderConfig 转换为平铺的 LlmConfig 列表（供后端或现有组件平滑调用） */
 export function flattenAiProvidersToLlmConfigs(providers: AiProviderConfig[]): LlmConfig[] {
   const list: LlmConfig[] = [];
   for (const p of providers) {
+    const rawVendor = p.name && !/^(custom|自定义)$/i.test(p.name) ? p.name : (p.providerType && p.providerType !== 'Custom' ? p.providerType : '');
     for (const m of p.models) {
+      const interimCfg: Partial<LlmConfig> = {
+        provider: rawVendor,
+        model: m.modelId,
+        endpoint: p.endpoint,
+        name: m.displayName,
+      };
+      const vendorName = rawVendor || resolveVendor(interimCfg);
       list.push({
         id: m.id || `${p.id}__${m.modelId}`,
         name: m.displayName || m.modelId,
-        provider: p.providerType && p.providerType !== 'Custom' ? p.providerType : (p.name || p.providerType),
+        provider: vendorName,
         apiKey: p.apiKey,
         model: m.modelId,
         endpoint: p.endpoint,
@@ -163,23 +306,27 @@ export function migrateLlmConfigsToAiProviders(
   const baseProviders: AiProviderConfig[] = [];
 
   for (const cfg of llmConfigs) {
-    if (!cfg.provider) continue;
+    if (!cfg.provider && !cfg.model) continue;
+    const vendorName = resolveVendor(cfg);
     let p = baseProviders.find(
       (bp) =>
-        bp.providerType.toLowerCase() === cfg.provider.toLowerCase() ||
-        bp.name.toLowerCase() === cfg.provider.toLowerCase()
+        bp.providerType.toLowerCase() === vendorName.toLowerCase() ||
+        bp.name.toLowerCase() === vendorName.toLowerCase() ||
+        bp.providerType.toLowerCase() === (cfg.provider || '').toLowerCase() ||
+        bp.name.toLowerCase() === (cfg.provider || '').toLowerCase()
     );
 
     if (!p) {
       const defaultPreset = defaultAiProviders.find(
         (dp) =>
-          dp.providerType.toLowerCase() === cfg.provider.toLowerCase() ||
-          dp.name.toLowerCase() === cfg.provider.toLowerCase()
+          dp.providerType.toLowerCase() === vendorName.toLowerCase() ||
+          dp.name.toLowerCase() === vendorName.toLowerCase()
       );
+      const safeId = vendorName.toLowerCase().replace(/[\s\u4e00-\u9fff()（）]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'custom';
       p = {
-        id: defaultPreset ? defaultPreset.id : `provider-${cfg.provider.toLowerCase().replace(/[\s\u4e00-\u9fff]+/g, '-')}-${Date.now().toString(36)}`,
-        name: defaultPreset ? defaultPreset.name : cfg.provider,
-        providerType: defaultPreset ? defaultPreset.providerType : cfg.provider,
+        id: defaultPreset ? defaultPreset.id : `provider-${safeId}`,
+        name: defaultPreset ? defaultPreset.name : vendorName,
+        providerType: defaultPreset ? defaultPreset.providerType : vendorName,
         endpoint: cfg.endpoint || defaultPreset?.endpoint || '',
         apiKey: cfg.apiKey || '',
         enabled: cfg.enabled ?? true,
@@ -198,7 +345,7 @@ export function migrateLlmConfigsToAiProviders(
         p.models.push({
           id: cfg.id || cfg.model,
           modelId: cfg.model,
-          displayName: cfg.name || cfg.model,
+          displayName: resolveModelLabel(cfg),
           enabled: cfg.enabled ?? true,
         });
       }
@@ -251,6 +398,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
       apiKey: '',
       model: 'llama3',
       endpoint: 'http://localhost:11434/v1',
+      enabled: false,
     },
     {
       id: 'llm-智谱-glm-4-flash',
