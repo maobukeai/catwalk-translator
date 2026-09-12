@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (例如 0.3.10，留空则自动从 tag 或 package.json 提取)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and Release (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Version
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            RAW_VER="${{ github.event.inputs.version }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            RAW_VER="${GITHUB_REF_NAME#v}"
+          else
+            RAW_VER=$(node -p "require('./app_v2/package.json').version")
+          fi
+          TAG_VER="v${RAW_VER}"
+          echo "RAW_VER=${RAW_VER}" >> $GITHUB_ENV
+          echo "TAG_VER=${TAG_VER}" >> $GITHUB_ENV
+          echo "::notice::Release Version is ${RAW_VER} (Tag: ${TAG_VER})"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: app_v2/pnpm-lock.yaml
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo Dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app_v2/src-tauri
+
+      - name: Install Frontend Dependencies
+        working-directory: app_v2
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript & Frontend Vitest
+        working-directory: app_v2
+        run: |
+          npx tsc --noEmit
+          npx vitest run
+
+      - name: Build Frontend Assets (dist)
+        working-directory: app_v2
+        run: npx vite build
+
+      - name: Backend Rust Tests (cargo test)
+        working-directory: app_v2/src-tauri
+        run: cargo test
+
+      - name: Build Tauri Production App
+        working-directory: app_v2
+        run: pnpm tauri build
+
+      - name: Prepare Artifacts & Calculate Hashes
+        shell: pwsh
+        run: |
+          $ver = "$env:RAW_VER"
+          $nsisDir = "app_v2/src-tauri/target/release/bundle/nsis"
+          $msiDir = "app_v2/src-tauri/target/release/bundle/msi"
+
+          $zhExe = Join-Path $nsisDir "猫步翻译_${ver}_x64-setup.exe"
+          if (-not (Test-Path $zhExe)) {
+              $zhExe = (Get-ChildItem -Path $nsisDir -Filter "*setup.exe" | Select-Object -First 1).FullName
+          }
+          $enExe = Join-Path $nsisDir "MaobuTranslator_${ver}_x64-setup.exe"
+          Copy-Item -Path $zhExe -Destination $enExe -Force
+
+          $zhMsi = Join-Path $msiDir "猫步翻译_${ver}_x64_zh-CN.msi"
+          if (-not (Test-Path $zhMsi)) {
+              $zhMsi = (Get-ChildItem -Path $msiDir -Filter "*.msi" | Select-Object -First 1).FullName
+          }
+
+          $exeHash = (Get-FileHash -Path $enExe -Algorithm SHA256).Hash.ToLower()
+          $exeSize = (Get-Item -Path $enExe).Length
+
+          Write-Host "=========================================="
+          Write-Host "Installer: $enExe"
+          Write-Host "Size: $exeSize bytes"
+          Write-Host "SHA256: $exeHash"
+          Write-Host "MSI: $zhMsi"
+          Write-Host "=========================================="
+
+          "EXE_HASH=$exeHash" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "EXE_SIZE=$exeSize" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "EN_EXE=$enExe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ZH_EXE=$zhExe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ZH_MSI=$zhMsi" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Update version.json with Release SHA256 & Size
+        shell: pwsh
+        run: |
+          $jsonPath = "version.json"
+          $ver = "$env:RAW_VER"
+          $hash = "$env:EXE_HASH"
+          $size = [int64]"$env:EXE_SIZE"
+
+          $json = Get-Content $jsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          $json.version = $ver
+          $json.release_date = (Get-Date).ToString("yyyy-MM-dd")
+
+          foreach ($asset in $json.assets) {
+              if ($asset.name -like "MaobuTranslator_*") {
+                  $asset.name = "MaobuTranslator_${ver}_x64-setup.exe"
+                  $asset.url = "https://github.com/maobukeai/catwalk-translator/releases/download/v${ver}/MaobuTranslator_${ver}_x64-setup.exe"
+                  $asset.size = $size
+                  $asset.sha256 = $hash
+              } elseif ($asset.name -like "猫步翻译_*") {
+                  $asset.name = "猫步翻译_${ver}_x64-setup.exe"
+                  $asset.url = "https://github.com/maobukeai/catwalk-translator/releases/download/v${ver}/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_${ver}_x64-setup.exe"
+                  $asset.size = $size
+                  $asset.sha256 = $hash
+              }
+          }
+
+          $json | ConvertTo-Json -Depth 10 | Set-Content $jsonPath -Encoding UTF8
+          Write-Host "Updated version.json:"
+          Get-Content $jsonPath
+
+      - name: Extract Release Notes
+        id: notes
+        shell: pwsh
+        run: |
+          $json = Get-Content "version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+          $notes = $json.release_notes
+          if (-not $notes) {
+              $notes = "猫步翻译 $env:TAG_VER 发布"
+          }
+          $notesFile = "release_notes_generated.txt"
+          Set-Content -Path $notesFile -Value $notes -Encoding UTF8
+          "NOTES_FILE=$notesFile" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_VER }}
+          name: 猫步翻译 ${{ env.TAG_VER }}
+          body_path: ${{ env.NOTES_FILE }}
+          draft: false
+          prerelease: false
+          files: |
+            ${{ env.EN_EXE }}
+            ${{ env.ZH_EXE }}
+            ${{ env.ZH_MSI }}
+
+      - name: Commit and Push version.json to main
+        shell: bash
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git pull origin main --rebase
+          git add version.json
+          if git diff --staged --quiet; then
+            echo "version.json unchanged, skipping commit."
+          else
+            git commit -m "chore(release): update version.json hashes for ${TAG_VER} [skip ci]"
+            git push origin main
+          fi
+
+      - name: Purge jsDelivr CDN Cache
+        shell: bash
+        run: |
+          curl -s "https://purge.jsdelivr.net/gh/maobukeai/catwalk-translator@main/version.json" || true
+          curl -s "https://purge.jsdelivr.net/gh/maobukeai/catwalk-translator@main/app_v2/package.json" || true
+          echo "CDN cache purge triggered."
