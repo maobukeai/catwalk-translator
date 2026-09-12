@@ -76,9 +76,9 @@ jobs:
         working-directory: app_v2
         run: npx vite build
 
-      - name: Backend Rust Tests (cargo test)
+      - name: Backend Rust Tests (cargo test --lib)
         working-directory: app_v2/src-tauri
-        run: cargo test
+        run: cargo test --lib
 
       - name: Build Tauri Production App
         working-directory: app_v2

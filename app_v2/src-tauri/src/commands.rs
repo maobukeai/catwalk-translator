@@ -582,7 +582,7 @@ pub struct EnvironmentChecker;
 
 impl EnvironmentChecker {
     pub fn check_runtime_environment(settings: &AppSettings) -> bool {
-        settings.llm_config.is_some() && !settings.translation_tiers.is_empty()
+        !settings.translation_tiers.is_empty()
     }
 }
 
