@@ -8,14 +8,14 @@
     {
       "name": "MaobuTranslator_0.3.10_x64-setup.exe",
       "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.10/MaobuTranslator_0.3.10_x64-setup.exe",
-      "size": 9073374,
-      "sha256": "8fd0ded8ebf1a44106fd5648f47eb8cf6a00fe77d048da73282ebe1b4ab8af38"
+      "size": 9052107,
+      "sha256": "da14dc52ff94677112bae55b3d93a7ef6d3683082c2dc6d973864f9ec60002a6"
     },
     {
       "name": "猫步翻译_0.3.10_x64-setup.exe",
       "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.10/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.10_x64-setup.exe",
-      "size": 9073374,
-      "sha256": "8fd0ded8ebf1a44106fd5648f47eb8cf6a00fe77d048da73282ebe1b4ab8af38"
+      "size": 9052107,
+      "sha256": "da14dc52ff94677112bae55b3d93a7ef6d3683082c2dc6d973864f9ec60002a6"
     }
   ]
 }

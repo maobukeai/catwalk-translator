@@ -180,15 +180,12 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout main
-          git pull origin main --rebase
           git add version.json
-          if git diff --staged --quiet; then
-            echo "version.json unchanged, skipping commit."
-          else
+          if ! git diff --staged --quiet; then
             git commit -m "chore(release): update version.json hashes for ${TAG_VER} [skip ci]"
-            git push origin main
+            git push origin HEAD:main
+          else
+            echo "version.json unchanged, skipping commit."
           fi
 
       - name: Purge jsDelivr CDN Cache
