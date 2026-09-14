@@ -116,7 +116,7 @@ pub fn effective_proxy() -> Option<String> {
 
 /// 创建带系统代理自适应、Cookie Store 与标准 UA 的统一 reqwest Client
 pub fn create_http_client(timeout_ms: u64) -> Client {
-    let timeout_val = timeout_ms.clamp(1200, 10000);
+    let timeout_val = timeout_ms.clamp(1200, 30000);
     let mut builder = Client::builder()
         .connect_timeout(Duration::from_millis(1500))
         .timeout(Duration::from_millis(timeout_val))
@@ -3077,33 +3077,22 @@ pub async fn translate_with_llm(
     let clean_base = base_path.trim_end_matches('/').to_string();
 
     let mut candidate_urls = Vec::new();
-    if raw_ep.contains("/chat/completions") || raw_ep.contains(":generateContent") {
+    if raw_ep.contains(":generateContent") {
+        candidate_urls.push(raw_ep.clone());
+    } else if raw_ep.contains("/chat/completions") && !is_google_gemini {
         candidate_urls.push(raw_ep.clone());
     }
 
     if is_google_gemini {
         let mut root = clean_base.as_str();
-        if let Some(stripped) = root.strip_suffix("/chat/completions") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/completions") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/openai") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/models") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/v1beta") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/v1") {
-            root = stripped;
+        for suffix in ["/chat/completions", "/completions", "/openai", "/models", "/v1beta", "/v1"] {
+            if let Some(stripped) = root.strip_suffix(suffix) {
+                root = stripped;
+            }
         }
         let root = root.trim_end_matches('/');
 
-        candidate_urls.push(format!("{}/v1beta/openai/chat/completions", root));
+        // 1. Google Gemini 官方原生 :generateContent 端点优先（针对 Cloudflare AI Gateway / Google AI Studio 原生通道，秒级直出）
         candidate_urls.push(format!(
             "{}/v1beta/models/{}:generateContent",
             root, model_name
@@ -3112,6 +3101,8 @@ pub async fn translate_with_llm(
             "{}/models/{}:generateContent",
             root, model_name
         ));
+        // 2. 兼顾 OpenAI 格式反向代理端点
+        candidate_urls.push(format!("{}/v1beta/openai/chat/completions", root));
         candidate_urls.push(format!("{}/v1/chat/completions", root));
         candidate_urls.push(format!("{}/chat/completions", root));
     } else {
@@ -3173,17 +3164,11 @@ pub async fn translate_with_llm(
 
         let mut req = client.post(&final_url);
         if !api_key.is_empty() {
+            req = req
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("api-key", &api_key);
             if is_google_gemini {
-                req = req
-                    .header("x-goog-api-key", &api_key)
-                    .header("api-key", &api_key);
-                if !api_key.starts_with("AIza") {
-                    req = req.header("Authorization", format!("Bearer {}", api_key));
-                }
-            } else {
-                req = req
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .header("api-key", &api_key);
+                req = req.header("x-goog-api-key", &api_key);
             }
         }
 
@@ -3779,7 +3764,19 @@ pub async fn execute_universal_translate(
         None
     };
 
-    let active_llm_config = matched_llm_config.clone().or_else(|| req.llm_config.clone());
+    let active_llm_config = matched_llm_config.clone()
+        .or_else(|| {
+            req.llm_configs.as_ref().and_then(|cfgs| {
+                cfgs.iter().find(|c| {
+                    let ep = c.endpoint.trim();
+                    let is_local = ep.contains("localhost") || ep.contains("127.0.0.1");
+                    !ep.is_empty()
+                        && (!c.api_key.trim().is_empty() || (is_local && c.enabled == Some(true)))
+                        && c.enabled.unwrap_or(true)
+                }).cloned()
+            })
+        })
+        .or_else(|| req.llm_config.clone());
     let is_llm_configured = active_llm_config.as_ref().is_some_and(|cfg| {
         let ep = cfg.endpoint.trim();
         let is_local = ep.contains("localhost") || ep.contains("127.0.0.1");
@@ -3844,6 +3841,9 @@ pub async fn execute_universal_translate(
     let is_explicit_llm_forced = forced.as_ref().is_some_and(|f| {
         f.starts_with("llm")
             || f.starts_with("ai")
+            || f.contains("llm")
+            || f.contains("ai")
+            || f.contains("深度翻译")
             || f.contains("model")
             || f.contains("deepseek")
             || f.contains("openai")
@@ -3862,8 +3862,9 @@ pub async fn execute_universal_translate(
         && (is_explicit_llm_forced || (!is_forced && !configs_to_run.is_empty()));
 
     if run_llm {
+        let llm_client = create_http_client(15000);
         for config in configs_to_run {
-            let c = client.clone();
+            let c = llm_client.clone();
             let q = trimmed.to_string();
             let tgt = actual_target.to_string();
             let llm_cfg = config;

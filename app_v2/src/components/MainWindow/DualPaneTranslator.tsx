@@ -52,6 +52,7 @@ import type {
   LanguageCode,
   LanguageOption,
   UniversalTranslationResponse,
+  MultiEngineTranslation,
   AiDeepTranslationAnalysis,
   AiStyleRewrite,
   AiVocabularyItem,
@@ -101,10 +102,12 @@ interface DualPaneTranslatorProps {
 /** 引擎 → lucide 图标映射（取代旧 emoji 徽章，统一苹果极简视觉） */
 function getEngineIcon(shortName: string): React.ElementType {
   const n = shortName || '';
+  if (n.includes('AI') || n.includes('LLM') || n.includes('深度翻译')) return Bot;
   if (n.includes('Lingva')) return Globe;
   if (n.includes('Google')) return Globe;
   if (n.includes('Bing')) return Hexagon;
   if (n.includes('有道')) return BookOpen;
+  if (n.includes('大模型') || n.includes('文心')) return Bot;
   if (n.includes('百度')) return PawPrint;
   if (n.includes('MyMemory')) return Brain;
   if (n.includes('DeepL')) return Zap;
@@ -115,7 +118,6 @@ function getEngineIcon(shortName: string): React.ElementType {
   if (n.includes('火山')) return Flame;
   if (n.includes('Yandex')) return Globe;
   if (n.includes('CG') || n.includes('词库')) return Snowflake;
-  if (n.includes('AI') || n.includes('LLM')) return Bot;
   return Sparkles;
 }
 
@@ -154,6 +156,11 @@ export const SUPPORTED_LANGUAGES: LanguageOption[] = [
 
 function getShortEngineName(fullName: string): string {
   if (!fullName) return '';
+  if (fullName.includes('AI') || fullName.includes('LLM') || fullName.includes('深度翻译')) {
+    const match = fullName.match(/[\(（](.*?)[\)）]/);
+    const label = match ? match[1].trim() : 'AI';
+    return `${label} 深度翻译`;
+  }
   if (fullName.includes('Lingva')) return 'Lingva';
   if (fullName.includes('Google') || fullName.includes('谷歌')) return 'Google';
   if (fullName.includes('Bing') || fullName.includes('微软')) return 'Bing';
@@ -168,11 +175,6 @@ function getShortEngineName(fullName: string): string {
   if (fullName.includes('Urban') || fullName.includes('俚语')) return 'Urban 俚语';
   if (fullName.includes('火山')) return '火山翻译';
   if (fullName.includes('Yandex')) return 'Yandex';
-  if (fullName.includes('AI') || fullName.includes('LLM')) {
-    const match = fullName.match(/\((.*?)\)/);
-    const label = match ? match[1] : 'AI';
-    return `${label} 深度翻译`;
-  }
   if (fullName.includes('词库') || fullName.includes('Preset')) return 'CG 词库';
   return fullName.replace(/（.*?）|\(.*?\)/g, '').trim();
 }
@@ -978,6 +980,20 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       );
       const isProgressive = isAutoMode && hasActiveLlm && settings.enableLlmProgressiveRefine !== false;
 
+      const activeLlm = (settings.llmConfigs && settings.llmConfigs.length > 0)
+        ? (settings.llmConfigs.find(c => c.enabled !== false && isConfiguredLlm(c)) || settings.llmConfigs.find(c => c.enabled !== false) || settings.llmConfig)
+        : settings.llmConfig;
+      const activeEngineLabel = activeLlm
+        ? (activeLlm.provider && activeLlm.provider !== 'Custom' && activeLlm.provider !== '自定义兼容接口'
+            ? activeLlm.provider
+            : (activeLlm.model && activeLlm.model !== 'custom-model' ? activeLlm.model : 'AI'))
+        : 'AI';
+      const placeholderEngine: MultiEngineTranslation = {
+        engineName: `✨ 🤖 AI 深度翻译 (${activeEngineLabel})`,
+        translated: '⏳ AI 深度精翻中...',
+        sourceTier: 'LLM (Generating)',
+      };
+
       // 判定文本是否为待重试、待配置、鉴权失败或网络异常错误串（严禁此类错误态被误当作优质译文呈现）
       const isFaultyOrUnconfiguredTranslation = (text?: string | null): boolean => {
         if (!text) return true;
@@ -1041,6 +1057,10 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
         stage1DoneSeqRef.current = seq;
 
+        const resEngines = (isProgressive && hasActiveLlm)
+          ? [placeholderEngine, ...res.engines.filter(e => !e.engineName.includes('深度翻译') && !e.engineName.includes('AI 深度') && e.sourceTier !== 'LLM API')]
+          : res.engines;
+
         setResponse((prev) => {
           // 若已有先锋有效结果且新返回的 mainTranslation 处于重试或待配置态，优先保留先锋优质译文
           let finalMain = res.mainTranslation;
@@ -1051,13 +1071,14 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           return {
             ...res,
             mainTranslation: finalMain,
+            engines: resEngines,
           };
         });
 
         // 优先将选中 Tab 设定为用户固定的优先渠道（preferredEngine），若未固定或该渠道失败则智能优选首个有效引擎
         let targetIdx = -1;
         if (currentPref && currentPref !== 'auto') {
-          targetIdx = res.engines.findIndex((e) => {
+          targetIdx = resEngines.findIndex((e) => {
             const short = getShortEngineName(e.engineName).toLowerCase();
             return (
               short === currentPref.toLowerCase() &&
@@ -1070,22 +1091,26 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         }
 
         if (targetIdx === -1) {
-          targetIdx = res.engines.findIndex(
+          targetIdx = resEngines.findIndex(
             (e) =>
               e.translated === res.mainTranslation &&
               e.sourceTier !== 'Online (Retry)' &&
               e.sourceTier !== 'LLM (Config Required)' &&
+              e.sourceTier !== 'LLM (Generating)' &&
               e.sourceTier !== 'Online (Unconfigured)' &&
               !isFaultyOrUnconfiguredTranslation(e.translated)
           );
         }
 
         if (targetIdx === -1) {
-          // 智能寻找首个真正有效的译文卡片（排除未配置与重试态）
-          targetIdx = res.engines.findIndex(
+          // 智能寻找首个真正有效的译文卡片（排除未配置、重试态以及生成中占位符）
+          targetIdx = resEngines.findIndex(
             (e) =>
               e.sourceTier !== 'Online (Retry)' &&
               e.sourceTier !== 'LLM (Config Required)' &&
+              e.sourceTier !== 'LLM (Auth Error)' &&
+              e.sourceTier !== 'LLM (Quota Error)' &&
+              e.sourceTier !== 'LLM (Generating)' &&
               e.sourceTier !== 'Online (Unconfigured)' &&
               !isFaultyOrUnconfiguredTranslation(e.translated) &&
               e.translated.trim().length > 0
@@ -1125,14 +1150,17 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
               const aiEngine = aiRes.engines.find(
                 (e) =>
                   (e.sourceTier === 'LLM API' || e.engineName.includes('深度翻译') || e.engineName.includes('AI')) &&
-                  e.sourceTier !== 'LLM (Config Required)' &&
-                  e.sourceTier !== 'LLM (Auth Error)' &&
-                  e.sourceTier !== 'LLM (Quota Error)' &&
-                  !isFaultyOrUnconfiguredTranslation(e.translated) &&
-                  e.translated.trim().length > 0
+                  e.sourceTier !== 'LLM (Config Required)'
               );
 
               if (aiEngine) {
+                const isAiFaulty =
+                  aiEngine.sourceTier === 'LLM (Auth Error)' ||
+                  aiEngine.sourceTier === 'LLM (Quota Error)' ||
+                  aiEngine.sourceTier === 'Online (Retry)' ||
+                  isFaultyOrUnconfiguredTranslation(aiEngine.translated) ||
+                  !aiEngine.translated.trim();
+
                 const formattedAiEngine = {
                   ...aiEngine,
                   engineName: aiEngine.engineName.includes('✨') ? aiEngine.engineName : `✨ ${aiEngine.engineName}`,
@@ -1141,26 +1169,59 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 setResponse((prev) => {
                   if (!prev || seq !== translationSeqRef.current) return prev;
                   const filtered = prev.engines.filter(
-                    (e) => !e.engineName.includes('深度翻译') && !e.engineName.includes('LLM') && e.sourceTier !== 'LLM API'
+                    (e) =>
+                      !e.engineName.includes('深度翻译') &&
+                      !e.engineName.includes('AI 深度') &&
+                      e.sourceTier !== 'LLM API' &&
+                      e.sourceTier !== 'LLM (Generating)'
                   );
+                  const curPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine;
+                  const newMain = (!isAiFaulty && (curPref === 'auto' || curPref.includes('深度翻译')))
+                    ? formattedAiEngine.translated
+                    : prev.mainTranslation;
+
                   return {
                     ...prev,
-                    mainTranslation: formattedAiEngine.translated,
+                    mainTranslation: newMain,
                     engines: [formattedAiEngine, ...filtered],
                   };
                 });
 
                 const curPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine;
-                if (curPref === 'auto') {
+                if (curPref === 'auto' && !isAiFaulty) {
                   setSelectedEngineIndex(0);
                 }
 
-                saveTranslationHistory(trimmed, formattedAiEngine.translated, `${formattedAiEngine.engineName} (AI 精翻 ✨)`, true).catch(console.warn);
+                if (!isAiFaulty) {
+                  saveTranslationHistory(trimmed, formattedAiEngine.translated, `${formattedAiEngine.engineName} (AI 精翻 ✨)`, true).catch(console.warn);
+                }
               } else {
-                console.info('[DualPaneTranslator] AI refine returned no valid translation, keeping existing machine translation intact.');
+                console.info('[DualPaneTranslator] AI refine returned no engine in response, cleaning up placeholder');
+                setResponse((prev) => {
+                  if (!prev || seq !== translationSeqRef.current) return prev;
+                  const filtered = prev.engines.filter(
+                    (e) => e.sourceTier !== 'LLM (Generating)'
+                  );
+                  return {
+                    ...prev,
+                    engines: filtered,
+                  };
+                });
+                setSelectedEngineIndex((prevIdx) => (prevIdx > 0 ? prevIdx - 1 : 0));
               }
             } catch (aiErr) {
               console.warn('[DualPaneTranslator] Progressive AI refine failed:', aiErr);
+              setResponse((prev) => {
+                if (!prev || seq !== translationSeqRef.current) return prev;
+                const filtered = prev.engines.filter(
+                  (e) => e.sourceTier !== 'LLM (Generating)'
+                );
+                return {
+                  ...prev,
+                  engines: filtered,
+                };
+              });
+              setSelectedEngineIndex((prevIdx) => (prevIdx > 0 ? prevIdx - 1 : 0));
             } finally {
               if (typeof window !== 'undefined' && seq === translationSeqRef.current) {
                 try {
@@ -1474,7 +1535,9 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
   const handleSelectEngineCard = (idx: number, text: string) => {
     setSelectedEngineIndex(idx);
-    handleCopy(text);
+    if (!text.includes('精翻中') && !text.includes('点击重试') && !text.includes('未配置') && !text.includes('需配置')) {
+      handleCopy(text);
+    }
 
     if (tabsRef.current) {
       const targetBtn = tabsRef.current.children[idx] as HTMLElement;
@@ -2260,6 +2323,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 {response?.engines && response.engines.length > 0 ? (
                   response.engines.map((eng, idx) => {
                     const isCg = isCgTermSource(eng.sourceTier, eng.engineName);
+                    const isGenerating = eng.sourceTier === 'LLM (Generating)';
                     const isRetry =
                       eng.sourceTier === 'Online (Retry)' ||
                       eng.translated.includes('点击重试') ||
@@ -2285,11 +2349,14 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                             ? "text-white shadow-sm font-bold"
                             : (isLight ? "text-slate-600 hover:text-slate-950 hover:bg-slate-200/80" : "text-zinc-300 hover:text-white hover:bg-white/10")
                         }`}
-                        style={isSelected ? { background: isRetry ? '#d97706' : 'var(--accent)' } : undefined}
+                        style={isSelected ? { background: isRetry ? '#d97706' : isGenerating ? '#9333ea' : 'var(--accent)' } : undefined}
                       >
-                        <EngineIcon className={`h-3.5 w-3.5 ${isRetry ? 'text-amber-300' : isCg ? 'text-cyan-300' : (isSelected ? 'text-white/90' : 'opacity-70')}`} strokeWidth={2} />
+                        <EngineIcon className={`h-3.5 w-3.5 ${isGenerating ? 'text-purple-400 animate-pulse' : isRetry ? 'text-amber-300' : isCg ? 'text-cyan-300' : (isSelected ? 'text-white/90' : 'opacity-70')}`} strokeWidth={2} />
                         <span>{shortName}</span>
-                        {isPreferred && (
+                        {isGenerating && (
+                          <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-ping" title="大模型深度精翻中..." />
+                        )}
+                        {isPreferred && !isGenerating && (
                           <span className="text-[10px] font-bold opacity-90" title="已固定为此渠道优先显示">📌</span>
                         )}
                         {isRetry && (
@@ -2397,10 +2464,33 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 )}
 
                 {(() => {
+                  const isGenerating = currentEngine?.sourceTier === 'LLM (Generating)' || currentTranslationText.includes('精翻中');
                   const isConfigReq = currentEngine?.sourceTier === 'LLM (Config Required)' || currentTranslationText.includes('未配置 API Key');
                   const isAuthErr = currentEngine?.sourceTier === 'LLM (Auth Error)' || currentTranslationText.includes('API Key 无效');
                   const isQuotaErr = currentEngine?.sourceTier === 'LLM (Quota Error)' || currentTranslationText.includes('额度不足');
                   const isTimeout = currentEngine?.sourceTier === 'Online (Retry)' || currentTranslationText.includes('点击重试') || currentTranslationText.includes('网络连接超时');
+
+                  if (isGenerating) {
+                    return (
+                      <div className="space-y-3 py-3">
+                        <div className="flex items-center gap-2 font-semibold text-sm">
+                          <span className={`px-2 py-0.5 rounded text-xs font-mono font-bold border flex items-center gap-1 ${
+                            isLight ? 'bg-purple-100 text-purple-900 border-purple-300' : 'bg-purple-500/20 text-purple-300 border-purple-400/30'
+                          }`}>
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <span>[AI 精翻中]</span>
+                          </span>
+                          <span className={isLight ? 'text-purple-950 font-bold' : 'text-purple-300'}>
+                            {currentEngine?.engineName} 正在深度翻译中...
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-purple-600 dark:text-purple-400 italic">
+                          <Sparkles className="h-3.5 w-3.5 animate-pulse" />
+                          <span>已优先呈现多源机翻与词库，AI 大模型生成完毕后将无缝升级呈现</span>
+                        </div>
+                      </div>
+                    );
+                  }
 
                   if (isConfigReq || isAuthErr) {
                     return (
@@ -2855,25 +2945,32 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 engine.sourceTier === 'Online (Retry)' ||
                 engine.translated.includes('点击重试') ||
                 engine.translated.includes('网络连接超时');
+              const isGenerating =
+                engine.sourceTier === 'LLM (Generating)' ||
+                engine.translated.includes('精翻中');
               const isRetrying = !!retryingEngines[engine.engineName];
 
               return (
                 <div
                   key={idx}
-                  onClick={() => handleSelectEngineCard(idx, engine.translated)}
+                  onClick={() => !isGenerating && handleSelectEngineCard(idx, engine.translated)}
                   onMouseEnter={() => setHoveredCgCardIndex(idx)}
                   onMouseLeave={() => setHoveredCgCardIndex(null)}
                   className={`p-3.5 rounded-xl border transition-all cursor-pointer group flex flex-col justify-between relative ${
                     isSelected
                       ? (isLight
-                          ? (isConfigRequired
+                          ? (isGenerating
+                              ? 'bg-purple-50/90 border-purple-400 shadow-md ring-2 ring-purple-400/40'
+                              : isConfigRequired
                               ? 'bg-blue-50/90 border-blue-500 shadow-md ring-2 ring-blue-500/40'
                               : isAuthError
                               ? 'bg-rose-50/90 border-rose-500 shadow-md ring-2 ring-rose-500/40'
                               : isRetry || isQuotaError
                               ? 'bg-amber-50/90 border-amber-500 shadow-md ring-2 ring-amber-500/40'
                               : 'bg-blue-50/90 border-blue-500 shadow-md ring-2 ring-blue-500/40')
-                          : (isConfigRequired
+                          : (isGenerating
+                              ? 'bg-purple-950/40 border-purple-400 shadow-md ring-2 ring-purple-400/40'
+                              : isConfigRequired
                               ? 'bg-blue-950/40 border-blue-400 shadow-md ring-2 ring-blue-400/40'
                               : isAuthError
                               ? 'bg-rose-950/40 border-rose-400 shadow-md ring-2 ring-rose-400/40'
@@ -2881,14 +2978,18 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                               ? 'bg-amber-950/50 border-amber-500 shadow-md ring-2 ring-amber-500/40'
                               : 'bg-blue-950/40 border-blue-400 shadow-md ring-2 ring-blue-400/40'))
                       : (isLight
-                          ? (isConfigRequired
+                          ? (isGenerating
+                              ? 'bg-purple-50/40 border-purple-200/80 hover:bg-purple-50 hover:border-purple-300 shadow-xs'
+                              : isConfigRequired
                               ? 'bg-blue-50/40 border-blue-200/80 hover:bg-blue-50 hover:border-blue-300 shadow-xs'
                               : isAuthError
                               ? 'bg-rose-50/40 border-rose-200/80 hover:bg-rose-50 hover:border-rose-300 shadow-xs'
                               : isRetry || isQuotaError
                               ? 'bg-amber-50/40 border-amber-200/80 hover:bg-amber-50 hover:border-amber-300 shadow-xs'
                               : 'bg-slate-50 border-slate-200 hover:bg-slate-100 hover:border-blue-300 shadow-xs')
-                          : (isConfigRequired
+                          : (isGenerating
+                              ? 'bg-purple-950/20 border-purple-900/40 hover:border-purple-700/60 hover:bg-purple-950/30'
+                              : isConfigRequired
                               ? 'bg-blue-950/20 border-blue-900/40 hover:border-blue-700/60 hover:bg-blue-950/30'
                               : isAuthError
                               ? 'bg-rose-950/20 border-rose-900/40 hover:border-rose-700/60 hover:bg-rose-950/30'
@@ -2908,14 +3009,18 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     <div className="flex items-center justify-between gap-1 flex-wrap">
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded border flex items-center space-x-1 ${
                         isSelected
-                          ? (isConfigRequired
+                          ? (isGenerating
+                              ? 'bg-purple-600 text-white border-purple-500'
+                              : isConfigRequired
                               ? 'bg-blue-600 text-white border-blue-500'
                               : isAuthError
                               ? 'bg-rose-600 text-white border-rose-500'
                               : isRetry || isQuotaError
                               ? 'bg-amber-600 text-white border-amber-500'
                               : 'bg-blue-600 text-white border-blue-500')
-                          : (isConfigRequired
+                          : (isGenerating
+                              ? (isLight ? 'bg-purple-100 text-purple-900 border-purple-200' : 'bg-purple-500/20 text-purple-300 border-purple-500/30')
+                              : isConfigRequired
                               ? (isLight ? 'bg-blue-100 text-blue-900 border-blue-200' : 'bg-blue-500/20 text-blue-300 border-blue-500/30')
                               : isAuthError
                               ? (isLight ? 'bg-rose-100 text-rose-900 border-rose-200' : 'bg-rose-500/20 text-rose-300 border-rose-500/30')
@@ -2927,7 +3032,12 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                         <span>{engine.engineName}</span>
                       </span>
 
-                      {isConfigRequired ? (
+                      {isGenerating ? (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-400/30 flex items-center space-x-1 animate-pulse">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span>[精翻中]</span>
+                        </span>
+                      ) : isConfigRequired ? (
                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-400/30 flex items-center space-x-1">
                           <span>[需配置]</span>
                         </span>
@@ -2952,27 +3062,39 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                       )}
                     </div>
 
-                    <p className={`text-xs font-semibold line-clamp-4 leading-relaxed transition ${
-                      isConfigRequired
-                        ? (isLight ? 'text-blue-800' : 'text-blue-400/90')
-                        : isAuthError
-                        ? (isLight ? 'text-rose-800' : 'text-rose-400/90')
-                        : isRetry || isQuotaError
-                        ? (isLight ? 'text-amber-800' : 'text-amber-400/90')
-                        : isSelected
-                          ? (isLight ? 'text-blue-950 font-bold' : 'text-white font-bold')
-                          : (isLight ? 'text-slate-800 group-hover:text-blue-600' : 'text-zinc-200 group-hover:text-white')
-                    } ${
-                      isCg ? 'border-b-2 border-dashed border-sky-400 drop-shadow-[0_0_6px_rgba(56,189,248,0.6)] pb-0.5' : ''
-                    }`}>
-                      {engine.translated}
-                    </p>
+                    {isGenerating ? (
+                      <p className="text-xs text-purple-600 dark:text-purple-300 italic flex items-center gap-1.5 py-1">
+                        <span className="inline-block w-2 h-2 rounded-full bg-purple-400 animate-ping" />
+                        <span>大模型深度精翻中，正在组织专业术语与语境...</span>
+                      </p>
+                    ) : (
+                      <p className={`text-xs font-semibold line-clamp-4 leading-relaxed transition ${
+                        isConfigRequired
+                          ? (isLight ? 'text-blue-800' : 'text-blue-400/90')
+                          : isAuthError
+                          ? (isLight ? 'text-rose-800' : 'text-rose-400/90')
+                          : isRetry || isQuotaError
+                          ? (isLight ? 'text-amber-800' : 'text-amber-400/90')
+                          : isSelected
+                            ? (isLight ? 'text-blue-950 font-bold' : 'text-white font-bold')
+                            : (isLight ? 'text-slate-800 group-hover:text-blue-600' : 'text-zinc-200 group-hover:text-white')
+                      } ${
+                        isCg ? 'border-b-2 border-dashed border-sky-400 drop-shadow-[0_0_6px_rgba(56,189,248,0.6)] pb-0.5' : ''
+                      }`}>
+                        {engine.translated}
+                      </p>
+                    )}
                   </div>
 
                   <div className={`flex items-center justify-between pt-2 mt-2 border-t text-[10px] transition ${
                     isLight ? 'border-slate-200/80' : 'border-zinc-800/80'
                   }`}>
-                    {isConfigRequired || isAuthError ? (
+                    {isGenerating ? (
+                      <span className="text-purple-600 dark:text-purple-400 text-[10px] font-medium flex items-center gap-1">
+                        <Sparkles className="h-3 w-3 animate-pulse" />
+                        <span>精翻完毕后将自动升级</span>
+                      </span>
+                    ) : isConfigRequired || isAuthError ? (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -3019,7 +3141,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     )}
 
                     <span className={`font-medium ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
-                      {isConfigRequired || isAuthError ? '前往设置' : isRetry || isQuotaError ? '点击重试' : '点击复制'}
+                      {isGenerating ? '请稍候' : isConfigRequired || isAuthError ? '前往设置' : isRetry || isQuotaError ? '点击重试' : '点击复制'}
                     </span>
                   </div>
                 </div>
