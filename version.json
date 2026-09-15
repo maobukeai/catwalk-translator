@@ -1,19 +1,19 @@
 {
-  "version": "0.3.12",
+  "version": "0.3.13",
   "name": "猫步翻译",
   "release_date": "2026-09-15",
   "download_url": "https://github.com/maobukeai/catwalk-translator/releases",
-  "release_notes": "1. 彻底修复 Google Gemini 原生 :generateContent 端点附带 Bearer 导致的 401 鉴权冲突；\n2. 优化 AI 对话与翻译多候选端点自动轮询容错，单个端点异常自动尝试下一可用通道；\n3. 新增模型名称 404 精准提示与引导，UI 智能状态感知。",
+  "release_notes": "1. 全面增强 AI 对话流式响应、网络重试与超时韧性；\n2. 优化贴图钉（PinWindow）内嵌 AI 对话视图与交互联动；\n3. 增强大模型配置多选与设置持久化同步逻辑；\n4. 完善 AI 对话面板单元测试套件。",
   "assets": [
     {
-      "name": "MaobuTranslator_0.3.12_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.12/MaobuTranslator_0.3.12_x64-setup.exe",
+      "name": "MaobuTranslator_0.3.13_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.13/MaobuTranslator_0.3.13_x64-setup.exe",
       "size": 9051246,
       "sha256": "6079b1f5ad2b92ee3279977fb613c766a7539ffbd69bd520620ef91c74c083d0"
     },
     {
-      "name": "猫步翻译_0.3.12_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.12/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.12_x64-setup.exe",
+      "name": "猫步翻译_0.3.13_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.13/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.13_x64-setup.exe",
       "size": 9051246,
       "sha256": "6079b1f5ad2b92ee3279977fb613c766a7539ffbd69bd520620ef91c74c083d0"
     }
