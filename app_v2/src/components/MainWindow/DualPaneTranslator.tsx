@@ -1004,7 +1004,9 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           text.includes('需配置') ||
           text.includes('API Key') ||
           text.includes('额度不足') ||
-          text.includes('鉴权失败')
+          text.includes('鉴权失败') ||
+          text.includes('未找到') ||
+          text.includes('404')
         );
       };
 
@@ -1149,7 +1151,11 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
               const aiEngine = aiRes.engines.find(
                 (e) =>
-                  (e.sourceTier === 'LLM API' || e.engineName.includes('深度翻译') || e.engineName.includes('AI')) &&
+                  (e.sourceTier === 'LLM API' ||
+                    e.sourceTier === 'LLM (Auth Error)' ||
+                    e.sourceTier === 'LLM (Quota Error)' ||
+                    e.engineName.includes('深度翻译') ||
+                    e.engineName.includes('AI')) &&
                   e.sourceTier !== 'LLM (Config Required)'
               );
 
@@ -2465,7 +2471,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
                 {(() => {
                   const isGenerating = currentEngine?.sourceTier === 'LLM (Generating)' || currentTranslationText.includes('精翻中');
-                  const isConfigReq = currentEngine?.sourceTier === 'LLM (Config Required)' || currentTranslationText.includes('未配置 API Key');
+                  const isConfigReq = currentEngine?.sourceTier === 'LLM (Config Required)' || currentTranslationText.includes('未配置 API Key') || currentTranslationText.includes('未找到') || currentTranslationText.includes('404');
                   const isAuthErr = currentEngine?.sourceTier === 'LLM (Auth Error)' || currentTranslationText.includes('API Key 无效');
                   const isQuotaErr = currentEngine?.sourceTier === 'LLM (Quota Error)' || currentTranslationText.includes('额度不足');
                   const isTimeout = currentEngine?.sourceTier === 'Online (Retry)' || currentTranslationText.includes('点击重试') || currentTranslationText.includes('网络连接超时');
@@ -2927,7 +2933,9 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 engine.sourceTier === 'DeepL (Config Required)' ||
                 engine.translated.includes('未配置 API Key') ||
                 engine.translated.includes('未配置百度') ||
-                engine.translated.includes('未配置 DeepL');
+                engine.translated.includes('未配置 DeepL') ||
+                engine.translated.includes('未找到') ||
+                engine.translated.includes('404');
               const isAuthError =
                 engine.sourceTier === 'LLM (Auth Error)' ||
                 engine.sourceTier === 'Baidu (Auth Error)' ||

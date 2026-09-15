@@ -391,19 +391,25 @@ fn finalize_chat_url(plan: &ChatEndpointPlan, target_url: &str) -> String {
 }
 
 /// 附加鉴权头
-fn apply_chat_auth(mut req: reqwest::RequestBuilder, plan: &ChatEndpointPlan) -> reqwest::RequestBuilder {
+fn apply_chat_auth(
+    mut req: reqwest::RequestBuilder,
+    plan: &ChatEndpointPlan,
+    is_native_gemini: bool,
+) -> reqwest::RequestBuilder {
     if !plan.api_key.is_empty() {
-        if plan.is_google_gemini {
+        if is_native_gemini {
+            // 原生 Gemini :generateContent / :streamGenerateContent 严禁附带 Bearer 头，否则会报 401 ACCESS_TOKEN_TYPE_UNSUPPORTED
             req = req
                 .header("x-goog-api-key", &plan.api_key)
                 .header("api-key", &plan.api_key);
-            if !plan.api_key.starts_with("AIza") {
-                req = req.header("Authorization", format!("Bearer {}", plan.api_key));
-            }
         } else {
+            // OpenAI 兼容端点（如 /chat/completions 或 Cloudflare AI Gateway）必须附带 Authorization: Bearer
             req = req
                 .header("Authorization", format!("Bearer {}", plan.api_key))
                 .header("api-key", &plan.api_key);
+            if plan.is_google_gemini {
+                req = req.header("x-goog-api-key", &plan.api_key);
+            }
         }
     }
     req
@@ -520,7 +526,7 @@ pub async fn cmd_chat_llm(
         let is_native_gemini_endpoint = final_url.contains(":generateContent");
         let body = build_chat_body(&plan, &messages, is_native_gemini_endpoint, false);
 
-        let req = apply_chat_auth(client.post(&final_url), &plan);
+        let req = apply_chat_auth(client.post(&final_url), &plan, is_native_gemini_endpoint);
 
         let res = match req.json(&body).send().await {
             Ok(r) => r,
@@ -612,7 +618,7 @@ pub async fn cmd_chat_llm_stream(
 
         let body = build_chat_body(&plan, &messages, is_native_gemini_endpoint, !is_native_gemini_endpoint);
 
-        let req = apply_chat_auth(client.post(&req_url), &plan);
+        let req = apply_chat_auth(client.post(&req_url), &plan, is_native_gemini_endpoint);
 
         let res = match req.json(&body).send().await {
             Ok(r) => r,

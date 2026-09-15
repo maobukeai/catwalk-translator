@@ -3162,17 +3162,25 @@ pub async fn translate_with_llm(
             }
         }
 
+        let is_native_gemini_endpoint = final_url.contains(":generateContent");
         let mut req = client.post(&final_url);
         if !api_key.is_empty() {
-            req = req
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("api-key", &api_key);
-            if is_google_gemini {
-                req = req.header("x-goog-api-key", &api_key);
+            if is_native_gemini_endpoint {
+                // 原生 Gemini :generateContent 严禁附带 OAuth2 Bearer 头，否则会被 Google 网关报 401 ACCESS_TOKEN_TYPE_UNSUPPORTED
+                req = req
+                    .header("x-goog-api-key", &api_key)
+                    .header("api-key", &api_key);
+            } else {
+                // OpenAI 兼容端点（如 /chat/completions 或 Cloudflare AI Gateway）必须附带 Authorization: Bearer
+                req = req
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .header("api-key", &api_key);
+                if is_google_gemini {
+                    req = req.header("x-goog-api-key", &api_key);
+                }
             }
         }
 
-        let is_native_gemini_endpoint = final_url.contains(":generateContent");
         let body = if is_native_gemini_endpoint {
             serde_json::json!({
                 "contents": [
@@ -3260,19 +3268,8 @@ pub async fn translate_with_llm(
                         }
                     }
                 }
-            } else if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-                return MultiEngineTranslation {
-                    engine_name,
-                    translated: "[API Key 无效或已过期 · 点击检查设置]".to_string(),
-                    source_tier: "LLM (Auth Error)".to_string(),
-                };
-            } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status == reqwest::StatusCode::PAYMENT_REQUIRED {
-                return MultiEngineTranslation {
-                    engine_name,
-                    translated: "[API 额度不足或被限流 · 请检查账户配额]".to_string(),
-                    source_tier: "LLM (Quota Error)".to_string(),
-                };
             }
+            // 单个候选端点未返回有效译文时不提前退出，继续尝试下一个候选端点
         }
     }
 
@@ -3287,6 +3284,12 @@ pub async fn translate_with_llm(
             engine_name,
             translated: "[API 额度不足或被限流 · 请检查账户配额]".to_string(),
             source_tier: "LLM (Quota Error)".to_string(),
+        }
+    } else if last_status_code == 404 {
+        MultiEngineTranslation {
+            engine_name,
+            translated: format!("[模型 {} 未找到 (404) · 请检查模型名称]", model_name),
+            source_tier: "LLM (Config Required)".to_string(),
         }
     } else {
         MultiEngineTranslation {
@@ -4498,6 +4501,61 @@ mod tests {
         assert_eq!(result.source_tier, "LLM (Config Required)");
         assert_eq!(result.translated, "[未配置 API Key · 点击前往设置]");
         assert_eq!(result.engine_name, "🤖 AI 深度翻译 (DeepSeek)");
+    }
+
+    #[tokio::test]
+    async fn test_translate_with_llm_gemini_no_bearer_and_fallback_resilience() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                let req_text = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+
+                if req_text.contains(":generatecontent") {
+                    // 验证原生 Gemini :generateContent 端点绝对不包含 Authorization: Bearer 头
+                    assert!(!req_text.contains("authorization: bearer"), "Gemini native endpoint must NOT send Bearer token!");
+                    assert!(req_text.contains("x-goog-api-key"), "Gemini native endpoint must send x-goog-api-key!");
+
+                    let body = r#"{"candidates":[{"content":{"parts":[{"text":"原理化 BSDF"}]}}]}"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                } else {
+                    let body = r#"{"choices":[{"message":{"content":"备份译文"}}]}"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                }
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        let client = create_http_client(3000);
+        let config = LlmConfig {
+            id: Some("gemini".to_string()),
+            provider: "Google Gemini".to_string(),
+            api_key: "AIzaMockTestKey123".to_string(),
+            model: "gemini-1.5-flash".to_string(),
+            endpoint: format!("http://{}/v1beta", addr),
+            enabled: Some(true),
+        };
+
+        let result = translate_with_llm(&client, "Principled BSDF", "zh-CN", &config, None, &[]).await;
+        assert_eq!(result.source_tier, "LLM API");
+        assert_eq!(result.translated, "原理化 BSDF");
+        assert!(result.engine_name.contains("Google Gemini"));
     }
 
     #[tokio::test]
