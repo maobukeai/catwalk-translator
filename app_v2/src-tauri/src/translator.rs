@@ -3020,6 +3020,46 @@ pub async fn translate_yandex(
     }
 }
 
+/// 判断指定配置是否应当按 Google Gemini / Gemma 原生格式与端点进行调度
+pub fn is_gemini_model_or_provider(provider: &str, model: &str, endpoint: &str) -> bool {
+    let p = provider.trim().to_lowercase();
+    let m = model.trim().to_lowercase();
+    let ep = endpoint.trim().to_lowercase();
+
+    // 1. 显式非 Google 品牌/厂商一律排除（无论代理 URL 包含什么关键字或 Key 是否为 AIza）
+    let is_non_google_brand = p.contains("deepseek")
+        || p.contains("openai")
+        || p.contains("anthropic")
+        || p.contains("claude")
+        || p.contains("qwen")
+        || p.contains("qianfan")
+        || p.contains("baidu")
+        || p.contains("kimi")
+        || p.contains("moonshot")
+        || p.contains("zhipu")
+        || p.contains("glm")
+        || p.contains("siliconflow")
+        || p.contains("ollama")
+        || p.contains("agnes")
+        || m.starts_with("deepseek")
+        || m.starts_with("gpt")
+        || m.starts_with("claude")
+        || m.starts_with("qwen")
+        || m.starts_with("glm")
+        || m.starts_with("agnes");
+
+    if is_non_google_brand {
+        return false;
+    }
+
+    // 2. 判定是否为 Gemini / Gemma 模型或 Google 官方端点
+    m.starts_with("gemini")
+        || m.starts_with("gemma")
+        || p.contains("gemini")
+        || p.contains("google")
+        || ep.contains("generativelanguage.googleapis.com")
+}
+
 /// ── AI 深度翻译 (精细化状态区分: 真实译文 / 未配置 Key / 鉴权失败 / 配额不足 / 连接超时) ──────
 pub async fn translate_with_llm(
     client: &Client,
@@ -3063,11 +3103,7 @@ pub async fn translate_with_llm(
         config.model.trim().to_string()
     };
 
-    let is_google_gemini = raw_ep.contains("google")
-        || raw_ep.contains("gemini")
-        || raw_ep.contains("googleapis.com")
-        || raw_ep.contains("google-ai-studio")
-        || api_key.starts_with("AIza");
+    let is_google_gemini = is_gemini_model_or_provider(&config.provider, &model_name, &raw_ep);
 
     let (base_path, query_str) = match raw_ep.find('?') {
         Some(pos) => (&raw_ep[..pos], Some(&raw_ep[pos + 1..])),
@@ -3077,10 +3113,10 @@ pub async fn translate_with_llm(
     let clean_base = base_path.trim_end_matches('/').to_string();
 
     let mut candidate_urls = Vec::new();
-    if raw_ep.contains(":generateContent") {
+    if raw_ep.contains(":generateContent") || raw_ep.contains("/chat/completions") {
         candidate_urls.push(raw_ep.clone());
-    } else if raw_ep.contains("/chat/completions") && !is_google_gemini {
-        candidate_urls.push(raw_ep.clone());
+    } else if clean_base.ends_with("/openai") || clean_base.ends_with("/v1") || clean_base.ends_with("/v2") || clean_base.ends_with("/v4") {
+        candidate_urls.push(format!("{}/chat/completions", clean_base));
     }
 
     if is_google_gemini {
@@ -3104,7 +3140,6 @@ pub async fn translate_with_llm(
         // 2. 兼顾 OpenAI 格式反向代理端点
         candidate_urls.push(format!("{}/v1beta/openai/chat/completions", root));
         candidate_urls.push(format!("{}/v1/chat/completions", root));
-        candidate_urls.push(format!("{}/chat/completions", root));
     } else {
         let mut b = clean_base.as_str();
         if let Some(stripped) = b.strip_suffix("/chat/completions") {
@@ -3115,7 +3150,7 @@ pub async fn translate_with_llm(
         }
         let b = b.trim_end_matches('/');
 
-        if b.ends_with("/v1") {
+        if b.ends_with("/v1") || b.ends_with("/openai") {
             candidate_urls.push(format!("{}/chat/completions", b));
             candidate_urls.push(b.to_string());
         } else {
@@ -3155,10 +3190,12 @@ pub async fn translate_with_llm(
         }
 
         if is_google_gemini && !api_key.is_empty() && !final_url.contains("key=") {
-            if final_url.contains('?') {
-                final_url = format!("{}&key={}", final_url, api_key);
-            } else {
-                final_url = format!("{}?key={}", final_url, api_key);
+            if final_url.contains("googleapis.com") || final_url.contains("google-ai-studio") || final_url.contains(":generateContent") {
+                if final_url.contains('?') {
+                    final_url = format!("{}&key={}", final_url, api_key);
+                } else {
+                    final_url = format!("{}?key={}", final_url, api_key);
+                }
             }
         }
 
@@ -3288,7 +3325,7 @@ pub async fn translate_with_llm(
     } else if last_status_code == 404 {
         MultiEngineTranslation {
             engine_name,
-            translated: format!("[模型 {} 未找到 (404) · 请检查模型名称]", model_name),
+            translated: format!("[模型 {} 未在当前接口中找到 (404) · 请检查模型配置]", model_name),
             source_tier: "LLM (Config Required)".to_string(),
         }
     } else {
@@ -4556,6 +4593,60 @@ mod tests {
         assert_eq!(result.source_tier, "LLM API");
         assert_eq!(result.translated, "原理化 BSDF");
         assert!(result.engine_name.contains("Google Gemini"));
+    }
+
+    #[tokio::test]
+    async fn test_translate_with_llm_non_gemini_proxy_no_hijack() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                let req_text = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+
+                // 核心断言：非 Google 模型（即使网关名包含 gemini-proxy 或 Key 为 AIza）绝对不得被强行调用 :generatecontent 端点
+                assert!(!req_text.contains(":generatecontent"), "Non-Gemini model must NOT call :generateContent endpoint!");
+                assert!(req_text.contains("authorization: bearer"), "OpenAI-compatible endpoint must include Bearer token!");
+                assert!(req_text.contains("/chat/completions"), "Must call standard /chat/completions endpoint!");
+
+                let body = r#"{"choices":[{"message":{"content":"次表面散射"}}]}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        let client = create_http_client(3000);
+        let config = LlmConfig {
+            id: Some("deepseek".to_string()),
+            provider: "DeepSeek".to_string(),
+            api_key: "AIzaMockProxyKey123".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            endpoint: format!("http://{}/v1/gemini-proxy/google-ai-studio/v1beta/openai", addr),
+            enabled: Some(true),
+        };
+
+        let result = translate_with_llm(&client, "Subsurface Scattering", "zh-CN", &config, None, &[]).await;
+        assert_eq!(result.source_tier, "LLM API");
+        assert_eq!(result.translated, "次表面散射");
+    }
+
+    #[test]
+    fn test_is_gemini_model_or_provider_brand_isolation() {
+        assert!(!is_gemini_model_or_provider("DeepSeek", "deepseek-v4-flash", "https://gateway.ai.cloudflare.com/gemini-proxy"));
+        assert!(!is_gemini_model_or_provider("Agnes", "agnes-2.5-flash", "https://gateway.ai.cloudflare.com/gemini-proxy/google-ai-studio"));
+        assert!(!is_gemini_model_or_provider("OpenAI", "gpt-4o", "https://gateway.ai.cloudflare.com/gemini-proxy"));
+        assert!(is_gemini_model_or_provider("Google Gemini", "gemini-3.5-flash-lite", "https://gateway.ai.cloudflare.com/gemini-proxy/google-ai-studio"));
+        assert!(is_gemini_model_or_provider("Custom", "gemini-2.5-flash", "https://generativelanguage.googleapis.com"));
     }
 
     #[tokio::test]

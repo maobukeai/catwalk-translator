@@ -85,6 +85,7 @@ function resolveActiveLlm(): LlmConfig | null {
     if (readyFromPool) return readyFromPool;
   }
   if (
+    settings.llmConfig?.enabled !== false &&
     settings.llmConfig?.endpoint &&
     (settings.llmConfig.apiKey?.trim() ||
       settings.llmConfig.endpoint.includes("localhost") ||

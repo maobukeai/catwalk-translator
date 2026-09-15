@@ -244,19 +244,54 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
   const { settings, setLlmConfig } = useSettingsStore();
   const { isLight } = useAppTheme();
 
-  const llm = settings.llmConfig || null;
+  const isModelEnabled = (cfg: LlmConfig | null | undefined): boolean =>
+    !!cfg && cfg.enabled !== false;
 
-  const isModelConfigured = (cfg: LlmConfig | null | undefined) =>
-    !!cfg && (!!cfg.apiKey?.trim() || cfg.endpoint?.includes('localhost') || cfg.endpoint?.includes('127.0.0.1'));
+  const isModelConfigured = (cfg: LlmConfig | null | undefined): boolean =>
+    !!cfg &&
+    cfg.enabled !== false &&
+    (!!cfg.apiKey?.trim() || cfg.endpoint?.includes('localhost') || cfg.endpoint?.includes('127.0.0.1'));
 
-  const configuredLlmConfigs = (settings.llmConfigs || []).filter(isModelConfigured);
+  const enabledLlmConfigs = React.useMemo(() => {
+    return (settings.llmConfigs || []).filter(isModelEnabled);
+  }, [settings.llmConfigs]);
 
-  // 所有可用大模型配置（若无可用配置池且当前有选定 llm 则使用 llm；若均无则为空数组）
+  const configuredLlmConfigs = React.useMemo(() => {
+    return enabledLlmConfigs.filter(isModelConfigured);
+  }, [enabledLlmConfigs]);
+
+  // 所有可用大模型配置（严格仅展示已启用的模型，未启动/停用的厂商与模型绝不出现于聊天界面）
   const allAvailableConfigs = React.useMemo(() => {
     if (configuredLlmConfigs.length > 0) return configuredLlmConfigs;
-    if (llm) return [llm];
+    if (enabledLlmConfigs.length > 0) return enabledLlmConfigs;
+    if (settings.llmConfig && isModelEnabled(settings.llmConfig)) return [settings.llmConfig];
     return [];
-  }, [configuredLlmConfigs, llm]);
+  }, [configuredLlmConfigs, enabledLlmConfigs, settings.llmConfig]);
+
+  // 当前有效激活的大模型：必须在可用配置列表中；若当前 settings.llmConfig 已停用或无效，平滑回退到可用列表首项
+  const llm = React.useMemo(() => {
+    if (allAvailableConfigs.length === 0) return null;
+    const cur = settings.llmConfig;
+    if (cur && isModelEnabled(cur)) {
+      const match = allAvailableConfigs.find(
+        (c) => (c.id && c.id === cur.id) || (c.model === cur.model && c.endpoint === cur.endpoint)
+      );
+      if (match) return match;
+    }
+    return allAvailableConfigs[0] || null;
+  }, [allAvailableConfigs, settings.llmConfig]);
+
+  // 当全局激活的 llmConfig 已被停用且存在其他可用模型时，自动平滑同步更新 store，避免残留已停用模型
+  useEffect(() => {
+    if (
+      llm &&
+      settings.llmConfig &&
+      (settings.llmConfig.enabled === false ||
+        (settings.llmConfig.id && settings.llmConfig.id !== llm.id && !allAvailableConfigs.some((c) => c.id === settings.llmConfig?.id)))
+    ) {
+      setLlmConfig(llm);
+    }
+  }, [llm, settings.llmConfig, allAvailableConfigs, setLlmConfig]);
 
   // 按真实 AI 厂商（Vendor）对大模型进行聚类分组（消除 Custom，按厂商分类）
   const vendorGroups = React.useMemo(() => {
@@ -784,6 +819,10 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
         friendly = `API 密钥身份验证失败 (401 Unauthorized)。请重新核对填写的 ${resolveVendor(llm)} API Key。`;
       } else if (rawErr.includes('429') || rawErr.includes('Rate limit')) {
         friendly = '请求过于频繁或 API 余额不足 (429 Rate Limit)。请稍后重试。';
+      } else if (rawErr.includes('404') || rawErr.includes('not found') || rawErr.includes('NOT_FOUND')) {
+        friendly = rawErr.includes('不存在') || rawErr.includes('未在')
+          ? rawErr
+          : `模型未找到或接口地址错误 (404 Not Found)。请检查模型名称是否在当前供应商可用，或核对 Base URL 接口地址。\n详情：${rawErr}`;
       } else if (!rawErr) {
         friendly = 'AI 接口请求失败，请检查网络设置与接口配置。';
       }

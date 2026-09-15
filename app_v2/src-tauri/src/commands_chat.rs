@@ -261,6 +261,8 @@ pub fn redact_secret(text: &str, secret: &str) -> String {
     }
 }
 
+use crate::translator::is_gemini_model_or_provider;
+
 fn plan_chat_endpoints(config: &LlmConfig) -> Result<ChatEndpointPlan, String> {
     let raw_ep = config.endpoint.trim().to_string();
     if raw_ep.is_empty() {
@@ -274,11 +276,7 @@ fn plan_chat_endpoints(config: &LlmConfig) -> Result<ChatEndpointPlan, String> {
         config.model.trim().to_string()
     };
 
-    let is_google_gemini = raw_ep.contains("google")
-        || raw_ep.contains("gemini")
-        || raw_ep.contains("googleapis.com")
-        || raw_ep.contains("google-ai-studio")
-        || api_key.starts_with("AIza");
+    let is_google_gemini = is_gemini_model_or_provider(&config.provider, &model_name, &raw_ep);
 
     // 1. Separate base path and query parameters
     let (base_path, query_str) = match raw_ep.find('?') {
@@ -291,30 +289,21 @@ fn plan_chat_endpoints(config: &LlmConfig) -> Result<ChatEndpointPlan, String> {
     // Candidate chat endpoints in priority order
     let mut candidate_urls = Vec::new();
 
+    // 1. 若用户填写的 URL 本身就已经包含具体端点路径（/chat/completions 或 :generateContent），最优先保留原样
     if raw_ep.contains("/chat/completions") || raw_ep.contains(":generateContent") {
         candidate_urls.push(raw_ep.clone());
+    } else if clean_base.ends_with("/openai") || clean_base.ends_with("/v1") || clean_base.ends_with("/v2") || clean_base.ends_with("/v4") {
+        // 用户显式配置了形如 .../v1beta/openai 或 .../v1 基础路径
+        candidate_urls.push(format!("{}/chat/completions", clean_base));
     }
 
     if is_google_gemini {
         // Strip suffixes to get base root hostname (e.g. https://generativelanguage.googleapis.com)
         let mut root = clean_base.as_str();
-        if let Some(stripped) = root.strip_suffix("/chat/completions") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/completions") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/openai") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/models") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/v1beta") {
-            root = stripped;
-        }
-        if let Some(stripped) = root.strip_suffix("/v1") {
-            root = stripped;
+        for s in ["/chat/completions", "/completions", "/openai", "/models", "/v1beta", "/v1"] {
+            if let Some(stripped) = root.strip_suffix(s) {
+                root = stripped;
+            }
         }
         let root = root.trim_end_matches('/');
 
@@ -330,7 +319,6 @@ fn plan_chat_endpoints(config: &LlmConfig) -> Result<ChatEndpointPlan, String> {
             root, model_name
         ));
         candidate_urls.push(format!("{}/v1/chat/completions", root));
-        candidate_urls.push(format!("{}/chat/completions", root));
     } else {
         let mut b = clean_base.as_str();
         if let Some(stripped) = b.strip_suffix("/chat/completions") {
@@ -341,7 +329,7 @@ fn plan_chat_endpoints(config: &LlmConfig) -> Result<ChatEndpointPlan, String> {
         }
         let b = b.trim_end_matches('/');
 
-        if b.ends_with("/v1") {
+        if b.ends_with("/v1") || b.ends_with("/openai") {
             candidate_urls.push(format!("{}/chat/completions", b));
             candidate_urls.push(b.to_string());
         } else {
@@ -367,7 +355,7 @@ fn plan_chat_endpoints(config: &LlmConfig) -> Result<ChatEndpointPlan, String> {
     })
 }
 
-/// 拼接最终 URL（查询串 + Gemini key 参数）
+/// 拼接最终 URL（查询串 + Google 专属 key 参数）
 fn finalize_chat_url(plan: &ChatEndpointPlan, target_url: &str) -> String {
     let mut final_url = target_url.to_string();
     if let Some(qs) = &plan.query_str {
@@ -381,10 +369,16 @@ fn finalize_chat_url(plan: &ChatEndpointPlan, target_url: &str) -> String {
     }
 
     if plan.is_google_gemini && !plan.api_key.is_empty() && !final_url.contains("key=") {
-        if final_url.contains('?') {
-            final_url = format!("{}&key={}", final_url, plan.api_key);
-        } else {
-            final_url = format!("{}?key={}", final_url, plan.api_key);
+        if final_url.contains("googleapis.com")
+            || final_url.contains("google-ai-studio")
+            || final_url.contains(":generateContent")
+            || final_url.contains(":streamGenerateContent")
+        {
+            if final_url.contains('?') {
+                final_url = format!("{}&key={}", final_url, plan.api_key);
+            } else {
+                final_url = format!("{}?key={}", final_url, plan.api_key);
+            }
         }
     }
     final_url
@@ -507,6 +501,60 @@ fn extract_chat_reply(json: &serde_json::Value) -> Option<String> {
     None
 }
 
+/// 统一解析并格式化 HTTP 错误，提取服务商上游返回的具体错误说明（如模型不存在、配额耗尽等）
+fn format_http_error(
+    status_code: u16,
+    err_body: &str,
+    req_url: &str,
+    model_name: &str,
+    api_key: &str,
+) -> (String, bool) {
+    let mut extracted_msg = String::new();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(err_body) {
+        if let Some(msg) = v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+            extracted_msg = msg.to_string();
+        } else if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
+            extracted_msg = msg.to_string();
+        } else if let Some(arr) = v.as_array() {
+            if let Some(msg) = arr.first().and_then(|item| item.get("error")).and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+                extracted_msg = msg.to_string();
+            }
+        }
+    }
+
+    let is_informative = !extracted_msg.is_empty();
+    let detail = if is_informative {
+        extracted_msg
+    } else {
+        truncate_utf8(err_body, 220).to_string()
+    };
+
+    let formatted = if status_code == 404 && (detail.to_lowercase().contains("not found") || detail.to_lowercase().contains("model")) {
+        format!(
+            "HTTP 404 错误: 模型 \"{}\" 在当前服务商接口中不存在或不受支持 ({}) (请求路径: {})",
+            model_name,
+            detail,
+            redact_secret(req_url, api_key)
+        )
+    } else if status_code == 401 || status_code == 403 {
+        format!(
+            "HTTP {} 鉴权错误: API Key 无效或未授权 ({}) (请求路径: {})",
+            status_code,
+            detail,
+            redact_secret(req_url, api_key)
+        )
+    } else {
+        format!(
+            "HTTP {} 错误: {} (请求路径: {})",
+            status_code,
+            detail,
+            redact_secret(req_url, api_key)
+        )
+    };
+
+    (formatted, is_informative)
+}
+
 /// Native Rust command for LLM chat bypassing WebView CORS restrictions
 /// Supports DeepSeek, OpenAI, Ollama, Gemini, GLM, and Custom Endpoints.
 #[tauri::command]
@@ -545,13 +593,16 @@ pub async fn cmd_chat_llm(
 
         if !status.is_success() {
             let err_body = res.text().await.unwrap_or_default();
-            let short_body = truncate_utf8(&err_body, 220);
-            last_err = format!(
-                "HTTP {} 错误: {} (路径: {})",
+            let (formatted_err, is_informative) = format_http_error(
                 status_code,
-                short_body,
-                redact_secret(&final_url, &plan.api_key)
+                &err_body,
+                &final_url,
+                &plan.model_name,
+                &plan.api_key,
             );
+            if last_err.is_empty() || is_informative {
+                last_err = formatted_err;
+            }
             continue;
         }
 
@@ -636,13 +687,16 @@ pub async fn cmd_chat_llm_stream(
         if !status.is_success() {
             let status_code = status.as_u16();
             let err_body = res.text().await.unwrap_or_default();
-            let short_body = truncate_utf8(&err_body, 220);
-            last_err = format!(
-                "HTTP {} 错误: {} (路径: {})",
+            let (formatted_err, is_informative) = format_http_error(
                 status_code,
-                short_body,
-                redact_secret(&req_url, &plan.api_key)
+                &err_body,
+                &req_url,
+                &plan.model_name,
+                &plan.api_key,
             );
+            if last_err.is_empty() || is_informative {
+                last_err = formatted_err;
+            }
             continue;
         }
 
@@ -805,3 +859,93 @@ pub async fn cmd_chat_llm_stream(
         last_err
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_plan_chat_endpoints_google_gemini() {
+        let config = LlmConfig {
+            id: Some("gemini".to_string()),
+            provider: "Google Gemini".to_string(),
+            api_key: "AIzaTestKey123".to_string(),
+            model: "gemini-3.5-flash-lite".to_string(),
+            endpoint: "https://gateway.ai.cloudflare.com/v1/user/gemini-proxy/google-ai-studio/v1beta/openai".to_string(),
+            enabled: Some(true),
+        };
+
+        let plan = plan_chat_endpoints(&config).unwrap();
+        assert!(plan.is_google_gemini);
+        assert_eq!(
+            plan.candidate_urls[0],
+            "https://gateway.ai.cloudflare.com/v1/user/gemini-proxy/google-ai-studio/v1beta/openai/chat/completions"
+        );
+        assert!(plan.candidate_urls.iter().any(|u| u.contains(":generateContent")));
+
+        let final_url = finalize_chat_url(&plan, &plan.candidate_urls[0]);
+        assert!(final_url.contains("key=AIzaTestKey123"));
+    }
+
+    #[test]
+    fn test_plan_chat_endpoints_deepseek_proxy_not_hijacked() {
+        let config = LlmConfig {
+            id: Some("deepseek".to_string()),
+            provider: "DeepSeek".to_string(),
+            api_key: "AIzaTestKey123".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            endpoint: "https://gateway.ai.cloudflare.com/v1/user/gemini-proxy/google-ai-studio/v1beta/openai".to_string(),
+            enabled: Some(true),
+        };
+
+        let plan = plan_chat_endpoints(&config).unwrap();
+        // 关键断言：非 Google 厂商（DeepSeek）绝对不得被识别为 is_google_gemini，即使网关名为 gemini-proxy 或 Key 为 AIza
+        assert!(!plan.is_google_gemini);
+        assert_eq!(
+            plan.candidate_urls[0],
+            "https://gateway.ai.cloudflare.com/v1/user/gemini-proxy/google-ai-studio/v1beta/openai/chat/completions"
+        );
+        assert!(!plan.candidate_urls.iter().any(|u| u.contains(":generateContent")));
+
+        // 绝不强行注入 ?key=
+        let final_url = finalize_chat_url(&plan, &plan.candidate_urls[0]);
+        assert!(!final_url.contains("key="));
+    }
+
+    #[test]
+    fn test_plan_chat_endpoints_agnes_proxy_not_hijacked() {
+        let config = LlmConfig {
+            id: Some("agnes".to_string()),
+            provider: "Agnes".to_string(),
+            api_key: "AIzaTestKey123".to_string(),
+            model: "agnes-2.5-flash".to_string(),
+            endpoint: "https://gateway.ai.cloudflare.com/v1/user/gemini-proxy/google-ai-studio/v1beta/openai".to_string(),
+            enabled: Some(true),
+        };
+
+        let plan = plan_chat_endpoints(&config).unwrap();
+        assert!(!plan.is_google_gemini);
+        assert_eq!(
+            plan.candidate_urls[0],
+            "https://gateway.ai.cloudflare.com/v1/user/gemini-proxy/google-ai-studio/v1beta/openai/chat/completions"
+        );
+        assert!(!plan.candidate_urls.iter().any(|u| u.contains(":generateContent")));
+    }
+
+    #[test]
+    fn test_format_http_error_model_not_found() {
+        let err_json = r#"{"error":{"code":404,"message":"models/agnes-2.5-flash is not found for API version v1main","status":"NOT_FOUND"}}"#;
+        let (formatted, is_informative) = format_http_error(
+            404,
+            err_json,
+            "https://gateway.ai.cloudflare.com/v1/test/openai/chat/completions",
+            "agnes-2.5-flash",
+            "mock-key",
+        );
+
+        assert!(is_informative);
+        assert!(formatted.contains("模型 \"agnes-2.5-flash\" 在当前服务商接口中不存在或不受支持"));
+        assert!(formatted.contains("models/agnes-2.5-flash is not found"));
+    }
+}
+

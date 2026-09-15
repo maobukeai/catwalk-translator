@@ -140,10 +140,14 @@ export function PinChatView({
   const curSettings = useSettingsStore((s) => s.settings);
   const setLlmConfig = useSettingsStore((s) => s.setLlmConfig);
 
+  const isModelEnabled = (cfg: LlmConfig | null | undefined) =>
+    !!cfg && cfg.enabled !== false;
+
   const isModelConfigured = (cfg: LlmConfig) =>
-    !!cfg.apiKey?.trim() ||
-    cfg.endpoint?.includes("localhost") ||
-    cfg.endpoint?.includes("127.0.0.1");
+    cfg.enabled !== false &&
+    (!!cfg.apiKey?.trim() ||
+      cfg.endpoint?.includes("localhost") ||
+      cfg.endpoint?.includes("127.0.0.1"));
 
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
 
@@ -154,19 +158,20 @@ export function PinChatView({
       ? [curSettings.llmConfig]
       : [];
 
-  const configuredPool = pool.filter(isModelConfigured);
+  const enabledPool = pool.filter(isModelEnabled);
+  const configuredPool = enabledPool.filter(isModelConfigured);
 
   // 用户手动选择 > 当前已配好的模型 > 模型池中首个已配好的可用模型 > null
   const rawActive = curSettings.llmConfig;
   const userSelected = selectedModelId
-    ? pool.find((c) => (c.id || `${c.provider}-${c.model}`) === selectedModelId)
+    ? enabledPool.find((c) => (c.id || `${c.provider}-${c.model}`) === selectedModelId)
     : null;
 
   const activeLlm: LlmConfig | null =
     userSelected ||
     (rawActive && isModelConfigured(rawActive)
       ? rawActive
-      : configuredPool[0] || rawActive || null);
+      : configuredPool[0] || (rawActive && isModelEnabled(rawActive) ? rawActive : null) || enabledPool[0] || null);
 
   const isCurrentConfigured = activeLlm ? isModelConfigured(activeLlm) : false;
 
@@ -424,11 +429,11 @@ export function PinChatView({
             }`}
             title={isCurrentConfigured ? "当前模型已配置有效 API Key" : "当前模型缺少 API Key"}
           />
-          {pool.length > 1 ? (
+          {enabledPool.length > 1 ? (
             <select
-              value={activeLlm.id || `${activeLlm.provider}-${activeLlm.model}`}
+              value={activeLlm ? (activeLlm.id || `${activeLlm.provider}-${activeLlm.model}`) : ""}
               onChange={(e) => {
-                const target = pool.find(
+                const target = enabledPool.find(
                   (c) => (c.id || `${c.provider}-${c.model}`) === e.target.value
                 );
                 if (target) {
@@ -444,7 +449,7 @@ export function PinChatView({
               title="切换当前使用的大模型"
               data-testid="pin-chat-model-select"
             >
-              {pool.map((cfg) => {
+              {enabledPool.map((cfg) => {
                 const val = cfg.id || `${cfg.provider}-${cfg.model}`;
                 const hasKey = isModelConfigured(cfg);
                 return (

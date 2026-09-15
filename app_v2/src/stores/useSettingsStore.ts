@@ -426,9 +426,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   setAiProviders: (providers: AiProviderConfig[]) => {
     const { settings, initialSettings } = get();
     const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(providers);
+    const enabledConfigs = synchronizedLlmConfigs.filter((c) => c.enabled !== false);
     let newActive = settings.llmConfig;
-    if (newActive && !synchronizedLlmConfigs.some(c => c.id === newActive?.id || (c.provider === newActive?.provider && c.model === newActive?.model))) {
-      newActive = synchronizedLlmConfigs[0] || null;
+    if (newActive) {
+      const match = synchronizedLlmConfigs.find(
+        (c) => c.id === newActive?.id || (c.provider === newActive?.provider && c.model === newActive?.model)
+      );
+      if (match && match.enabled !== false) {
+        newActive = match;
+      } else {
+        newActive = enabledConfigs[0] || match || synchronizedLlmConfigs[0] || null;
+      }
+    } else if (synchronizedLlmConfigs.length > 0) {
+      newActive = enabledConfigs[0] || synchronizedLlmConfigs[0] || null;
     }
     const updated: AppSettings = {
       ...settings,
@@ -455,16 +465,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     });
 
     const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    const enabledConfigs = synchronizedLlmConfigs.filter((c) => c.enabled !== false);
     let newActive = settings.llmConfig;
     if (newActive) {
       const match = synchronizedLlmConfigs.find(
         (c) => c.id === newActive?.id || (c.provider === newActive?.provider && c.model === newActive?.model)
       );
-      if (match) {
+      if (match && match.enabled !== false) {
         newActive = match;
+      } else {
+        newActive = enabledConfigs[0] || match || synchronizedLlmConfigs[0] || null;
       }
     } else if (synchronizedLlmConfigs.length > 0) {
-      newActive = synchronizedLlmConfigs[0];
+      newActive = enabledConfigs[0] || synchronizedLlmConfigs[0];
     }
 
     const updated: AppSettings = {
@@ -518,11 +531,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     const updatedProviders = providers.filter((p) => p.id !== providerId);
     const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    const enabledConfigs = synchronizedLlmConfigs.filter((c) => c.enabled !== false);
     let newActive = settings.llmConfig;
     if (updatedProviders.length === 0) {
       newActive = null;
     } else if (newActive && newActive.id && (newActive.id === providerId || newActive.id.startsWith(providerId))) {
-      newActive = synchronizedLlmConfigs[0] || null;
+      newActive = enabledConfigs[0] || synchronizedLlmConfigs[0] || null;
     }
     const updated: AppSettings = {
       ...settings,
@@ -591,9 +605,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     });
 
     const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    const enabledConfigs = synchronizedLlmConfigs.filter((c) => c.enabled !== false);
     let newActive = settings.llmConfig;
     if (newActive && (newActive.model === modelId || (newActive.id && newActive.id.includes(modelId)))) {
-      newActive = synchronizedLlmConfigs[0] || null;
+      newActive = enabledConfigs[0] || synchronizedLlmConfigs[0] || null;
     }
 
     const updated: AppSettings = {
@@ -629,10 +644,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     });
 
     const synchronizedLlmConfigs = flattenAiProvidersToLlmConfigs(updatedProviders);
+    const enabledConfigs = synchronizedLlmConfigs.filter((c) => c.enabled !== false);
+    let newActive = settings.llmConfig;
+    if (newActive) {
+      const match = synchronizedLlmConfigs.find(
+        (c) => c.id === newActive?.id || (c.provider === newActive?.provider && c.model === newActive?.model)
+      );
+      if (match && match.enabled !== false) {
+        newActive = match;
+      } else {
+        newActive = enabledConfigs[0] || match || synchronizedLlmConfigs[0] || null;
+      }
+    } else if (synchronizedLlmConfigs.length > 0) {
+      newActive = enabledConfigs[0] || synchronizedLlmConfigs[0] || null;
+    }
+
     const updated: AppSettings = {
       ...settings,
       aiProviders: updatedProviders,
       llmConfigs: synchronizedLlmConfigs,
+      llmConfig: newActive,
     };
     set({
       settings: updated,

@@ -319,4 +319,146 @@ describe('AiChatPanel Component and Interaction Test Suite', () => {
       expect(screen.getAllByText(/AI 翻译 → 日语/).length).toBeGreaterThan(0);
     });
   });
+
+  it('strictly filters out disabled providers and models so they never appear in chat page', async () => {
+    const customSettings: AppSettings = {
+      ...useSettingsStore.getState().settings,
+      llmConfigs: [
+        {
+          id: 'ds-chat',
+          provider: 'DeepSeek',
+          model: 'deepseek-chat',
+          apiKey: 'sk-deepseek',
+          endpoint: 'https://api.deepseek.com/v1',
+          enabled: true,
+        },
+        {
+          id: 'ds-coder',
+          provider: 'DeepSeek',
+          model: 'deepseek-coder',
+          apiKey: 'sk-deepseek',
+          endpoint: 'https://api.deepseek.com/v1',
+          enabled: false, // 明确停用的单个模型
+        },
+        {
+          id: 'qwen-turbo',
+          provider: '通义千问',
+          model: 'qwen-turbo',
+          apiKey: 'sk-qwen',
+          endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+          enabled: false, // 停用的供应商模型
+        },
+      ],
+      llmConfig: {
+        id: 'ds-chat',
+        provider: 'DeepSeek',
+        model: 'deepseek-chat',
+        apiKey: 'sk-deepseek',
+        endpoint: 'https://api.deepseek.com/v1',
+        enabled: true,
+      },
+    };
+
+    act(() => {
+      useSettingsStore.setState({ settings: customSettings });
+    });
+
+    render(<AiChatPanel onOpenSettings={() => {}} />);
+
+    // Active vendor and model should be DeepSeek
+    expect(screen.getAllByText('DeepSeek').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('deepseek-chat').length).toBeGreaterThan(0);
+
+    // Disabled provider '通义千问' must NOT appear anywhere in the active header
+    expect(screen.queryByText('通义千问')).not.toBeInTheDocument();
+
+    // Click trigger to open dropdown
+    const trigger = screen.getByTestId('cascading-trigger');
+    fireEvent.click(trigger);
+
+    // In the vendor dropdown, 通义千问 must NOT be present
+    expect(screen.queryByTestId('vendor-item-通义千问')).not.toBeInTheDocument();
+    // deepseek-coder must NOT be present
+    expect(screen.queryByText('deepseek-coder')).not.toBeInTheDocument();
+  });
+
+  it('automatically falls back to first enabled model when active llmConfig is disabled', async () => {
+    const customSettings: AppSettings = {
+      ...useSettingsStore.getState().settings,
+      llmConfigs: [
+        {
+          id: 'qwen-turbo',
+          provider: '通义千问',
+          model: 'qwen-turbo',
+          apiKey: 'sk-qwen',
+          endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+          enabled: false, // 停用
+        },
+        {
+          id: 'ds-chat',
+          provider: 'DeepSeek',
+          model: 'deepseek-chat',
+          apiKey: 'sk-deepseek',
+          endpoint: 'https://api.deepseek.com/v1',
+          enabled: true, // 启用
+        },
+      ],
+      // 当前选中的模型正好是被停用的通义千问
+      llmConfig: {
+        id: 'qwen-turbo',
+        provider: '通义千问',
+        model: 'qwen-turbo',
+        apiKey: 'sk-qwen',
+        endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        enabled: false,
+      },
+    };
+
+    act(() => {
+      useSettingsStore.setState({ settings: customSettings });
+    });
+
+    render(<AiChatPanel onOpenSettings={() => {}} />);
+
+    // Should automatically fall back to DeepSeek
+    expect(screen.getAllByText('DeepSeek').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('deepseek-chat').length).toBeGreaterThan(0);
+    // 通义千问 must NOT appear in header
+    expect(screen.queryByText('通义千问')).not.toBeInTheDocument();
+  });
+
+  it('displays clean zero-model state when all configured models are disabled', async () => {
+    const customSettings: AppSettings = {
+      ...useSettingsStore.getState().settings,
+      llmConfigs: [
+        {
+          id: 'qwen-turbo',
+          provider: '通义千问',
+          model: 'qwen-turbo',
+          apiKey: 'sk-qwen',
+          endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+          enabled: false,
+        },
+      ],
+      llmConfig: {
+        id: 'qwen-turbo',
+        provider: '通义千问',
+        model: 'qwen-turbo',
+        apiKey: 'sk-qwen',
+        endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        enabled: false,
+      },
+    };
+
+    act(() => {
+      useSettingsStore.setState({ settings: customSettings });
+    });
+
+    render(<AiChatPanel onOpenSettings={() => {}} />);
+
+    // Should show zero-model unconfigured badge & empty state
+    expect(screen.getByText('未配置 AI 模型')).toBeInTheDocument();
+    expect(screen.getByText('暂未配置 AI 大语言模型')).toBeInTheDocument();
+    expect(screen.queryByText('通义千问')).not.toBeInTheDocument();
+  });
 });
