@@ -163,6 +163,15 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
       expect(resolved[1].logicalX).toBe(74);
       expect(resolved[2].logicalX).toBe(138);
     });
+
+    it('applies overflow compression to the real logical width used by the card', () => {
+      const a = { ...createMockBlock('a', 10, 20, 80, 24), aabbW: 180 };
+      const b = { ...createMockBlock('b', 100, 20, 80, 24), aabbW: 180 };
+      const resolved = resolveAABBCollisions([a, b], 260, 200, 4);
+      expect(resolved[0].logicalW).toBeLessThan(180);
+      expect(resolved[1].logicalW).toBeLessThan(180);
+      expect(resolved[1].logicalX + (resolved[1].aabbW ?? 0)).toBeLessThanOrEqual(260);
+    });
   });
 
   describe('Overlay card styling helpers: toSolidBg, toTranslucentBg & isLightBg', () => {

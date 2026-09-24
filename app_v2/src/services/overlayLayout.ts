@@ -62,7 +62,11 @@ export function resolveAABBCollisions<T extends OverlayBlock>(
       const hj = getH(resolved[j]);
       const isSameBaseline = Math.abs(resolved[i].logicalY - resolved[j].logicalY) <= 4 && Math.abs(hi - hj) <= 8;
       const isSideBySide = Math.abs(resolved[i].logicalX - resolved[j].logicalX) >= Math.min(getW(resolved[i]), getW(resolved[j])) * 0.4;
-      if (isSameBaseline && isSideBySide) {
+      const left = resolved[i].logicalX <= resolved[j].logicalX ? resolved[i] : resolved[j];
+      const right = left === resolved[i] ? resolved[j] : resolved[i];
+      const horizontalGap = right.logicalX - (left.logicalX + getW(left));
+      const isNearby = horizontalGap <= Math.max(getW(resolved[i]), getW(resolved[j])) * 1.5 + 32;
+      if (isSameBaseline && isSideBySide && isNearby) {
         group.push(j);
         visited.add(j);
       }
@@ -101,6 +105,11 @@ export function resolveAABBCollisions<T extends OverlayBlock>(
         const origW = getW(resolved[idx]);
         const newW = Math.round(origW * scale);
         resolved[idx].logicalX = Math.round(curX);
+        // This is a real layout constraint, not merely a smaller collision
+        // claim. OverlayBlockCard derives its font-fit width from logicalW.
+        // Updating only aabbW made the algorithm believe cards had shrunk while
+        // the DOM kept rendering at the original width and still overlapped.
+        resolved[idx].logicalW = newW;
         resolved[idx].aabbW = newW;
         curX += newW + margin;
       }
@@ -165,6 +174,10 @@ export function resolveAABBCollisions<T extends OverlayBlock>(
   // the top rows may exceed upward — unavoidable without shrinking text.
   for (let i = 0; i < n; i++) {
     resolved[i].logicalY = Math.round(Math.max(0, resolved[i].logicalY));
+    const width = getW(resolved[i]);
+    resolved[i].logicalX = Math.round(
+      Math.max(0, Math.min(resolved[i].logicalX, Math.max(0, containerWidth - width)))
+    );
   }
 
   return resolved;

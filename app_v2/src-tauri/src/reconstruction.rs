@@ -38,11 +38,12 @@ impl LineClusterer {
     ///   ≥250px gutter, and without a cap a tall heading vertically spanning a
     ///   right-column row chained the whole foreign column into one line.
     ///
-    /// 2.0× tolerates the wider breaks DBNet leaves in faint low-contrast text
-    /// (a whole word can vanish between two fragment boxes) while buttons and
-    /// stat labels (gaps ≥3× line height) still stay independent.
-    fn max_line_gap(h_ref: f32) -> f32 {
-        (h_ref * 2.0).clamp(24.0, 200.0)
+    /// Use the caller threshold as a floor, with a modest height-aware allowance.
+    fn max_line_gap(h_ref: f32, threshold: f32) -> f32 {
+        // Keep the caller's threshold meaningful and scale only modestly with
+        // glyph height. The old 24px floor joined separate short UI labels and
+        // CJK buttons into one sentence.
+        threshold.max(h_ref * 0.80).clamp(6.0, 18.0)
     }
 
     /// Pixel gap between two boxes (0 when they already overlap horizontally).
@@ -71,7 +72,7 @@ impl LineClusterer {
         (overlap > 0 && (overlap as f32 / min_h) >= 0.40) || center_diff <= min_h * 0.6
     }
 
-    pub fn cluster_into_lines(mut blocks: Vec<TextBlock>, _threshold: f32) -> Vec<Vec<TextBlock>> {
+    pub fn cluster_into_lines(mut blocks: Vec<TextBlock>, threshold: f32) -> Vec<Vec<TextBlock>> {
         if blocks.is_empty() {
             return Vec::new();
         }
@@ -101,6 +102,7 @@ impl LineClusterer {
                         && Self::horizontal_gap(&m.box_rect, &block.box_rect)
                             <= Self::max_line_gap(
                                 m.box_rect.height.min(block.box_rect.height) as f32,
+                                threshold,
                             )
                 });
                 if matched {
@@ -222,7 +224,20 @@ impl WordMerger {
                     let last = last_cluster.last().unwrap();
                     let last_right = last.box_rect.x + last.box_rect.width as i32;
                     let gap = b.box_rect.x - last_right;
-                    let max_gap = gap_threshold.min(median_h * 1.5).max(12.0);
+                    // A normal inter-word gutter is a fraction of text height.
+                    // The old hard 12px floor merged visually separate CJK/UI
+                    // labels, especially at 100% DPI.
+                    let last_cjk = last.text.chars().filter(|c| is_cjk_or_fullwidth(*c)).count();
+                    let next_cjk = b.text.chars().filter(|c| is_cjk_or_fullwidth(*c)).count();
+                    // Multi-character CJK chunks separated by visible space are
+                    // overwhelmingly likely to be neighbouring UI labels rather
+                    // than fragments of one word. Single CJK glyph fragments
+                    // still use the normal recovery threshold.
+                    let max_gap = if last_cjk >= 2 && next_cjk >= 2 {
+                        (median_h * 0.20).clamp(2.0, 4.0)
+                    } else {
+                        gap_threshold.min(median_h * 0.55).max(4.0)
+                    };
                     (gap as f32) <= max_gap
                 } else {
                     false
@@ -420,6 +435,64 @@ mod tests {
         let lines = LineClusterer::cluster_into_lines(blocks, 8.0);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].len(), 2);
+    }
+
+    #[test]
+    fn test_short_equal_height_ui_labels_do_not_merge_across_gutter() {
+        // Two independent two-character CJK controls on the same row. The old
+        // 24px floor clustered and then concatenated them with no delimiter.
+        let blocks = vec![
+            TextBlock {
+                text: "开始".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 10, y: 20, width: 36, height: 20 },
+            },
+            TextBlock {
+                text: "退出".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 64, y: 20, width: 36, height: 20 },
+            },
+        ];
+        let lines = LineClusterer::cluster_into_lines(blocks, 8.0);
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn test_word_merger_splits_small_ui_gutter() {
+        let row = vec![
+            TextBlock {
+                text: "开始".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 10, y: 20, width: 36, height: 20 },
+            },
+            TextBlock {
+                text: "退出".into(),
+                confidence: 0.95,
+                box_rect: BoundingBox { x: 60, y: 20, width: 36, height: 20 },
+            },
+        ];
+        let segments = WordMerger::merge_line_segments(row, 20.0);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].text, "开始");
+        assert_eq!(segments[1].text, "退出");
+    }
+
+    #[test]
+    fn test_word_merger_keeps_compact_multichar_cjk_buttons_separate() {
+        let row = vec![
+            TextBlock {
+                text: "文件".into(),
+                confidence: 0.98,
+                box_rect: BoundingBox { x: 4, y: 10, width: 18, height: 17 },
+            },
+            TextBlock {
+                text: "编辑".into(),
+                confidence: 0.98,
+                box_rect: BoundingBox { x: 29, y: 10, width: 18, height: 17 },
+            },
+        ];
+        let segments = WordMerger::merge_line_segments(row, 20.0);
+        assert_eq!(segments.len(), 2);
     }
 
     #[test]

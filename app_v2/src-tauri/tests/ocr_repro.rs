@@ -53,19 +53,24 @@ fn dump_stage(label: &str, blocks: &mut Vec<TextBlock>) {
 }
 
 fn dump_merged(label: &str, mut blocks: Vec<TextBlock>) {
-    blocks.retain(|b| b.confidence >= 0.35 && b.box_rect.height >= 6);
+    blocks.retain(|b| {
+        let len = b.text.chars().filter(|c| !c.is_whitespace()).count();
+        let min_conf = if len <= 1 { 0.75 } else if len == 2 { 0.65 } else { 0.35 };
+        b.confidence >= min_conf && b.box_rect.height >= 6
+    });
     let lines = LineClusterer::cluster_into_lines(blocks, 8.0);
     println!("════ {label} → merged lines ════");
     for line in &lines {
-        let merged = WordMerger::merge_line(line.clone(), 20.0);
-        println!(
-            "  box=({},{}) {}x{} text={:?}",
-            merged.box_rect.x,
-            merged.box_rect.y,
-            merged.box_rect.width,
-            merged.box_rect.height,
-            merged.text
-        );
+        for merged in WordMerger::merge_line_segments(line.clone(), 20.0) {
+            println!(
+                "  box=({},{}) {}x{} text={:?}",
+                merged.box_rect.x,
+                merged.box_rect.y,
+                merged.box_rect.width,
+                merged.box_rect.height,
+                merged.text
+            );
+        }
     }
     println!();
 }

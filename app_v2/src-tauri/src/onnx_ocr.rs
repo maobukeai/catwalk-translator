@@ -17,7 +17,10 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 pub const DET_LIMIT_SIDE_LEN: f32 = 736.0;
 /// det 输入最长边硬上限：全屏/大选区按比例等比缩小到 960 内推理，控制 DBNet 计算量。
 /// 960 为 PaddleOCR 官方速度与精度黄金分割点，避免大图面积膨胀。
-pub const DET_MAX_SIDE_LEN: f32 = 960.0;
+// 960px is fast, but it destroys small UI glyphs in 2K/4K selections before
+// recognition ever sees them.  1600 keeps a 12px 4K glyph at roughly 5px in
+// the detector while remaining bounded enough for interactive capture.
+pub const DET_MAX_SIDE_LEN: f32 = 1600.0;
 pub const DET_THRESH: f32 = 0.25;
 pub const DET_BOX_THRESH: f32 = 0.5;
 /// unclip 1.6（PP-OCR 参考值）。不要再往上调：2.0 会把 26px 文本框纵向膨胀到
@@ -34,7 +37,11 @@ pub const DET_UNCLIP_RATIO: f32 = 1.6;
 /// `x1xai/grok46deel`、`wan vdvieratomdel` 这类叠字乱码。v6 系列（Small 与
 /// Tiny 共用同一代 det）需要更小的外扩才能把相邻行分开。
 pub fn active_unclip_ratio() -> f32 {
-    if get_active_version().to_ascii_lowercase().starts_with("v6") {
+    unclip_ratio_for_version(&get_active_version())
+}
+
+fn unclip_ratio_for_version(version: &str) -> f32 {
+    if version.to_ascii_lowercase().starts_with("v6") {
         1.0
     } else {
         DET_UNCLIP_RATIO
@@ -210,6 +217,26 @@ pub fn model_files_present_for_version(ver: &str) -> bool {
     resolve_models_dir_for_version(ver).is_some()
 }
 
+/// Resolve the version that can actually be loaded.  Never let UI/settings say
+/// one model while inference silently uses another one.
+pub fn best_available_version(preferred: &str) -> Option<String> {
+    let normalized = match preferred.to_ascii_lowercase().as_str() {
+        "v3" | "ppocrv3" | "pp-ocrv3" => "v3",
+        "v4" | "ppocrv4" | "pp-ocrv4" => "v4",
+        "v5" | "ppocrv5" | "pp-ocrv5" => "v5",
+        "v6" | "ppocrv6" | "pp-ocrv6" => "v6",
+        "v6t" | "ppocrv6t" | "pp-ocrv6-tiny" => "v6t",
+        _ => "v6t",
+    };
+    if model_files_present_for_version(normalized) {
+        return Some(normalized.to_string());
+    }
+    ["v6t", "v6", "v5", "v4", "v3"]
+        .into_iter()
+        .find(|v| model_files_present_for_version(v))
+        .map(str::to_string)
+}
+
 /// Execution provider actually backing the ONNX session set.
 ///
 /// 注册的 EP 不保证真正执行:DirectML 可能因驱动/虚拟机(WARP)静默退化,
@@ -255,6 +282,9 @@ struct Sessions {
     /// 输入张量复用缓冲:det/cls/rec 三个阶段在互斥锁内串行执行,
     /// 各自用完即释放,共享一块「下一个阶段取容量优先」的复用区即可。
     scratch: Vec<f32>,
+    /// Model generation actually loaded (may differ from an unavailable saved
+    /// preference during startup recovery).
+    version: String,
 }
 
 /// 供 `ocr::runtime_status` 渲染成一句可读文案的加速方式描述。
@@ -512,6 +542,7 @@ impl OnnxOcrEngine {
                 chars,
                 ep: if dml && dml_ok { Accelerator::DirectML } else { Accelerator::Cpu },
                 scratch: Vec::new(),
+                version: actual_ver.clone(),
             })
         };
 
@@ -678,9 +709,12 @@ impl OnnxOcrEngine {
         let det_ms = t_det.elapsed().as_secs_f64() * 1000.0;
 
         // Fallback: if DBNet did not detect boxes on tiny/single-line crop, feed entire image to REC
-        if boxes.is_empty() {
+        if boxes.is_empty() && img_h <= 96 && img_w <= img_h.saturating_mul(40) {
+            // Whole-crop REC is only valid for a genuinely tiny/single-line
+            // selection. Feeding an empty 4K/paragraph crop to REC compresses
+            // the entire scene to 48px high and produces convincing garbage.
             boxes.push((0u32, 0u32, img_w, img_h));
-        } else {
+        } else if !boxes.is_empty() {
             boxes = sort_boxes_reading_order(boxes);
             // 丢弃映射回源图后高度不足的噪声条框：det 在纹理/渐变上的误检进入
             // rec 只会产出乱码并白白消耗一次推理。正常文本物理高度不会 <6px。
@@ -814,6 +848,12 @@ impl OnnxOcrEngine {
             });
         }
 
+        // A dense toolbar is refined only after its first recognition. This is
+        // important: a window title such as "Blender 5.2.1 LTS" is also wide
+        // and shallow, but must remain intact; a dense CJK menu string such as
+        // "文件编辑渲染窗口帮助" should be re-cut at real visual gutters.
+        blocks = refine_dense_toolbar_blocks(sessions, &bgr, img_w, img_h, blocks)?;
+
         if timing {
             let rec_ms = t_rec.elapsed().as_secs_f64() * 1000.0;
             eprintln!(
@@ -879,6 +919,164 @@ fn crop_bgr(bgr: &[u8], w: usize, h: usize, x: u32, y: u32, bw: u32, bh: u32) ->
         out.extend_from_slice(&bgr[start..start + (x1 - x0) * 3]);
     }
     out
+}
+
+/// Split a very wide, single-line detector box at sustained columns that contain
+/// no glyph ink. This targets compact desktop toolbars where DBNet connects
+/// several adjacent buttons into one polygon. Per-column medians make the test
+/// work on light, dark, gradient and individually shaded button backgrounds.
+fn split_wide_box_at_ink_valleys(
+    bgr: &[u8],
+    img_w: u32,
+    img_h: u32,
+    rect: (u32, u32, u32, u32),
+) -> Vec<(u32, u32, u32, u32)> {
+    let (bx, by, bw, bh) = rect;
+    if bh < 8 || bw < bh.saturating_mul(6) || bx >= img_w || by >= img_h {
+        return vec![rect];
+    }
+    let x1 = (bx + bw).min(img_w);
+    let y1 = (by + bh).min(img_h);
+    let cw = (x1 - bx) as usize;
+    let ch = (y1 - by) as usize;
+    if cw == 0 || ch == 0 || bgr.len() < img_w as usize * img_h as usize * 3 {
+        return vec![rect];
+    }
+
+    let min_ink_pixels = (ch / 5).max(3);
+    let mut active = vec![false; cw];
+    let mut column = Vec::with_capacity(ch);
+    for (local_x, is_active) in active.iter_mut().enumerate() {
+        column.clear();
+        for y in by as usize..y1 as usize {
+            let i = (y * img_w as usize + bx as usize + local_x) * 3;
+            let b = bgr[i] as u16;
+            let g = bgr[i + 1] as u16;
+            let r = bgr[i + 2] as u16;
+            column.push(((29 * b + 150 * g + 77 * r) >> 8) as u8);
+        }
+        column.sort_unstable();
+        let median = column[column.len() / 2];
+        let contrast_pixels = column
+            .iter()
+            .filter(|&&v| v.abs_diff(median) >= 24)
+            .count();
+        *is_active = contrast_pixels >= min_ink_pixels;
+    }
+
+    let Some(content_start) = active.iter().position(|v| *v) else {
+        return vec![rect];
+    };
+    let content_end = active.iter().rposition(|v| *v).unwrap_or(content_start);
+    let min_valley = ((bh as f32 * 0.35).ceil() as usize).clamp(6, 12);
+    let mut valleys = Vec::new();
+    let mut cursor = content_start;
+    while cursor <= content_end {
+        if active[cursor] {
+            cursor += 1;
+            continue;
+        }
+        let start = cursor;
+        while cursor <= content_end && !active[cursor] {
+            cursor += 1;
+        }
+        if cursor - start >= min_valley {
+            valleys.push((start, cursor)); // end is exclusive
+        }
+    }
+    if valleys.is_empty() {
+        return vec![rect];
+    }
+
+    let mut segments = Vec::with_capacity(valleys.len() + 1);
+    let mut start = content_start;
+    for (gap_start, gap_end) in valleys {
+        if gap_start > start {
+            let width = gap_start - start;
+            if width >= 1 {
+                segments.push((bx + start as u32, by, width as u32, y1 - by));
+            }
+        }
+        start = gap_end;
+    }
+    if content_end + 1 > start {
+        let width = content_end + 1 - start;
+        if width >= 1 {
+            segments.push((bx + start as u32, by, width as u32, y1 - by));
+        }
+    }
+
+    if segments.len() >= 2 { segments } else { vec![rect] }
+}
+
+fn should_refine_dense_toolbar(block: &TextBlock) -> bool {
+    let text = block.text.trim();
+    let cjk_count = text
+        .chars()
+        .filter(|c| matches!(*c as u32, 0x3400..=0x9fff | 0xf900..=0xfaff))
+        .count();
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let short_word_row = words.len() >= 3
+        && words.iter().all(|w| w.chars().count() <= 12)
+        && !text.chars().any(|c| c.is_ascii_digit() || "()（）.-".contains(c));
+    block.box_rect.width >= block.box_rect.height.saturating_mul(6)
+        && (cjk_count >= 4 || short_word_row)
+}
+
+fn refine_dense_toolbar_blocks(
+    sessions: &mut Sessions,
+    bgr: &[u8],
+    img_w: u32,
+    img_h: u32,
+    blocks: Vec<TextBlock>,
+) -> Result<Vec<TextBlock>, String> {
+    let mut refined = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        if !should_refine_dense_toolbar(&block) {
+            refined.push(block);
+            continue;
+        }
+        let rect = (
+            block.box_rect.x.max(0) as u32,
+            block.box_rect.y.max(0) as u32,
+            block.box_rect.width,
+            block.box_rect.height,
+        );
+        let pieces = split_wide_box_at_ink_valleys(bgr, img_w, img_h, rect);
+        if pieces.len() < 2 {
+            refined.push(block);
+            continue;
+        }
+
+        let mut piece_blocks = Vec::with_capacity(pieces.len());
+        for (x, y, w, h) in pieces {
+            let crop = crop_bgr(bgr, img_w as usize, img_h as usize, x, y, w, h);
+            let prepared = rec_preprocess(&crop, w, h);
+            let recognized = recognize_prepared_batch(
+                sessions,
+                std::slice::from_ref(&prepared),
+            )?
+            .into_iter()
+            .next();
+            let Some((text, confidence)) = recognized else {
+                continue;
+            };
+            let text = crate::ocr::clean_ocr_text(&text);
+            if !text.is_empty() {
+                piece_blocks.push(TextBlock {
+                    text,
+                    confidence,
+                    box_rect: BoundingBox { x: x as i32, y: y as i32, width: w, height: h },
+                });
+            }
+        }
+        if piece_blocks.len() >= 2 {
+            refined.extend(piece_blocks);
+        } else {
+            refined.push(block);
+        }
+    }
+    Ok(refined)
 }
 
 // ---- Detection (DET) --------------------------------------------------------
@@ -1041,18 +1239,37 @@ fn run_detection(
         Some(s) => std::borrow::Cow::Borrowed(s),
         None => std::borrow::Cow::Owned(view.iter().copied().collect()),
     };
-    Ok(postprocess_db(&map, mw, mh, w, h))
+    Ok(postprocess_db_for_version(
+        &map,
+        mw,
+        mh,
+        w,
+        h,
+        &sessions.version,
+    ))
 }
 
 /// DB post-processing (axis-aligned bbox variant, faithful to RapidOCR's
 /// params): binarize at 0.3 -> dilate -> connected components -> bbox -> score
 /// filter at 0.5 -> unclip at 1.6 -> size filters -> map back to source image.
+#[cfg(test)]
 fn postprocess_db(
     map: &[f32],
     mw: usize,
     mh: usize,
     src_w: u32,
     src_h: u32,
+) -> Vec<(u32, u32, u32, u32)> {
+    postprocess_db_for_version(map, mw, mh, src_w, src_h, &get_active_version())
+}
+
+fn postprocess_db_for_version(
+    map: &[f32],
+    mw: usize,
+    mh: usize,
+    src_w: u32,
+    src_h: u32,
+    version: &str,
 ) -> Vec<(u32, u32, u32, u32)> {
     if mw == 0 || mh == 0 || map.len() < mw * mh {
         return Vec::new();
@@ -1148,7 +1365,7 @@ fn postprocess_db(
         // Unclip: expand bbox by distance = area*ratio/perimeter (both sides).
         let area = (bw as f32) * (bh as f32);
         let perimeter = 2.0 * (bw as f32 + bh as f32);
-        let dist = (area * active_unclip_ratio() / perimeter).ceil() as usize;
+        let dist = (area * unclip_ratio_for_version(version) / perimeter).ceil() as usize;
         let ex0 = min_x.saturating_sub(dist);
         let ey0 = min_y.saturating_sub(dist);
         let ex1 = (max_x + dist).min(mw - 1);
@@ -1653,6 +1870,17 @@ mod tests {
     }
 
     #[test]
+    fn test_union_boxes_keeps_equal_height_compact_labels_separate() {
+        // Same-row UI labels with equal typography are independent even when
+        // their designer used only a 10px gutter.
+        let rows = union_boxes_into_rows(
+            vec![(10, 20, 36, 20), (56, 20, 36, 20)],
+            200,
+        );
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
     fn test_resize_bilinear_identity() {
         let src = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         let out = resize_bgr_bilinear(&src, 2, 2, 2, 2);
@@ -1673,6 +1901,44 @@ mod tests {
         assert_eq!(crop.len(), 5 * 4 * 3);
         let crop2 = crop_bgr(&bgr, 10, 10, 8, 8, 10, 10);
         assert_eq!(crop2.len(), 2 * 2 * 3);
+    }
+
+    #[test]
+    fn test_wide_toolbar_box_splits_at_real_ink_valley() {
+        let (w, h) = (120u32, 16u32);
+        let mut bgr = vec![20u8; (w * h * 3) as usize];
+        // Two bright label-like glyph bands with an 10px empty toolbar gutter.
+        for x in (14usize..45).chain(55usize..96) {
+            for y in 3usize..13 {
+                let i = (y * w as usize + x) * 3;
+                bgr[i..i + 3].fill(220);
+            }
+        }
+        let split = split_wide_box_at_ink_valleys(&bgr, w, h, (0, 0, w, h));
+        assert_eq!(split.len(), 2);
+        assert!(split[0].0 + split[0].2 <= split[1].0);
+    }
+
+    #[test]
+    fn test_normal_word_box_is_not_projection_split() {
+        let (w, h) = (70u32, 16u32);
+        let bgr = vec![20u8; (w * h * 3) as usize];
+        assert_eq!(
+            split_wide_box_at_ink_valleys(&bgr, w, h, (0, 0, w, h)),
+            vec![(0, 0, w, h)]
+        );
+    }
+
+    #[test]
+    fn test_toolbar_refinement_is_semantic_not_just_wide() {
+        let make = |text: &str| TextBlock {
+            text: text.into(),
+            confidence: 0.95,
+            box_rect: BoundingBox { x: 0, y: 0, width: 220, height: 18 },
+        };
+        assert!(should_refine_dense_toolbar(&make("文件编辑渲染窗口帮助")));
+        assert!(should_refine_dense_toolbar(&make("File Edit Render Window Help")));
+        assert!(!should_refine_dense_toolbar(&make("Blender 5.2.1 LTS")));
     }
 
     #[test]
@@ -2029,10 +2295,17 @@ pub fn union_boxes_into_rows(
             let last_right = last.box_rect.x + last.box_rect.width as i32;
             let gap = b.box_rect.x - last_right;
             let min_h = last.box_rect.height.min(b.box_rect.height) as f32;
-            // 缝合阈值：必须在正常字间距以内 (≤14px 且 ≤ min_h * 0.70)，超出即为独立单元格/按钮/词组
-            let max_gap_threshold = (min_h * 0.70).clamp(8.0, 14.0);
+            // Equal-height labels/buttons must not be fused merely because their
+            // gutter is small. A wider recovery gap is allowed only when one box
+            // is visibly a clipped fragment (large height mismatch).
+            let max_h = last.box_rect.height.max(b.box_rect.height).max(1) as f32;
+            let height_ratio = min_h / max_h;
+            let normal_gap = (min_h * 0.35).clamp(4.0, 8.0);
+            let fragment_gap = (min_h * 0.70).clamp(8.0, 12.0);
+            let should_merge = (gap as f32) <= normal_gap
+                || (height_ratio < 0.80 && (gap as f32) <= fragment_gap);
 
-            if (gap as f32) <= max_gap_threshold {
+            if should_merge {
                 current_group.push(b);
             } else {
                 if let Some(rect) = merge_group_rect(&current_group, img_w) {

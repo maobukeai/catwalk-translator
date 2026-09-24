@@ -22,6 +22,8 @@ import type {
   BackupSettings,
   WebdavConfig,
   AnkiSettings,
+  ProxyMode,
+  RetryPreset,
 } from '../services/types';
 
 interface SettingsState {
@@ -104,8 +106,11 @@ interface SettingsState {
   setCloseAction: (action: 'ask' | 'minimize' | 'exit') => void;
   setMiniWindowCloseAction: (action: 'hide' | 'minimize') => void;
   setAlwaysOnTop: (enabled: boolean) => void;
+  setProxyMode: (mode: ProxyMode) => void;
   setProxyEnabled: (enabled: boolean) => void;
   setProxyUrl: (url: string) => void;
+  setProxyBypassDomestic: (enabled: boolean) => void;
+  setRetryPreset: (preset: RetryPreset) => void;
   setTtsRate: (rate: number) => void;
   setAutoDetectPreset: (enabled: boolean) => void;
   setEnableLlmProgressiveRefine: (enabled: boolean) => void;
@@ -234,11 +239,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         clipboardWatchEnabled: fetched.clipboardWatchEnabled ?? false,
         ocrEngine: fetched.ocrEngine || 'auto',
         ocrVersion: (fetched.ocrVersion as 'v3' | 'v4' | 'v5' | 'v6' | 'v6t') || 'v4',
-        ocrFilterEnabled: fetched.ocrFilterEnabled ?? true,
+        ocrFilterEnabled: fetched.ocrFilterEnabled ?? false,
         ocrFilterRules: fetched.ocrFilterRules ?? [],
         selectionLookupEnabled: fetched.selectionLookupEnabled ?? false,
         hoverLookupEnabled: fetched.hoverLookupEnabled ?? false,
         hoverLookupModifier: fetched.hoverLookupModifier ?? 'ctrl',
+        proxyMode:
+          fetched.proxyMode === 'direct' || fetched.proxyMode === 'manual' || fetched.proxyMode === 'system'
+            ? fetched.proxyMode
+            : fetched.proxyEnabled
+            ? 'manual'
+            : 'system',
+        proxyEnabled:
+          fetched.proxyMode === 'manual' || (fetched.proxyMode === undefined && Boolean(fetched.proxyEnabled)),
+        proxyBypassDomestic: fetched.proxyBypassDomestic ?? true,
+        retryPreset: fetched.retryPreset || 'balanced',
         backupSettings: {
           autoBackupEnabled: fetched.backupSettings?.autoBackupEnabled ?? false,
           intervalHours: fetched.backupSettings?.intervalHours ?? 24,
@@ -1108,9 +1123,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   setAlwaysOnTop: (enabled) => applyPatch({ alwaysOnTop: enabled }),
 
-  setProxyEnabled: (enabled) => applyPatch({ proxyEnabled: enabled }),
+  setProxyMode: (mode) =>
+    applyPatch({
+      proxyMode: mode,
+      proxyEnabled: mode === 'manual',
+    }),
+
+  setProxyEnabled: (enabled) =>
+    applyPatch({
+      proxyEnabled: enabled,
+      proxyMode: enabled ? 'manual' : 'system',
+    }),
 
   setProxyUrl: (url) => applyPatch({ proxyUrl: url }, 'debounced'),
+
+  setProxyBypassDomestic: (enabled) => applyPatch({ proxyBypassDomestic: enabled }),
+
+  setRetryPreset: (preset) => applyPatch({ retryPreset: preset }),
 
   setAutoDetectPreset: (enabled) => {
     const { settings, initialSettings, saveSettings } = get();
@@ -1153,4 +1182,3 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   },
   };
 });
-

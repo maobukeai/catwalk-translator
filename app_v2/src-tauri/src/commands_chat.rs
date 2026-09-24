@@ -65,11 +65,8 @@ pub async fn cmd_fetch_llm_models(
         }
     }
 
-    // 3. Prepare reqwest client with 15s timeout
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("无法初始化网络客户端: {}", e))?;
+    // 3. Prepare unified reqwest client with 15s timeout (honors proxy mode & domestic bypass)
+    let client = crate::translator::create_http_client(15000);
 
     let mut last_error = String::new();
 
@@ -97,23 +94,25 @@ pub async fn cmd_fetch_llm_models(
             }
         }
 
-        let mut req = client.get(&final_url);
-
-        // 注入鉴权请求头：原生 Google API 使用 x-goog-api-key；Cloudflare / OpenAI 代理同时附带 Bearer
-        if !api_key.is_empty() {
-            if is_google_gemini && !clean_base.contains("openai") && !clean_base.contains("cloudflare") {
-                req = req
-                    .header("x-goog-api-key", &api_key)
-                    .header("api-key", &api_key);
-            } else {
-                req = req
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .header("x-goog-api-key", &api_key)
-                    .header("api-key", &api_key);
+        let build_models_req = || {
+            let mut req = client.get(&final_url);
+            // 注入鉴权请求头：原生 Google API 使用 x-goog-api-key；Cloudflare / OpenAI 代理同时附带 Bearer
+            if !api_key.is_empty() {
+                if is_google_gemini && !clean_base.contains("openai") && !clean_base.contains("cloudflare") {
+                    req = req
+                        .header("x-goog-api-key", &api_key)
+                        .header("api-key", &api_key);
+                } else {
+                    req = req
+                        .header("Authorization", format!("Bearer {}", api_key))
+                        .header("x-goog-api-key", &api_key)
+                        .header("api-key", &api_key);
+                }
             }
-        }
+            req
+        };
 
-        let res = match req.send().await {
+        let res = match crate::translator::send_request_with_retry(build_models_req).await {
             Ok(r) => r,
             Err(e) => {
                 last_error = format!(
@@ -574,9 +573,11 @@ pub async fn cmd_chat_llm(
         let is_native_gemini_endpoint = final_url.contains(":generateContent");
         let body = build_chat_body(&plan, &messages, is_native_gemini_endpoint, false);
 
-        let req = apply_chat_auth(client.post(&final_url), &plan, is_native_gemini_endpoint);
-
-        let res = match req.json(&body).send().await {
+        let res = match crate::translator::send_request_with_retry(|| {
+            apply_chat_auth(client.post(&final_url), &plan, is_native_gemini_endpoint).json(&body)
+        })
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 last_err = format!(
@@ -669,9 +670,11 @@ pub async fn cmd_chat_llm_stream(
 
         let body = build_chat_body(&plan, &messages, is_native_gemini_endpoint, !is_native_gemini_endpoint);
 
-        let req = apply_chat_auth(client.post(&req_url), &plan, is_native_gemini_endpoint);
-
-        let res = match req.json(&body).send().await {
+        let res = match crate::translator::send_request_with_retry(|| {
+            apply_chat_auth(client.post(&req_url), &plan, is_native_gemini_endpoint).json(&body)
+        })
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 last_err = format!(

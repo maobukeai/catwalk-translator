@@ -51,7 +51,7 @@ fn logical_selection_to_physical(
 pub fn ocr_filter_from_settings(
     settings: &crate::models::AppSettings,
 ) -> Option<Vec<String>> {
-    if !settings.ocr_filter_enabled.unwrap_or(true) {
+    if !settings.ocr_filter_enabled.unwrap_or(false) {
         return None;
     }
     Some(
@@ -88,6 +88,23 @@ pub fn ocr_text_filtered_compiled(regexes: &[regex::Regex], text: &str) -> bool 
 pub fn ocr_text_filtered(rules: &[String], text: &str) -> bool {
     let compiled = compile_ocr_filter_rules(rules);
     ocr_text_filtered_compiled(&compiled, text)
+}
+
+/// Confidence is less trustworthy for tiny icon crops: OCR commonly turns a
+/// toolbar glyph into one or two plausible-looking characters. Require stronger
+/// evidence for very short blocks while retaining ordinary words/values.
+fn usable_ocr_block(block: &TextBlock) -> bool {
+    if block.box_rect.height < 6 || block.text.trim().is_empty() {
+        return false;
+    }
+    let chars = block.text.chars().filter(|c| !c.is_whitespace()).count();
+    let required = match chars {
+        0 => return false,
+        1 => 0.75,
+        2 => 0.65,
+        _ => 0.35,
+    };
+    block.confidence >= required
 }
 
 fn region_ocr_layout(
@@ -134,34 +151,21 @@ fn region_ocr_layout(
         .ok_or("Selection out of desktop bounds")?;
 
     // 5. Feed clean region BMP to the OCR engine (routed by user setting)
-    let ocr_result =
-        crate::ocr::execute_native_ocr_with_engine(&crop_bmp, ocr_engine.as_deref())
-            .unwrap_or(OcrResult { blocks: vec![] });
+    let ocr_result = crate::ocr::execute_native_ocr_with_engine(
+        &crop_bmp,
+        ocr_engine.as_deref(),
+    )?;
 
     // 5.5 Drop obvious OCR noise before clustering: detection-only boxes fired
     // on texture/shadow carry near-zero recognition probability. Real text from
     // every engine (WinRT 0.99 / daemon ≥0.9 default / ONNX real CTC probs)
     // stays far above this threshold. 物理高度 <6px 的框必是误检——真实文本
     // 在任何缩放下都不可能低于该值，进 rec/聚类只会产出乱码。
-    const MIN_OCR_CONFIDENCE: f32 = 0.35;
-    const MIN_OCR_BLOCK_HEIGHT: u32 = 6;
     let confident_blocks: Vec<TextBlock> = ocr_result
         .blocks
         .into_iter()
-        .filter(|b| b.confidence >= MIN_OCR_CONFIDENCE && b.box_rect.height >= MIN_OCR_BLOCK_HEIGHT)
+        .filter(usable_ocr_block)
         .collect();
-
-    // 5.6 内容过滤:命中规则的块(时间戳/纯数字/水印)整块剔除,不进翻译
-    let confident_blocks: Vec<TextBlock> = match &ocr_filter {
-        Some(rules) if !rules.is_empty() => {
-            let compiled = compile_ocr_filter_rules(rules);
-            confident_blocks
-                .into_iter()
-                .filter(|b| !ocr_text_filtered_compiled(&compiled, &b.text))
-                .collect()
-        }
-        _ => confident_blocks,
-    };
 
     if confident_blocks.is_empty() {
         return Ok(vec![]);
@@ -169,12 +173,21 @@ fn region_ocr_layout(
 
     // 6. Cluster into lines and merge words per line (e.g. "Principled" + "BSDF" -> "Principled BSDF")
     let lines = LineClusterer::cluster_into_lines(confident_blocks, 8.0);
-    let merged_blocks: Vec<TextBlock> = lines
+    let mut merged_blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|line| !line.is_empty())
         .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
+
+    // Filter only after reconstruction. A numeric value and its nearby label
+    // can now form "Opacity 50" instead of the value disappearing before the
+    // layout logic gets a chance to associate them. This also makes screenshot
+    // and pasted-image pipelines consistent.
+    if let Some(rules) = &ocr_filter {
+        let compiled = compile_ocr_filter_rules(rules);
+        merged_blocks.retain(|b| !ocr_text_filtered_compiled(&compiled, &b.text));
+    }
 
     if merged_blocks.is_empty() {
         return Ok(vec![]);
@@ -710,9 +723,13 @@ pub async fn cmd_image_ocr_translate(
         .unwrap_or_default();
 
     // 3. OCR + line clustering + word merge (严格遵循用户配置的 OCR 引擎与模型版本).
-    let ocr_result =
-        crate::ocr::execute_native_ocr_with_engine(&bmp, ocr_engine.as_deref()).unwrap_or(OcrResult { blocks: vec![] });
-    let lines = LineClusterer::cluster_into_lines(ocr_result.blocks, 8.0);
+    let ocr_result = crate::ocr::execute_native_ocr_with_engine(&bmp, ocr_engine.as_deref())?;
+    let confident_blocks = ocr_result
+        .blocks
+        .into_iter()
+        .filter(usable_ocr_block)
+        .collect();
+    let lines = LineClusterer::cluster_into_lines(confident_blocks, 8.0);
     let mut merged_blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|line| !line.is_empty())
@@ -906,14 +923,7 @@ pub async fn cmd_begin_capture(
     }
 
     // 3. Win32 GDI captures 100% clean desktop pixels directly into Rust static memory (~15ms)
-    let mut payload =
-        crate::capture::capture_desktop_payload().unwrap_or(crate::capture::ScreenCapturePayload {
-            data_url: String::new(),
-            width: 1920,
-            height: 1080,
-            scale_factor: 1.0,
-            detected_app: None,
-        });
+    let mut payload = crate::capture::capture_desktop_payload()?;
 
     // Zero base64 transfer to React — return payload with scale_factor only!
     payload.data_url = String::new();
@@ -1140,64 +1150,45 @@ pub async fn cmd_capture_and_ocr(
         return Ok(OcrResult { blocks: vec![] });
     }
 
-    // Retrieve the stored desktop screenshot
-    if let Some((bmp_data, bmp_w, bmp_h, stored_scale)) = crate::capture::get_latest_capture() {
-        // Resolve the effective scale: prefer exact BMP/viewport geometry over DPI hints
-        let fallback_sf = scale_factor.unwrap_or(stored_scale);
-        let sf_x = overlay_width
-            .filter(|w| *w > 1.0)
-            .map(|w| bmp_w as f64 / w)
-            .unwrap_or(fallback_sf);
-        let sf_y = overlay_height
-            .filter(|h| *h > 1.0)
-            .map(|h| bmp_h as f64 / h)
-            .unwrap_or(fallback_sf);
+    let (bmp_data, bmp_w, bmp_h, stored_scale) =
+        crate::capture::get_latest_capture().ok_or("No desktop capture available in memory")?;
 
-        // Convert logical (CSS) pixel coords to physical BMP pixel coords
-        let phys = PhysicalRect {
-            x: (selection.x as f64 * sf_x).round().clamp(0.0, bmp_w as f64) as i32,
-            y: (selection.y as f64 * sf_y).round().clamp(0.0, bmp_h as f64) as i32,
-            width: ((selection.width as f64 * sf_x).round() as u32).min(bmp_w),
-            height: ((selection.height as f64 * sf_y).round() as u32).min(bmp_h),
-        };
+    // Resolve the effective scale: prefer exact BMP/viewport geometry over DPI hints.
+    let fallback_sf = scale_factor.unwrap_or(stored_scale);
+    let sf_x = overlay_width
+        .filter(|w| *w > 1.0)
+        .map(|w| bmp_w as f64 / w)
+        .unwrap_or(fallback_sf);
+    let sf_y = overlay_height
+        .filter(|h| *h > 1.0)
+        .map(|h| bmp_h as f64 / h)
+        .unwrap_or(fallback_sf);
+    let phys = PhysicalRect {
+        x: (selection.x as f64 * sf_x).round().clamp(0.0, bmp_w as f64) as i32,
+        y: (selection.y as f64 * sf_y).round().clamp(0.0, bmp_h as f64) as i32,
+        width: ((selection.width as f64 * sf_x).round() as u32).min(bmp_w),
+        height: ((selection.height as f64 * sf_y).round() as u32).min(bmp_h),
+    };
 
-        // Crop + OCR + 行聚类为同步 CPU 工作 → blocking 线程池（None = 未识别到，走底部 fixture）
-        let cropped_line_result = tauri::async_runtime::spawn_blocking(move || {
-            let cropped = crate::ocr::crop_bmp(&bmp_data, bmp_w, bmp_h, phys)?;
-            let ocr_res = crate::ocr::execute_native_ocr(&cropped).ok()?;
-            if ocr_res.blocks.is_empty() {
-                return None;
-            }
-            let lines = LineClusterer::cluster_into_lines(ocr_res.blocks, 8.0);
-            let merged_blocks: Vec<TextBlock> = lines
-                .into_iter()
-                .filter(|line| !line.is_empty())
-                .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
-                .filter(|b| !b.text.trim().is_empty())
-                .collect();
-            Some(OcrResult { blocks: merged_blocks })
+    // Crop + OCR + line reconstruction are synchronous CPU work.
+    tauri::async_runtime::spawn_blocking(move || -> Result<OcrResult, String> {
+        let cropped = crate::ocr::crop_bmp(&bmp_data, bmp_w, bmp_h, phys)
+            .ok_or("Selection out of desktop bounds")?;
+        let ocr_res = crate::ocr::execute_native_ocr(&cropped)?;
+        let confident_blocks = ocr_res.blocks.into_iter().filter(usable_ocr_block);
+        let lines = LineClusterer::cluster_into_lines(confident_blocks.collect(), 8.0);
+        let merged_blocks = lines
+            .into_iter()
+            .filter(|line| !line.is_empty())
+            .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
+            .filter(|b| !b.text.trim().is_empty())
+            .collect();
+        Ok(OcrResult {
+            blocks: merged_blocks,
         })
-        .await
-        .map_err(|e| format!("OCR task join failed: {}", e))?;
-
-        if let Some(result) = cropped_line_result {
-            return Ok(result);
-        }
-    }
-
-    // No capture available (e.g. headless test environment): return a deterministic fixture
-    Ok(OcrResult {
-        blocks: vec![crate::models::TextBlock {
-            text: "Artificial Intelligence".to_string(),
-            confidence: 0.99,
-            box_rect: crate::models::BoundingBox {
-                x: 0,
-                y: 0,
-                width: 100,
-                height: 20,
-            },
-        }],
     })
+    .await
+    .map_err(|e| format!("OCR task join failed: {}", e))?
 }
 
 /// Logical snapped rect returned by `cmd_snap_region` (overlay CSS pixels).
@@ -1650,15 +1641,15 @@ mod ocr_filter_tests {
     fn default_rules_filter_junk_and_keep_terms() {
         let r = default_rules();
         for junk in [
-            "12:34", "12:34:56", "2026-08-22", "2026.8.22", "12345", "3.14", "98%",
-            "HP: 1500/2000", "MP 800", "EXP: 42", "Stamina: 100", "Stamina 50",
-            "https://example.com/a", "LIVE", "rec",
+            "12:34", "12:34:56", "2026-08-22", "2026.8.22", "https://example.com/a",
+            "LIVE", "rec",
         ] {
             assert!(ocr_text_filtered(&r, junk), "应过滤: {junk}");
         }
         for keep in [
-            "Roughness", "Principled BSDF", "HP Designjet Printer", "Set to 100 percent",
-            "Live2D Cubism", "2026 new features",
+            "Roughness", "Principled BSDF", "12345", "3.14", "98%", "HP: 1500/2000",
+            "MP 800", "EXP: 42", "Stamina: 100", "HP Designjet Printer",
+            "Set to 100 percent", "Live2D Cubism", "2026 new features",
         ] {
             assert!(!ocr_text_filtered(&r, keep), "不应过滤: {keep}");
         }

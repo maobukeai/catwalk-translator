@@ -469,7 +469,7 @@ describe('Tier 1 Feature Coverage Test Suite', () => {
         await new Promise((r) => setTimeout(r, 400));
       });
 
-      expect(screen.getByText(/\d+\s*ms/)).toBeInTheDocument();
+      expect(screen.getAllByText(/\d+\s*ms/)[0]).toBeInTheDocument();
     });
   });
 

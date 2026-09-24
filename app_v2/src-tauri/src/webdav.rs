@@ -90,14 +90,14 @@ impl WebdavConn {
                 continue;
             }
             url = join_url(&url, &[part]);
-            let resp = self
-                .client
-                .request(method.clone(), &url)
-                .basic_auth(&self.username, Some(&self.password))
-                .timeout(Duration::from_secs(30))
-                .send()
-                .await
-                .map_err(|e| format!("创建远端目录失败（{}）：{e}", part))?;
+            let resp = crate::translator::send_request_with_retry(|| {
+                self.client
+                    .request(method.clone(), &url)
+                    .basic_auth(&self.username, Some(&self.password))
+                    .timeout(Duration::from_secs(30))
+            })
+            .await
+            .map_err(|e| format!("创建远端目录失败（{}）：{e}", part))?;
             let status = resp.status().as_u16();
             // 201=新建成功；405=已存在；403 在部分服务上表示已存在的集合
             if !(200..300).contains(&status) && status != 405 {
@@ -116,17 +116,17 @@ impl WebdavConn {
     async fn propfind(&self, url: &str, depth: &str) -> Result<String, String> {
         let method = reqwest::Method::from_bytes(b"PROPFIND")
             .map_err(|e| format!("构造 PROPFIND 请求失败：{e}"))?;
-        let resp = self
-            .client
-            .request(method, url)
-            .basic_auth(&self.username, Some(&self.password))
-            .header("Depth", depth)
-            .header("Content-Type", "application/xml; charset=utf-8")
-            .body(PROPFIND_BODY.to_string())
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(webdav_network_error)?;
+        let resp = crate::translator::send_request_with_retry(|| {
+            self.client
+                .request(method.clone(), url)
+                .basic_auth(&self.username, Some(&self.password))
+                .header("Depth", depth)
+                .header("Content-Type", "application/xml; charset=utf-8")
+                .body(PROPFIND_BODY.to_string())
+                .timeout(Duration::from_secs(30))
+        })
+        .await
+        .map_err(webdav_network_error)?;
         let status = resp.status().as_u16();
         if status != 207 && !(200..300).contains(&status) {
             let body = resp.text().await.unwrap_or_default();
@@ -136,16 +136,16 @@ impl WebdavConn {
     }
 
     async fn put(&self, url: &str, bytes: Vec<u8>) -> Result<(), String> {
-        let resp = self
-            .client
-            .put(url)
-            .basic_auth(&self.username, Some(&self.password))
-            .header("Content-Type", "application/zip")
-            .body(bytes)
-            .timeout(Duration::from_secs(300))
-            .send()
-            .await
-            .map_err(webdav_network_error)?;
+        let resp = crate::translator::send_request_with_retry(|| {
+            self.client
+                .put(url)
+                .basic_auth(&self.username, Some(&self.password))
+                .header("Content-Type", "application/zip")
+                .body(bytes.clone())
+                .timeout(Duration::from_secs(300))
+        })
+        .await
+        .map_err(webdav_network_error)?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
             let body = resp.text().await.unwrap_or_default();
@@ -155,14 +155,14 @@ impl WebdavConn {
     }
 
     async fn get(&self, url: &str) -> Result<Vec<u8>, String> {
-        let resp = self
-            .client
-            .get(url)
-            .basic_auth(&self.username, Some(&self.password))
-            .timeout(Duration::from_secs(300))
-            .send()
-            .await
-            .map_err(webdav_network_error)?;
+        let resp = crate::translator::send_request_with_retry(|| {
+            self.client
+                .get(url)
+                .basic_auth(&self.username, Some(&self.password))
+                .timeout(Duration::from_secs(300))
+        })
+        .await
+        .map_err(webdav_network_error)?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
             let body = resp.text().await.unwrap_or_default();
@@ -175,14 +175,14 @@ impl WebdavConn {
     }
 
     async fn delete(&self, url: &str) -> Result<(), String> {
-        let resp = self
-            .client
-            .delete(url)
-            .basic_auth(&self.username, Some(&self.password))
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(webdav_network_error)?;
+        let resp = crate::translator::send_request_with_retry(|| {
+            self.client
+                .delete(url)
+                .basic_auth(&self.username, Some(&self.password))
+                .timeout(Duration::from_secs(30))
+        })
+        .await
+        .map_err(webdav_network_error)?;
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) && status != 404 {
             let body = resp.text().await.unwrap_or_default();
@@ -332,11 +332,13 @@ fn load_conn_with(
     if username.is_empty() || password.is_empty() {
         return Err("请先填写 WebDAV 账号与应用密码".to_string());
     }
-    let client = reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .connect_timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+    let client = crate::translator::apply_proxy_to_builder(
+        reqwest::Client::builder()
+            .user_agent(USER_AGENT)
+            .connect_timeout(Duration::from_secs(15)),
+    )
+    .build()
+    .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
     Ok((
         WebdavConn {
             client,

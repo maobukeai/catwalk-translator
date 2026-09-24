@@ -81,22 +81,26 @@ pub struct AppInfo {
 }
 
 fn build_update_client() -> Result<Client, String> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .connect_timeout(Duration::from_secs(12))
-        .timeout(Duration::from_secs(16))
-        .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))
+    crate::translator::apply_proxy_to_builder(
+        Client::builder()
+            .user_agent(USER_AGENT)
+            .connect_timeout(Duration::from_secs(12))
+            .timeout(Duration::from_secs(16)),
+    )
+    .build()
+    .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))
 }
 
 fn build_download_client() -> Result<Client, String> {
-    Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| format!("构建下载 HTTP 客户端失败：{e}"))
+    crate::translator::apply_proxy_to_builder(
+        Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(300)),
+    )
+    .build()
+    .map_err(|e| format!("构建下载 HTTP 客户端失败：{e}"))
 }
 
 /// 解析 CDN 返回的元数据（支持根目录 version.json 以及 app_v2/package.json）
@@ -177,13 +181,15 @@ pub async fn check_update_via_cdn(current: &str) -> Option<UpdateCheckResult> {
         reqwest::header::HeaderValue::from_static("no-cache"),
     );
 
-    let client = Client::builder()
-        .user_agent(USER_AGENT)
-        .default_headers(default_headers)
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(8))
-        .build()
-        .ok()?;
+    let client = crate::translator::apply_proxy_to_builder(
+        Client::builder()
+            .user_agent(USER_AGENT)
+            .default_headers(default_headers)
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(8)),
+    )
+    .build()
+    .ok()?;
 
     let cdn_urls = [
         GHFAST_VERSION_URL,
@@ -212,13 +218,15 @@ pub async fn check_update_via_cdn(current: &str) -> Option<UpdateCheckResult> {
 /// GitHub 网页端 `https://github.com/{owner}/{repo}/releases/latest` 会以 HTTP 302 形式重定向到最新的 Tag
 /// 此接口为纯 HTML 网页重定向，完全不受 GitHub REST API 匿名 60次/小时 的 IP 限流影响！
 pub async fn check_update_via_html_redirect(current: &str) -> Option<UpdateCheckResult> {
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(Duration::from_secs(12))
-        .build()
-        .ok()?;
+    let client = crate::translator::apply_proxy_to_builder(
+        Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(12)),
+    )
+    .build()
+    .ok()?;
 
     let response = client.get(RELEASES_WEB_LATEST_URL).send().await.ok()?;
     let status = response.status();

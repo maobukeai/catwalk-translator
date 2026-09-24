@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
+import { NetworkSettingsCard } from './NetworkSettingsCard';
+import { NetworkDiagCard } from './NetworkDiagCard';
 import {
   cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall,
   cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart,
@@ -385,21 +387,21 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                         OCR 内容过滤
                       </div>
                       <div className={`mt-0.5 text-[10px] ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
-                        命中规则的识别块(时间戳/纯数字/水印等)不参与翻译,保持译文区干净。留空使用默认规则集。
+                        命中规则的识别块（时间戳/网址/角标等）不参与翻译；数字默认保留。留空使用默认规则集。
                       </div>
                     </div>
                     <button
                       type="button"
                       role="switch"
-                      aria-checked={settings.ocrFilterEnabled ?? true}
-                      onClick={() => setOcrFilterEnabled(!(settings.ocrFilterEnabled ?? true))}
+                      aria-checked={settings.ocrFilterEnabled ?? false}
+                      onClick={() => setOcrFilterEnabled(!(settings.ocrFilterEnabled ?? false))}
                       className={`relative w-11 h-6 rounded-full transition shrink-0 cursor-pointer ${
-                        (settings.ocrFilterEnabled ?? true) ? 'bg-emerald-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
+                        (settings.ocrFilterEnabled ?? false) ? 'bg-emerald-600' : (isLight ? 'bg-slate-300' : 'bg-zinc-700')
                       }`}
                       title="开启后:命中规则的文字块直接剔除"
                     >
                       <span className={`absolute top-1 inline-block h-4 w-4 rounded-full bg-white transition-all cursor-pointer ${
-                        (settings.ocrFilterEnabled ?? true) ? 'left-6' : 'left-1'
+                        (settings.ocrFilterEnabled ?? false) ? 'left-6' : 'left-1'
                       }`} />
                     </button>
                   </div>
@@ -408,7 +410,7 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                     onChange={(e) => setOcrFilterDraft(e.target.value)}
                     rows={4}
                     spellCheck={false}
-                    placeholder={'默认规则集(留空生效),示例:\n^\\d{1,2}:\\d{2}(:\\d{2})?$   时间\n^\\d+([.,]\\d+)?%?$   纯数字\n^https?://\\S+$   URL'}
+                    placeholder={'默认规则集(留空生效),示例:\n^\\d{1,2}:\\d{2}(:\\d{2})?$   时间\n^https?://\\S+$   URL\n如需过滤纯数字，可自行添加 ^\\d+$'}
                     className={`w-full rounded-lg border px-2.5 py-1.5 font-mono text-[10.5px] leading-relaxed resize-y ${
                       isLight
                         ? 'bg-white border-slate-300 text-slate-800 placeholder-slate-300'
@@ -722,44 +724,9 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                       </div>
                     </div>
 
-                    {/* 手动代理 */}
-                    <div className={`space-y-2 p-3 rounded-lg border ${
-                      isLight ? 'bg-slate-100/90 border-slate-200' : 'bg-zinc-950/60 border-white/[0.06]'
-                    }`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className={`text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-300'}`}>手动网络代理 (HTTP/SOCKS5)</div>
-                          <div className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-600 font-medium' : 'text-zinc-400'}`}>
-                            访问 OpenAI / Gemini 等境外接口时指定代理，优先于系统代理自动探测
-                          </div>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                          <input
-                            type="checkbox"
-                            checked={settings.proxyEnabled ?? false}
-                            onChange={(e) => setProxyEnabled(e.target.checked)}
-                            className="sr-only peer"
-                            data-testid="proxy-toggle"
-                          />
-                          <div className="w-9 h-5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                        </label>
-                      </div>
-                      {(settings.proxyEnabled ?? false) && (
-                        <input
-                          type="text"
-                          value={settings.proxyUrl ?? ''}
-                          onChange={(e) => setProxyUrl(e.target.value)}
-                          placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
-                          spellCheck={false}
-                          data-testid="proxy-url-input"
-                          className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono outline-none transition ${
-                            isLight
-                              ? 'bg-white border-slate-300 focus:border-blue-500 text-slate-800'
-                              : 'bg-zinc-900 border-white/10 focus:border-blue-500 text-zinc-200'
-                          }`}
-                        />
-                      )}
-                    </div>
+                    {/* 网络设置（三态代理模式 + 国内直连分流 + 重试策略）与网络诊断 */}
+                    <NetworkSettingsCard />
+                    <NetworkDiagCard />
                   </div>
                 </div>
 

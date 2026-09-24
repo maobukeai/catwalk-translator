@@ -8,8 +8,27 @@ use std::time::Duration;
 
 static CG_DICTS: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
 
+/// 对代理地址提取 host:port 并做快速 TCP 连接探活，防止代理软件退出后遗留注册表或环境变量导致幽灵代理死锁
+pub fn is_proxy_alive(proxy_str: &str, timeout_ms: u64) -> bool {
+    if let Some(host_port) = extract_proxy_host_port(proxy_str) {
+        std::net::ToSocketAddrs::to_socket_addrs(&host_port.as_str())
+            .ok()
+            .and_then(|mut addrs| addrs.next())
+            .map(|addr| {
+                std::net::TcpStream::connect_timeout(
+                    &addr,
+                    std::time::Duration::from_millis(timeout_ms),
+                )
+                .is_ok()
+            })
+            .unwrap_or(false)
+    } else {
+        false
+    }
+}
+
 /// Windows 系统代理自适应探测：读取注册表 Internet Settings，若开启代理客户端则自动挂载
-/// 同时做 1000ms TCP 探活，防止代理软件退出后遗留注册表导致全网崩塌（幽灵代理 Bug）
+/// 同时做 800ms TCP 探活，防止代理软件退出后遗留注册表导致全网崩塌（幽灵代理 Bug）
 #[cfg(windows)]
 pub fn detect_windows_proxy() -> Option<String> {
     use winreg::enums::*;
@@ -22,26 +41,8 @@ pub fn detect_windows_proxy() -> Option<String> {
     if enable == 1 {
         let server: String = internet_settings.get_value("ProxyServer").ok()?;
         let server = server.trim().to_string();
-        if !server.is_empty() {
-            // 探活：提取 host:port 并做 1000ms TCP 连接测试，失败则降级为直连
-            let host_port = parse_proxy_to_url(&server)
-                .replace("http://", "")
-                .replace("https://", "")
-                .replace("socks5://", "");
-            let alive = std::net::ToSocketAddrs::to_socket_addrs(&host_port.as_str())
-                .ok()
-                .and_then(|mut addrs| addrs.next())
-                .map(|addr| {
-                    std::net::TcpStream::connect_timeout(
-                        &addr,
-                        std::time::Duration::from_millis(1000),
-                    )
-                    .is_ok()
-                })
-                .unwrap_or(false);
-            if alive {
-                return Some(server);
-            }
+        if !server.is_empty() && is_proxy_alive(&server, 800) {
+            return Some(server);
         }
     }
     None
@@ -52,86 +53,352 @@ pub fn detect_windows_proxy() -> Option<String> {
     None
 }
 
-/// 解析 Windows 代理配置字符串（支持 127.0.0.1:7890 或 http=127.0.0.1:7890;https=127.0.0.1:7890 等格式）
+/// 解析 Windows 代理配置或手动代理字符串（支持 127.0.0.1:7890、socks=127.0.0.1:1080、
+/// http=127.0.0.1:7890;https=127.0.0.1:7890、socks5h://user:pass@127.0.0.1:1080/ 等格式）
 pub fn parse_proxy_to_url(proxy_str: &str) -> String {
-    let raw = proxy_str.trim();
-    let target = if raw.contains('=') {
+    let raw = proxy_str.trim().trim_end_matches('/');
+    let mut default_scheme = "http";
+    let target = if raw.contains('=') && !raw.contains("://") {
         let mut chosen = "";
         for part in raw.split(';') {
             let part = part.trim();
-            if let Some(stripped) = part.strip_prefix("https=") {
-                chosen = stripped;
+            let lower = part.to_ascii_lowercase();
+            if lower.starts_with("https=") {
+                chosen = &part[6..];
+                default_scheme = "http";
                 break;
-            } else if let Some(stripped) = part.strip_prefix("http=") {
-                chosen = stripped;
+            } else if lower.starts_with("http=") {
+                chosen = &part[5..];
+                default_scheme = "http";
+            } else if lower.starts_with("socks=") || lower.starts_with("socks5=") {
+                if chosen.is_empty() {
+                    chosen = part.split_once('=').map(|(_, v)| v).unwrap_or("");
+                    default_scheme = "socks5";
+                }
             } else if chosen.is_empty() && part.contains('=') {
                 if let Some((_, val)) = part.split_once('=') {
                     chosen = val;
                 }
             }
         }
-        if chosen.is_empty() { raw } else { chosen }
+        if chosen.is_empty() { raw } else { chosen.trim().trim_end_matches('/') }
     } else {
         raw
     };
 
-    if target.starts_with("http://") || target.starts_with("https://") || target.starts_with("socks5://") {
-        target.to_string()
-    } else {
-        format!("http://{}", target)
+    let lower_target = target.to_ascii_lowercase();
+    for scheme in ["http://", "https://", "socks5://", "socks5h://", "socks4://", "socks4a://"] {
+        if lower_target.starts_with(scheme) {
+            return format!("{}{}", scheme, &target[scheme.len()..]);
+        }
+    }
+    format!("{}://{}", default_scheme, target)
+}
+
+/// 从代理 URL 或注册表代理串中提取可供 `ToSocketAddrs` 解析的 `host:port`
+/// 兼容 `user:pass@host:port`、IPv6 `[::1]:7890`、尾部斜杠 `/path` 以及省略默认端口的写法
+pub fn extract_proxy_host_port(proxy_str: &str) -> Option<String> {
+    let trimmed = proxy_str.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let url = parse_proxy_to_url(trimmed);
+    let (scheme, rest) = url.split_once("://")?;
+    let default_port: u16 = match scheme {
+        "https" => 443,
+        s if s.starts_with("socks") => 1080,
+        _ => 80,
+    };
+
+    // 剥离路径、查询参数与 Fragment
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if authority.is_empty() {
+        return None;
+    }
+
+    // 剥离 user:pass@ 认证前缀（取最后一个 @ 之后的 host[:port]）
+    let host_port = match authority.rfind('@') {
+        Some(idx) => &authority[idx + 1..],
+        None => authority,
+    };
+    if host_port.is_empty() {
+        return None;
+    }
+
+    // IPv6 字面量：[::1]:7890 或 [::1]
+    if host_port.starts_with('[') {
+        if let Some(close_idx) = host_port.find(']') {
+            let after_bracket = &host_port[close_idx + 1..];
+            if after_bracket.starts_with(':') && after_bracket.len() > 1 {
+                return Some(host_port.to_string());
+            } else if after_bracket.is_empty() {
+                return Some(format!("{}:{}", host_port, default_port));
+            } else {
+                return None;
+            }
+        }
+        return None;
+    }
+
+    // IPv4 或域名：host:port 或 host
+    if let Some((_, port_str)) = host_port.rsplit_once(':') {
+        if !port_str.is_empty() && port_str.chars().all(|c| c.is_ascii_digit()) {
+            return Some(host_port.to_string());
+        }
+    }
+    Some(format!("{}:{}", host_port, default_port))
+}
+
+/// 全局网络与重试配置（由设置中心驱动，线程安全热更新）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkConfig {
+    /// 代理模式："system" (跟随系统) | "direct" (不使用代理) | "manual" (手动代理)
+    pub proxy_mode: String,
+    /// 手动代理地址，如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
+    pub proxy_url: Option<String>,
+    /// 国内服务直连绕过代理（百度/有道/腾讯/DeepSeek/硅基流动等不走代理）
+    pub proxy_bypass_domestic: bool,
+    /// 重试策略预设："none" | "fast" | "balanced" | "resilient"
+    pub retry_preset: String,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            proxy_mode: "system".to_string(),
+            proxy_url: None,
+            proxy_bypass_domestic: true,
+            retry_preset: "balanced".to_string(),
+        }
     }
 }
 
-/// 用户在设置中心手动指定的代理（如 http://127.0.0.1:7890）。
-/// 优先级高于系统代理自动探测；None 表示未启用，回落自动探测。
-static MANUAL_PROXY: RwLock<Option<String>> = RwLock::new(None);
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RetryPolicy {
+    pub max_retries: u32,
+    pub base_delay_ms: u64,
+    pub timeout_multiplier: f64,
+}
 
+pub fn retry_policy_for_preset(preset: &str) -> RetryPolicy {
+    match preset.trim().to_lowercase().as_str() {
+        "none" | "off" | "0" => RetryPolicy {
+            max_retries: 0,
+            base_delay_ms: 0,
+            timeout_multiplier: 1.0,
+        },
+        "fast" | "quick" => RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 300,
+            timeout_multiplier: 1.0,
+        },
+        "resilient" | "aggressive" | "strong" => RetryPolicy {
+            max_retries: 3,
+            base_delay_ms: 800,
+            timeout_multiplier: 1.5,
+        },
+        _ => RetryPolicy {
+            max_retries: 2,
+            base_delay_ms: 500,
+            timeout_multiplier: 1.0,
+        },
+    }
+}
+
+static NETWORK_CONFIG: OnceLock<RwLock<NetworkConfig>> = OnceLock::new();
+
+fn network_config_lock() -> &'static RwLock<NetworkConfig> {
+    NETWORK_CONFIG.get_or_init(|| RwLock::new(NetworkConfig::default()))
+}
+
+pub fn get_network_config() -> NetworkConfig {
+    network_config_lock()
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_default()
+}
+
+pub fn set_network_config(config: NetworkConfig) {
+    if let Ok(mut lock) = network_config_lock().write() {
+        *lock = config;
+    }
+    if let Some(pipeline) = SHARED_PIPELINE.get() {
+        pipeline.refresh_client();
+    }
+}
+
+pub fn set_network_config_from_settings(settings: &crate::models::AppSettings) {
+    let proxy_mode = match settings.proxy_mode.as_deref().map(|s| s.trim().to_lowercase()) {
+        Some(m) if m == "direct" || m == "manual" || m == "system" => m,
+        _ => {
+            if settings.proxy_enabled.unwrap_or(false) {
+                "manual".to_string()
+            } else {
+                "system".to_string()
+            }
+        }
+    };
+    let proxy_url = settings
+        .proxy_url
+        .clone()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let proxy_bypass_domestic = settings.proxy_bypass_domestic.unwrap_or(true);
+    let retry_preset = settings
+        .retry_preset
+        .as_deref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "balanced".to_string());
+
+    set_network_config(NetworkConfig {
+        proxy_mode,
+        proxy_url,
+        proxy_bypass_domestic,
+        retry_preset,
+    });
+}
+
+/// 兼容旧接口：单独设置手动代理
 pub fn set_manual_proxy(proxy_url: Option<String>) {
-    if let Ok(mut lock) = MANUAL_PROXY.write() {
-        *lock = proxy_url.filter(|s| !s.trim().is_empty());
+    let cleaned = proxy_url
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Ok(mut lock) = network_config_lock().write() {
+        if let Some(url) = cleaned {
+            lock.proxy_mode = "manual".to_string();
+            lock.proxy_url = Some(url);
+        } else {
+            lock.proxy_mode = "system".to_string();
+            lock.proxy_url = None;
+        }
+    }
+    if let Some(pipeline) = SHARED_PIPELINE.get() {
+        pipeline.refresh_client();
     }
 }
 
-/// 手动代理 > 环境变量 (HTTPS_PROXY/HTTP_PROXY) > 系统注册表自动探测
+pub fn current_retry_policy() -> RetryPolicy {
+    let cfg = get_network_config();
+    retry_policy_for_preset(&cfg.retry_preset)
+}
+
+/// 生成 NoProxy 规则：始终绕过回环与局域网地址；开启国内分流时，百度/有道/腾讯/彩云/DeepSeek/硅基流动等国内接口直接走直连
+pub fn build_no_proxy_rule(bypass_domestic: bool) -> String {
+    const LOCAL_NO_PROXY: &str =
+        "localhost,127.0.0.1,::1,0.0.0.0,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.local";
+    const DOMESTIC_NO_PROXY: &str = ".cn,.baidu.com,fanyi.baidu.com,fanyi-api.baidu.com,aip.baidubce.com,qianfan.baidubce.com,.youdao.com,fanyi.youdao.com,openapi.youdao.com,dict.youdao.com,.qq.com,fanyi.qq.com,.tencentcloudapi.com,tmt.tencentcloudapi.com,.myqcloud.com,.caiyunai.com,api.interpreter.caiyunai.com,cn.bing.com,.deepseek.com,api.deepseek.com,.siliconflow.cn,api.siliconflow.cn,.bigmodel.cn,open.bigmodel.cn,.aliyuncs.com,dashscope.aliyuncs.com,.moonshot.cn,api.moonshot.cn,.volces.com,ark.cn-beijing.volces.com,.volcengineapi.com,translate.volcengineapi.com,.xfyun.cn,.baichuan-ai.com,.01.ai,.minimaxi.com,.jiangguoyun.com,dav.jiangguoyun.com";
+    if bypass_domestic {
+        format!("{},{}", LOCAL_NO_PROXY, DOMESTIC_NO_PROXY)
+    } else {
+        LOCAL_NO_PROXY.to_string()
+    }
+}
+
+/// 根据当前代理模式计算实际生效的代理地址：
+/// - "direct": 强制不使用代理 -> None
+/// - "manual": 使用用户配置的手动代理地址
+/// - "system": 环境变量 (HTTPS_PROXY/HTTP_PROXY) > Windows 注册表自动探测与存活探针
 pub fn effective_proxy() -> Option<String> {
-    if let Ok(lock) = MANUAL_PROXY.read() {
-        if let Some(manual) = lock.as_ref() {
-            return Some(manual.clone());
+    let cfg = get_network_config();
+    match cfg.proxy_mode.as_str() {
+        "direct" => None,
+        "manual" => cfg.proxy_url.filter(|s| !s.trim().is_empty()),
+        _ => {
+            if let Ok(p) = std::env::var("HTTPS_PROXY")
+                .or_else(|_| std::env::var("https_proxy"))
+                .or_else(|_| std::env::var("HTTP_PROXY"))
+                .or_else(|_| std::env::var("http_proxy"))
+                .or_else(|_| std::env::var("ALL_PROXY"))
+                .or_else(|_| std::env::var("all_proxy"))
+            {
+                let trimmed = p.trim();
+                if !trimmed.is_empty() && is_proxy_alive(trimmed, 800) {
+                    return Some(trimmed.to_string());
+                }
+            }
+            detect_windows_proxy()
         }
     }
-    // 检查环境变量代理
-    if let Ok(p) = std::env::var("HTTPS_PROXY")
-        .or_else(|_| std::env::var("https_proxy"))
-        .or_else(|_| std::env::var("HTTP_PROXY"))
-        .or_else(|_| std::env::var("http_proxy"))
-        .or_else(|_| std::env::var("ALL_PROXY"))
-        .or_else(|_| std::env::var("all_proxy"))
-    {
-        if !p.trim().is_empty() {
-            return Some(p.trim().to_string());
-        }
-    }
-    detect_windows_proxy()
 }
 
-/// 创建带系统代理自适应、Cookie Store 与标准 UA 的统一 reqwest Client
+/// 将统一代理与分流规则挂载到任意 reqwest::ClientBuilder
+pub fn apply_proxy_to_builder(mut builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    let cfg = get_network_config();
+    if cfg.proxy_mode == "direct" {
+        return builder.no_proxy();
+    }
+    if let Some(proxy_str) = effective_proxy() {
+        let proxy_url = parse_proxy_to_url(&proxy_str);
+        if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
+            let no_proxy_rule = build_no_proxy_rule(cfg.proxy_bypass_domestic);
+            let proxy = proxy.no_proxy(reqwest::NoProxy::from_string(&no_proxy_rule));
+            builder = builder.proxy(proxy);
+            return builder;
+        }
+    }
+    // 未检测到活动代理或已判定系统幽灵代理失效时，强制禁用 reqwest 内部默认系统代理，避免幽灵代理死锁
+    builder.no_proxy()
+}
+
+/// 创建带三态代理策略、国内直连分流、重试超时自适应、Cookie Store 与标准 UA 的统一 reqwest Client
 pub fn create_http_client(timeout_ms: u64) -> Client {
-    let timeout_val = timeout_ms.clamp(1200, 30000);
-    let mut builder = Client::builder()
-        .connect_timeout(Duration::from_millis(1500))
+    let policy = current_retry_policy();
+    let scaled_timeout = ((timeout_ms as f64) * policy.timeout_multiplier) as u64;
+    let timeout_val = scaled_timeout.clamp(1000, 600_000);
+    let connect_timeout_ms = ((1800.0 * policy.timeout_multiplier) as u64).clamp(1200, 15000);
+
+    let builder = Client::builder()
+        .connect_timeout(Duration::from_millis(connect_timeout_ms))
         .timeout(Duration::from_millis(timeout_val))
         .cookie_store(true)
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
 
-    if let Some(proxy_str) = effective_proxy() {
-        let proxy_url = parse_proxy_to_url(&proxy_str);
-        if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
-            let proxy = proxy.no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.1,::1,0.0.0.0"));
-            builder = builder.proxy(proxy);
+    let builder = apply_proxy_to_builder(builder);
+    builder.build().unwrap_or_else(|_| Client::new())
+}
+
+/// 统一带指数退避重试的 HTTP 请求发送器：
+/// 根据当前 RetryPreset 自动对连接失败、超时及 HTTP 429 / 502 / 503 / 504 进行退避重连
+pub async fn send_request_with_retry<F>(build_req: F) -> Result<reqwest::Response, reqwest::Error>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    let policy = current_retry_policy();
+    let mut attempt: u32 = 0;
+    loop {
+        match build_req().send().await {
+            Ok(resp) => {
+                let code = resp.status().as_u16();
+                let should_retry_status = matches!(code, 429 | 502 | 503 | 504);
+                if should_retry_status && attempt < policy.max_retries {
+                    let delay = policy.base_delay_ms.saturating_mul(1u64 << attempt.min(4));
+                    if delay > 0 {
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                    }
+                    attempt += 1;
+                    continue;
+                }
+                return Ok(resp);
+            }
+            Err(err) => {
+                let is_transient = err.is_timeout() || err.is_connect() || err.is_request();
+                if is_transient && attempt < policy.max_retries {
+                    let delay = policy.base_delay_ms.saturating_mul(1u64 << attempt.min(4));
+                    if delay > 0 {
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                    }
+                    attempt += 1;
+                    continue;
+                }
+                return Err(err);
+            }
         }
     }
-
-    builder.build().unwrap_or_else(|_| Client::new())
 }
 
 /// Extra directive appended to LLM prompts per user-selected translation style:
@@ -780,7 +1047,7 @@ pub struct OnlineCredentials {
 
 pub struct MultiTierPipeline {
     pub cache: TranslationCache,
-    pub client: Client,
+    pub client: std::sync::RwLock<Client>,
     pub credentials: std::sync::RwLock<OnlineCredentials>,
 }
 
@@ -792,7 +1059,6 @@ impl Default for MultiTierPipeline {
 
 impl MultiTierPipeline {
     pub fn new() -> Self {
-        let client = create_http_client(5000);
         let mut initial_creds = OnlineCredentials::default();
         if let Ok(app_data) = std::env::var("APPDATA") {
             let settings_file = std::path::PathBuf::from(app_data)
@@ -812,10 +1078,25 @@ impl MultiTierPipeline {
                 }
             }
         }
+        let client = create_http_client(5000);
         Self {
             cache: TranslationCache::new(),
-            client,
+            client: std::sync::RwLock::new(client),
             credentials: std::sync::RwLock::new(initial_creds),
+        }
+    }
+
+    pub fn client(&self) -> Client {
+        self.client
+            .read()
+            .map(|c| c.clone())
+            .unwrap_or_else(|_| create_http_client(5000))
+    }
+
+    pub fn refresh_client(&self) {
+        let rebuilt = create_http_client(5000);
+        if let Ok(mut lock) = self.client.write() {
+            *lock = rebuilt;
         }
     }
 
@@ -1116,13 +1397,14 @@ impl MultiTierPipeline {
 
         // Step 4: Tier 4 (Online Fallback API) — batch multiline fast-path + parallel fallback / specific engine query.
         let mut online_results: HashMap<usize, (String, String)> = HashMap::new();
+        let active_client = self.client();
         let p_lower = preset.to_lowercase();
         if !unmatched_indices.is_empty() {
             match p_lower.as_str() {
                 "google" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_google(&self.client, p, actual_source, actual_target).await {
+                        if let Some(tr) = translate_google(&active_client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "Google 官方".to_string()));
                         }
                     }
@@ -1130,7 +1412,7 @@ impl MultiTierPipeline {
                 "bing" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_bing(&self.client, p, actual_source, actual_target).await {
+                        if let Some(tr) = translate_bing(&active_client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "微软 Bing".to_string()));
                         }
                     }
@@ -1138,7 +1420,7 @@ impl MultiTierPipeline {
                 "youdao" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_youdao(&self.client, p, actual_source, actual_target).await {
+                        if let Some(tr) = translate_youdao(&active_client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "网易有道".to_string()));
                         }
                     }
@@ -1146,7 +1428,7 @@ impl MultiTierPipeline {
                 "tencent" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_tencent(&self.client, p, actual_source, actual_target).await {
+                        if let Some(tr) = translate_tencent(&active_client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "腾讯翻译".to_string()));
                         }
                     }
@@ -1155,7 +1437,7 @@ impl MultiTierPipeline {
                     let creds = self.get_credentials();
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        let tr = translate_deepl(&self.client, p, actual_source, actual_target, creds.deepl_api_key.as_deref(), creds.deepl_custom_url.as_deref()).await;
+                        let tr = translate_deepl(&active_client, p, actual_source, actual_target, creds.deepl_api_key.as_deref(), creds.deepl_custom_url.as_deref()).await;
                         if !tr.translated.is_empty() {
                             online_results.insert(idx, (tr.translated, "DeepL 翻译".to_string()));
                         }
@@ -1165,7 +1447,7 @@ impl MultiTierPipeline {
                     let creds = self.get_credentials();
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        let tr = translate_baidu(&self.client, p, actual_source, actual_target, creds.baidu_app_id.as_deref(), creds.baidu_secret.as_deref()).await;
+                        let tr = translate_baidu(&active_client, p, actual_source, actual_target, creds.baidu_app_id.as_deref(), creds.baidu_secret.as_deref()).await;
                         if !tr.translated.is_empty() {
                             online_results.insert(idx, (tr.translated, "百度翻译".to_string()));
                         }
@@ -1176,7 +1458,7 @@ impl MultiTierPipeline {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
                         let tr = translate_baidu_llm(
-                            &self.client,
+                            &active_client,
                             p,
                             actual_source,
                             actual_target,
@@ -1192,7 +1474,7 @@ impl MultiTierPipeline {
                 "caiyun" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_caiyun(&self.client, p, actual_source, actual_target).await {
+                        if let Some(tr) = translate_caiyun(&active_client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "彩云小译".to_string()));
                         }
                     }
@@ -1201,7 +1483,7 @@ impl MultiTierPipeline {
                     let creds = self.get_credentials();
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        let tr = translate_volcengine(&self.client, p, actual_source, actual_target, creds.volcengine_access_key.as_deref(), creds.volcengine_secret_key.as_deref()).await;
+                        let tr = translate_volcengine(&active_client, p, actual_source, actual_target, creds.volcengine_access_key.as_deref(), creds.volcengine_secret_key.as_deref()).await;
                         if !tr.translated.is_empty() {
                             online_results.insert(idx, (tr.translated, "火山翻译".to_string()));
                         }
@@ -1210,7 +1492,7 @@ impl MultiTierPipeline {
                 "lingva" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_lingva(&self.client, p, actual_source, actual_target).await {
+                        if let Some(tr) = translate_lingva(&active_client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "Lingva".to_string()));
                         }
                     }
@@ -1218,7 +1500,7 @@ impl MultiTierPipeline {
                 "mymemory" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_mymemory(&self.client, p, actual_source, actual_target).await {
+                        if let Some(tr) = translate_mymemory(&active_client, p, actual_source, actual_target).await {
                             online_results.insert(idx, (tr, "MyMemory".to_string()));
                         }
                     }
@@ -1226,7 +1508,7 @@ impl MultiTierPipeline {
                 "urban" => {
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        if let Some(tr) = translate_urban_dictionary(&self.client, p).await {
+                        if let Some(tr) = translate_urban_dictionary(&active_client, p).await {
                             online_results.insert(idx, (tr, "Urban 俚语".to_string()));
                         }
                     }
@@ -1235,7 +1517,7 @@ impl MultiTierPipeline {
                     let creds = self.get_credentials();
                     for &idx in &unmatched_indices {
                         let p = phrases[idx].trim();
-                        let tr = translate_yandex(&self.client, p, actual_source, actual_target, creds.yandex_api_key.as_deref(), creds.yandex_folder_id.as_deref()).await;
+                        let tr = translate_yandex(&active_client, p, actual_source, actual_target, creds.yandex_api_key.as_deref(), creds.yandex_folder_id.as_deref()).await;
                         if !tr.translated.is_empty() {
                             online_results.insert(idx, (tr.translated, "Yandex".to_string()));
                         }
@@ -1251,7 +1533,7 @@ impl MultiTierPipeline {
                             .map(|&idx| phrases[idx].trim())
                             .collect::<Vec<_>>()
                             .join("\n");
-                        if let Ok(translated_joined) = translate_online_fallback_with_lang(&self.client, &joined_text, actual_source, actual_target).await {
+                        if let Ok(translated_joined) = translate_online_fallback_with_lang(&active_client, &joined_text, actual_source, actual_target).await {
                             let split_lines: Vec<&str> = translated_joined.lines().collect();
                             if split_lines.len() == unmatched_indices.len() {
                                 for (i, &idx) in unmatched_indices.iter().enumerate() {
@@ -1281,7 +1563,7 @@ impl MultiTierPipeline {
 
                         for idx in remaining_indices {
                             let p = phrases[idx].trim().to_string();
-                            let client = self.client.clone();
+                            let client = active_client.clone();
                             let permits = semaphore.clone();
                             let src = actual_source.to_string();
                             let tgt = actual_target.to_string();
@@ -1314,7 +1596,7 @@ impl MultiTierPipeline {
                     && phrases[idx].chars().any(|c| c.is_alphabetic() || ('\u{4E00}'..='\u{9FFF}').contains(&c));
 
                 if is_untranslated {
-                    if let Ok(fallback_tr) = translate_online_fallback_with_lang(&self.client, phrases[idx].trim(), actual_source, actual_target).await {
+                    if let Ok(fallback_tr) = translate_online_fallback_with_lang(&active_client, phrases[idx].trim(), actual_source, actual_target).await {
                         if !fallback_tr.trim().eq_ignore_ascii_case(phrases[idx].trim()) {
                             let res = TranslationResult {
                                 original: phrases[idx].clone(),
@@ -1345,7 +1627,7 @@ impl MultiTierPipeline {
             let mut final_unmatched = Vec::new();
             for idx in still_unmatched {
                 let p = phrases[idx].trim();
-                if let Ok(fallback_tr) = translate_online_fallback_with_lang(&self.client, p, actual_source, actual_target).await {
+                if let Ok(fallback_tr) = translate_online_fallback_with_lang(&active_client, p, actual_source, actual_target).await {
                     let res = TranslationResult {
                         original: phrases[idx].clone(),
                         translated: fallback_tr,
@@ -1437,18 +1719,27 @@ impl MultiTierPipeline {
             ],
             "temperature": 0.1
         });
-        let mut req = self.client.post(&url).json(&body);
-        if !config.api_key.is_empty() {
-            req = req.header("Authorization", format!("Bearer {}", config.api_key));
-        }
+        let active_client = self.client();
+        let api_key = config.api_key.clone();
+        let url_clone = url.clone();
+        let body_clone = body.clone();
+        let build_batch_req = move || {
+            let mut r = active_client.post(&url_clone).json(&body_clone);
+            if !api_key.is_empty() {
+                r = r.header("Authorization", format!("Bearer {}", api_key));
+            }
+            r
+        };
 
         // 批量行数越多，非流式生成的耗时越长：固定 4s 会让几十行的大批量整包
         // 超时塌落到逐行在线兜底（更慢且质量更差）。按 4s 基础 + 每行 400ms 缩放，
-        // 上限 24s。
-        let llm_timeout = Duration::from_secs(
-            (4u64 + (phrases.len() as u64) * 400 / 1000).min(24)
-        );
-        let res = tokio::time::timeout(llm_timeout, req.send())
+        // 上限 24s，并叠加当前 RetryPolicy 的 timeout_multiplier 与重试窗口。
+        let policy = current_retry_policy();
+        let base_secs = (4u64 + (phrases.len() as u64) * 400 / 1000).min(24);
+        let scaled_ms = ((base_secs as f64 * 1000.0 * policy.timeout_multiplier) as u64)
+            + (policy.max_retries as u64) * policy.base_delay_ms;
+        let llm_timeout = Duration::from_millis(scaled_ms.clamp(4000, 45_000));
+        let res = tokio::time::timeout(llm_timeout, send_request_with_retry(build_batch_req))
             .await
             .map_err(|_| "LLM request timed out".to_string())?
             .map_err(|e| format!("LLM network error: {}", e))?;
@@ -1482,7 +1773,8 @@ impl MultiTierPipeline {
     }
 
     pub async fn translate_via_online_fallback(&self, phrase: &str) -> Result<String, String> {
-        translate_online_fallback_with(&self.client, phrase).await
+        let client = self.client();
+        translate_online_fallback_with(&client, phrase).await
     }
 
     pub async fn query_text_detail(
@@ -1970,8 +2262,12 @@ pub async fn translate_google(client: &Client, q: &str, src: &str, tgt: &str) ->
         "https://translate.googleapis.com/translate_a/t?client=dict-chrome-ex&sl={}&tl={}&q={}",
         clean_src, clean_tgt, encoded
     );
-    let req1 = client.get(&chrome_url);
-    if let Ok(Ok(res)) = tokio::time::timeout(Duration::from_millis(4000), req1.send()).await {
+    if let Ok(Ok(res)) = tokio::time::timeout(
+        Duration::from_millis(4000),
+        send_request_with_retry(|| client.get(&chrome_url)),
+    )
+    .await
+    {
         if res.status().is_success() {
             if let Ok(json) = res.json::<serde_json::Value>().await {
                 if let Some(arr) = json.as_array() {
@@ -1998,8 +2294,12 @@ pub async fn translate_google(client: &Client, q: &str, src: &str, tgt: &str) ->
         "https://translate.googleapis.com/translate_a/single?client=gtx&sl={}&tl={}&dt=t&q={}",
         clean_src, clean_tgt, encoded
     );
-    let req2 = client.get(&gtx_url);
-    if let Ok(Ok(res)) = tokio::time::timeout(Duration::from_millis(3000), req2.send()).await {
+    if let Ok(Ok(res)) = tokio::time::timeout(
+        Duration::from_millis(3000),
+        send_request_with_retry(|| client.get(&gtx_url)),
+    )
+    .await
+    {
         if res.status().is_success() {
             if let Ok(json) = res.json::<serde_json::Value>().await {
                 if let Some(arr) = json.as_array().and_then(|a| a.first()).and_then(|a| a.as_array()) {
@@ -2687,11 +2987,17 @@ pub async fn translate_tencent(client: &Client, q: &str, _src: &str, tgt: &str) 
         },
         "target": { "lang": clean_tgt }
     });
-    let req = client
-        .post("https://transmart.qq.com/api/imt")
-        .header("Content-Type", "application/json")
-        .json(&body);
-    if let Ok(Ok(res)) = tokio::time::timeout(Duration::from_millis(2500), req.send()).await {
+    if let Ok(Ok(res)) = tokio::time::timeout(
+        Duration::from_millis(2500),
+        send_request_with_retry(|| {
+            client
+                .post("https://transmart.qq.com/api/imt")
+                .header("Content-Type", "application/json")
+                .json(&body)
+        }),
+    )
+    .await
+    {
         if res.status().is_success() {
             if let Ok(json) = res.json::<serde_json::Value>().await {
                 if let Some(trans) = json
@@ -2767,13 +3073,18 @@ pub async fn translate_caiyun(
         "detect": true
     });
 
-    let req = client
-        .post("http://api.interpreter.caiyunai.com/v1/translator")
-        .header("Content-Type", "application/json")
-        .header("X-Authorization", "token 3975l6lr5pcbvidl6jl2")
-        .json(&body);
-
-    if let Ok(Ok(res)) = tokio::time::timeout(Duration::from_millis(3500), req.send()).await {
+    if let Ok(Ok(res)) = tokio::time::timeout(
+        Duration::from_millis(3500),
+        send_request_with_retry(|| {
+            client
+                .post("http://api.interpreter.caiyunai.com/v1/translator")
+                .header("Content-Type", "application/json")
+                .header("X-Authorization", "token 3975l6lr5pcbvidl6jl2")
+                .json(&body)
+        }),
+    )
+    .await
+    {
         if res.status().is_success() {
             if let Ok(json) = res.json::<serde_json::Value>().await {
                 if let Some(text) = json
@@ -3200,24 +3511,6 @@ pub async fn translate_with_llm(
         }
 
         let is_native_gemini_endpoint = final_url.contains(":generateContent");
-        let mut req = client.post(&final_url);
-        if !api_key.is_empty() {
-            if is_native_gemini_endpoint {
-                // 原生 Gemini :generateContent 严禁附带 OAuth2 Bearer 头，否则会被 Google 网关报 401 ACCESS_TOKEN_TYPE_UNSUPPORTED
-                req = req
-                    .header("x-goog-api-key", &api_key)
-                    .header("api-key", &api_key);
-            } else {
-                // OpenAI 兼容端点（如 /chat/completions 或 Cloudflare AI Gateway）必须附带 Authorization: Bearer
-                req = req
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .header("api-key", &api_key);
-                if is_google_gemini {
-                    req = req.header("x-goog-api-key", &api_key);
-                }
-            }
-        }
-
         let body = if is_native_gemini_endpoint {
             serde_json::json!({
                 "contents": [
@@ -3244,7 +3537,26 @@ pub async fn translate_with_llm(
             b
         };
 
-        if let Ok(Ok(res)) = tokio::time::timeout(Duration::from_millis(15000), req.json(&body).send()).await {
+        let build_llm_req = || {
+            let mut req = client.post(&final_url);
+            if !api_key.is_empty() {
+                if is_native_gemini_endpoint {
+                    req = req
+                        .header("x-goog-api-key", &api_key)
+                        .header("api-key", &api_key);
+                } else {
+                    req = req
+                        .header("Authorization", format!("Bearer {}", api_key))
+                        .header("api-key", &api_key);
+                    if is_google_gemini {
+                        req = req.header("x-goog-api-key", &api_key);
+                    }
+                }
+            }
+            req.json(&body)
+        };
+
+        if let Ok(Ok(res)) = tokio::time::timeout(Duration::from_millis(18000), send_request_with_retry(build_llm_req)).await {
             let status = res.status();
             last_status_code = status.as_u16();
 
@@ -4265,9 +4577,15 @@ pub async fn translate_online_fallback_with_lang(
         Err("Online translation fallback failed".to_string())
     };
 
-    match tokio::time::timeout(std::time::Duration::from_millis(2500), race_fut).await {
+    let policy = current_retry_policy();
+    let race_timeout_ms = ((2500.0 * policy.timeout_multiplier) as u64)
+        + (policy.max_retries as u64) * policy.base_delay_ms;
+    match tokio::time::timeout(std::time::Duration::from_millis(race_timeout_ms), race_fut).await {
         Ok(res) => res,
-        Err(_) => Err("Online translation fallback timed out (2500ms)".to_string()),
+        Err(_) => Err(format!(
+            "Online translation fallback timed out ({}ms)",
+            race_timeout_ms
+        )),
     }
 }
 
@@ -5410,6 +5728,111 @@ Here is my thought process:
         ).await;
         assert_eq!(res_ja2[0].translated, "カスタム用語");
         assert!(res_ja2[0].source_tier.contains("Cached"));
+    }
+
+    #[test]
+    fn test_network_config_proxy_modes_and_retry_presets() {
+        // 1. 重试预设策略映射测试
+        let p_none = retry_policy_for_preset("none");
+        assert_eq!(p_none.max_retries, 0);
+        assert_eq!(p_none.base_delay_ms, 0);
+
+        let p_fast = retry_policy_for_preset("fast");
+        assert_eq!(p_fast.max_retries, 1);
+        assert_eq!(p_fast.base_delay_ms, 300);
+
+        let p_balanced = retry_policy_for_preset("balanced");
+        assert_eq!(p_balanced.max_retries, 2);
+        assert_eq!(p_balanced.base_delay_ms, 500);
+
+        let p_resilient = retry_policy_for_preset("resilient");
+        assert_eq!(p_resilient.max_retries, 3);
+        assert_eq!(p_resilient.base_delay_ms, 800);
+        assert!((p_resilient.timeout_multiplier - 1.5).abs() < 1e-6);
+
+        // 2. 国内服务直连绕过规则生成测试
+        let rule_bypass = build_no_proxy_rule(true);
+        assert!(rule_bypass.contains("localhost"));
+        assert!(rule_bypass.contains(".baidu.com"));
+        assert!(rule_bypass.contains("api.deepseek.com"));
+        assert!(rule_bypass.contains("api.siliconflow.cn"));
+        assert!(rule_bypass.contains("cn.bing.com"));
+
+        let rule_local_only = build_no_proxy_rule(false);
+        assert!(rule_local_only.contains("localhost"));
+        assert!(!rule_local_only.contains("api.deepseek.com"));
+
+        // 3. 三态代理模式状态转换与向后兼容测试
+        let mut s = crate::models::AppSettings::default();
+        s.proxy_mode = Some("direct".to_string());
+        s.proxy_enabled = Some(true);
+        s.proxy_url = Some("http://127.0.0.1:7890".to_string());
+        set_network_config_from_settings(&s);
+        assert_eq!(get_network_config().proxy_mode, "direct");
+        assert_eq!(effective_proxy(), None, "direct 模式下即使填了 proxy_url 也必须返回 None");
+
+        s.proxy_mode = Some("manual".to_string());
+        s.proxy_url = Some("http://127.0.0.1:7890".to_string());
+        s.proxy_bypass_domestic = Some(false);
+        s.retry_preset = Some("resilient".to_string());
+        set_network_config_from_settings(&s);
+        let cfg = get_network_config();
+        assert_eq!(cfg.proxy_mode, "manual");
+        assert_eq!(cfg.proxy_bypass_domestic, false);
+        assert_eq!(cfg.retry_preset, "resilient");
+        assert_eq!(effective_proxy(), Some("http://127.0.0.1:7890".to_string()));
+
+        // 旧配置向后兼容：proxy_mode 为 None 且 proxy_enabled = true 时自动识别为 manual
+        s.proxy_mode = None;
+        s.proxy_enabled = Some(true);
+        s.proxy_url = Some("socks5://127.0.0.1:1080".to_string());
+        set_network_config_from_settings(&s);
+        assert_eq!(get_network_config().proxy_mode, "manual");
+        assert_eq!(effective_proxy(), Some("socks5://127.0.0.1:1080".to_string()));
+
+        // 4. 代理 URL 规范化与 TCP 探活 host:port 提取边界测试（含 user:pass@、IPv6、socks5h、注册表 socks=、尾部斜杠）
+        assert_eq!(
+            parse_proxy_to_url("socks5h://127.0.0.1:1080/"),
+            "socks5h://127.0.0.1:1080"
+        );
+        assert_eq!(
+            parse_proxy_to_url("HTTP://user:pass@127.0.0.1:7890/"),
+            "http://user:pass@127.0.0.1:7890"
+        );
+        assert_eq!(
+            parse_proxy_to_url("socks=127.0.0.1:1080"),
+            "socks5://127.0.0.1:1080"
+        );
+        assert_eq!(
+            extract_proxy_host_port("http://user:p@ss@127.0.0.1:7890/path?x=1"),
+            Some("127.0.0.1:7890".to_string())
+        );
+        assert_eq!(
+            extract_proxy_host_port("socks5h://admin:123456@[::1]:1080/"),
+            Some("[::1]:1080".to_string())
+        );
+        assert_eq!(
+            extract_proxy_host_port("http://[::1]"),
+            Some("[::1]:80".to_string())
+        );
+        assert_eq!(
+            extract_proxy_host_port("socks5://127.0.0.1"),
+            Some("127.0.0.1:1080".to_string())
+        );
+        assert_eq!(extract_proxy_host_port("   "), None);
+
+        // 5. 验证 shared_pipeline().client() 在 set_network_config 更新时可安全热刷新
+        let _initial_client = shared_pipeline().client();
+        set_network_config(NetworkConfig {
+            proxy_mode: "direct".to_string(),
+            proxy_url: None,
+            proxy_bypass_domestic: true,
+            retry_preset: "fast".to_string(),
+        });
+        let _refreshed_client = shared_pipeline().client();
+
+        // 恢复默认 system 状态
+        set_network_config(NetworkConfig::default());
     }
 }
 

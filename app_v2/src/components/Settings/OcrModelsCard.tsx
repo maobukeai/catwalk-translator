@@ -224,7 +224,12 @@ export const OcrModelsCard: React.FC = () => {
   const handleSwitchVersion = async (version: OcrVersion) => {
     setError(null);
     try {
-      await cmdSwitchOcrVersion(version);
+      const switched = await cmdSwitchOcrVersion(version);
+      if (!switched) {
+        setError(`PP-OCR${version.toUpperCase()} 模型未完整安装，请先下载该版本的检测与识别模型。`);
+        await refresh();
+        return;
+      }
       setActiveVersion(version);
       setOcrVersion(version);
       await refresh();

@@ -48,6 +48,8 @@ pub async fn cmd_network_diagnose(
         .map_err(|e| format!("锁定设置失败: {}", e))?
         .clone();
 
+    crate::translator::set_network_config_from_settings(&settings);
+    let net_cfg = crate::translator::get_network_config();
     let client = crate::translator::create_http_client(6000);
 
     let mut probes: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = DiagItem> + Send>>> =
@@ -111,17 +113,91 @@ pub async fn cmd_network_diagnose(
 
     let mut items = futures_util::future::join_all(probes).await;
 
-    // 代理链路信息（手动代理优先，其次系统代理）
-    let proxy_detail = crate::translator::effective_proxy()
-        .map(|p| format!("经代理: {}", p))
-        .unwrap_or_else(|| "直连（未检测到系统代理）".to_string());
+    // 代理链路信息（支持跟随系统 / 不使用代理 / 手动代理 + 国内服务直连绕过）
+    let bypass_label = if net_cfg.proxy_bypass_domestic {
+        "国内直连分流: 开启"
+    } else {
+        "国内直连分流: 关闭"
+    };
+
+    let (proxy_ok, proxy_detail) = match net_cfg.proxy_mode.as_str() {
+        "direct" => (
+            true,
+            "不使用代理（已强制全局直连，忽略系统与环境代理）".to_string(),
+        ),
+        "manual" => {
+            if let Some(raw_url) = net_cfg.proxy_url.as_deref() {
+                let parsed = crate::translator::parse_proxy_to_url(raw_url);
+                let alive = crate::translator::extract_proxy_host_port(raw_url)
+                    .and_then(|host_port| {
+                        std::net::ToSocketAddrs::to_socket_addrs(&host_port.as_str())
+                            .ok()
+                            .and_then(|mut addrs| addrs.next())
+                    })
+                    .map(|addr| {
+                        std::net::TcpStream::connect_timeout(
+                            &addr,
+                            std::time::Duration::from_millis(1000),
+                        )
+                        .is_ok()
+                    })
+                    .unwrap_or(false);
+                if alive {
+                    (
+                        true,
+                        format!("手动代理: {} ({})", parsed, bypass_label),
+                    )
+                } else {
+                    (
+                        false,
+                        format!("手动代理端口不可达: {}（请检查代理客户端是否启动）", parsed),
+                    )
+                }
+            } else {
+                (
+                    false,
+                    "手动代理已开启但未填写代理服务器地址".to_string(),
+                )
+            }
+        }
+        _ => match crate::translator::effective_proxy() {
+            Some(p) => (
+                true,
+                format!("跟随系统: 经代理 {} ({})", p, bypass_label),
+            ),
+            None => (
+                true,
+                "跟随系统: 直连（未检测到活动系统代理）".to_string(),
+            ),
+        },
+    };
+
     items.push(DiagItem {
         name: "代理链路".into(),
+        kind: "proxy".into(),
+        ok: proxy_ok,
+        skipped: false,
+        latency_ms: 0,
+        detail: proxy_detail,
+    });
+
+    let policy = crate::translator::retry_policy_for_preset(&net_cfg.retry_preset);
+    let retry_label = match net_cfg.retry_preset.as_str() {
+        "none" => "不重试 (0 次重试 · 极速失败)".to_string(),
+        "fast" => format!("快速重试 (最多 {} 次 · {}ms 初始退避)", policy.max_retries, policy.base_delay_ms),
+        "resilient" | "aggressive" => format!(
+            "强力抗抖动 (最多 {} 次 · {}ms 指数退避 · 超时 {:.1}x)",
+            policy.max_retries, policy.base_delay_ms, policy.timeout_multiplier
+        ),
+        _ => format!("标准均衡 (最多 {} 次 · {}ms 指数退避)", policy.max_retries, policy.base_delay_ms),
+    };
+    items.push(DiagItem {
+        name: "重试策略".into(),
         kind: "proxy".into(),
         ok: true,
         skipped: false,
         latency_ms: 0,
-        detail: proxy_detail,
+        detail: retry_label,
     });
 
     Ok(items)

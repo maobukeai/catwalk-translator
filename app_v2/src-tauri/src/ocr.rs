@@ -475,7 +475,45 @@ pub(crate) fn clean_ocr_text(raw: &str) -> String {
             }
         cleaned.push(chars[i]);
     }
-    cleaned
+    // Conservative exact-token repairs for recurrent CJK glyph confusions in
+    // desktop UI fonts. These source forms are not normal interface words, so
+    // correcting them avoids poisoning both translation and cache keys without
+    // fuzzy-rewriting arbitrary user text.
+    let mut cleaned = cleaned
+        .replace("(末保存)", "(未保存)")
+        .replace("（末保存）", "（未保存）");
+    // Window icons are sometimes decoded as one stray glyph immediately before
+    // an "(unsaved) - application" title. Preserve the title, drop only that
+    // tiny prefix when the standard title-bar structure is present.
+    if cleaned.contains(" - ") {
+        if let Some(paren) = cleaned.find(|c| c == '(' || c == '（') {
+            if cleaned[..paren].chars().count() <= 2 {
+                cleaned = cleaned[paren..].to_string();
+            }
+        }
+    }
+    match cleaned.as_str() {
+        "若色" => "着色".to_string(),
+        "治染" | "沧染" => "渲染".to_string(),
+        "末保存" => "未保存".to_string(),
+        _ => cleaned,
+    }
+}
+
+#[cfg(test)]
+mod clean_text_tests {
+    use super::clean_ocr_text;
+
+    #[test]
+    fn repairs_conservative_common_ui_confusions() {
+        assert_eq!(clean_ocr_text("若色"), "着色");
+        assert_eq!(clean_ocr_text("沧染"), "渲染");
+        assert_eq!(
+            clean_ocr_text("à(末保存) - Blender 5.2.1 LTS"),
+            "(未保存) - Blender 5.2.1 LTS"
+        );
+        assert_eq!(clean_ocr_text("普通文本"), "普通文本");
+    }
 }
 
 /// Run OCR on a cropped BMP byte slice.
@@ -487,24 +525,10 @@ pub fn execute_native_ocr(crop_bmp_bytes: &[u8]) -> Result<OcrResult, String> {
 /// daemon 死亡后的重启重试有硬上限（1 次）。无上限的"重启即递归"会在
 /// daemon 持续秒退的环境（无 python / 脚本缺失）里无限递归直到栈溢出。
 fn execute_native_ocr_with_retry(crop_bmp_bytes: &[u8], restart_depth: u32) -> Result<OcrResult, String> {
-    // 0: Windows 平台首选 WinRT 原生超高速硬件引擎 (<20ms 毫秒级秒出)
-    #[cfg(target_os = "windows")]
-    {
-        match execute_winrt_ocr(crop_bmp_bytes) {
-            Ok(res) if !res.blocks.is_empty() => {
-                return Ok(res);
-            }
-            Ok(_) => {
-                eprintln!("[OCR] WinRT OCR 返回空结果，尝试 ONNX PP-OCR...");
-            }
-            Err(e) => {
-                eprintln!("[OCR] WinRT OCR 失败: {}，尝试 ONNX PP-OCR...", e);
-            }
-        }
-    }
-
-    // 1: Rust 原生 ONNX 引擎 (PP-OCR, 支持 DirectML GPU 显卡加速)
-    if onnx_available() {
+    // 0: Rust native ONNX first. The settings UI promises this order, and
+    // accepting the first non-empty WinRT result used to turn partial OCR into
+    // a false "complete" success with no chance for ONNX to recover missed rows.
+    if onnx_available() || crate::onnx_ocr::model_files_present() {
         let engine = crate::onnx_ocr::get_engine();
         match engine.recognize_bmp(crop_bmp_bytes) {
             Ok(res) if !res.blocks.is_empty() => {
@@ -518,6 +542,16 @@ fn execute_native_ocr_with_retry(crop_bmp_bytes: &[u8], restart_depth: u32) -> R
             Err(e) => {
                 eprintln!("[OCR] ONNX OCR 错误 ({})，降级 RapidOCR daemon...", e);
             }
+        }
+    }
+
+    // 1: Windows WinRT is the zero-model fallback.
+    #[cfg(target_os = "windows")]
+    {
+        match execute_winrt_ocr(crop_bmp_bytes) {
+            Ok(res) if !res.blocks.is_empty() => return Ok(res),
+            Ok(_) => eprintln!("[OCR] WinRT OCR 返回空结果，尝试 RapidOCR daemon..."),
+            Err(e) => eprintln!("[OCR] WinRT OCR 失败: {}，尝试 RapidOCR daemon...", e),
         }
     }
 

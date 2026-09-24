@@ -310,15 +310,15 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   // 识别阶段(显示原文)同样应用：原文字体被替换为应用字体后常比 OCR 框更宽，
   // 若不收缩会把卡片撑高、经 AABB 连锁推挤邻居，表现为「识别阶段排布凌乱」。
   // 多行块（original 含 \n）按最长一行估宽，避免按总长度过度缩小字号。
-  // 卡片最大宽度收紧到原文 1.15 倍;提前计算以便单行适配时用视口安全值
-  const cardMaxWidth = Math.min(
-    vw - pos.x - 20,
-    Math.max(Math.round(block.logicalW * 1.15 + 12), 120)
-  );
+  // 卡片宽度允许适度扩展，并始终钳制在当前视口内。
+  const cardMaxWidth = Math.max(40, Math.min(
+    Math.max(40, vw - pos.x - 20),
+    Math.max(Math.round(block.logicalW * 1.6 + 16), 120)
+  ));
   let targetFontSize = baseFontSize;
   // 原文单行 → 无条件锁定单行渲染(nowrap),不只限于触发了字号收缩的情况:
   // 未收缩分支下 canvas 度量稍有偏差也会在 maxWidth 处折行
-  const singleLineLock = lineCount === 1;
+  let singleLineLock = lineCount === 1;
   let estimatedWidth = 0;
   if (renderText) {
     const displayLines = renderText.split('\n').filter(Boolean);
@@ -344,10 +344,17 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
     if (estimatedWidth > allowedWidth) {
       if (lineCount === 1) {
         // 原文单行 → 译文强制单行自适应缩放,绝不折行。
-        // 3% 安全余量抵消字体度量误差,下限 6px(比原来 minSafe 门槛更激进,
-        // 避免长译文掉进"双行折行"分支把一行原文变成两行卡片)
+        // 3% 安全余量抵消字体度量误差。
         const fitSize = baseFontSize * (allowedWidth / estimatedWidth) * 0.97;
-        targetFontSize = Math.max(6, Math.min(baseFontSize, fitSize));
+        // Never trade readability for geometric purity. If a translation would
+        // need sub-9px text, allow it to wrap and let the AABB resolver move
+        // neighbours using the measured height.
+        if (fitSize < 9) {
+          singleLineLock = false;
+          targetFontSize = Math.max(9, Math.min(baseFontSize, baseFontSize * 0.72));
+        } else {
+          targetFontSize = Math.min(baseFontSize, fitSize);
+        }
       } else {
         // 多行原文:按双行预算分配,保留可读下限
         const minSafeFontSize = Math.max(8, singleLineH * 0.5);
@@ -357,12 +364,11 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
     }
   }
 
-  // 单行锁定时下限放到 6px,否则最终 Math.max(9) 会把算好的适配字号顶回去,
-  // 文字比 allowedWidth 宽照样换行——这正是"一行原文译成两行"的来源之一
+  // 所有模式统一保持 9px 可读下限；放不下时改为换行。
   const fontSize = Math.round(
-    Math.min(64, Math.max(singleLineLock ? 6 : 9, targetFontSize)) * scale
+    Math.min(64, Math.max(9, targetFontSize)) * scale
   );
-  // 卡片最大宽度收紧到原文 1.15 倍,译文不再明显超出原文区域
+  // 使用前面计算出的视口安全宽度。
   const maxWidth = cardMaxWidth;
   const isLight = isLightBg(block.bgCss, block.fgCss);
   const hasPatch = !!block.patchPng && (block.patchW ?? 0) > 0;

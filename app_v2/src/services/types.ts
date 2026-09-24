@@ -312,6 +312,9 @@ export interface RestoreSummary {
   restoredItems?: string[];
 }
 
+export type ProxyMode = 'system' | 'direct' | 'manual';
+export type RetryPreset = 'none' | 'fast' | 'balanced' | 'resilient';
+
 export interface AppSettings {
   theme: string;
   hotkey: string;
@@ -390,10 +393,16 @@ export interface AppSettings {
   hoverLookupModifier?: 'ctrl' | 'alt' | 'shift';
   /** 主窗口置顶显示（默认关闭） */
   alwaysOnTop?: boolean;
+  /** 代理模式：'system' (跟随系统) | 'direct' (不使用代理) | 'manual' (手动代理) */
+  proxyMode?: ProxyMode;
   /** 手动代理开关：开启后使用 proxyUrl，优先于系统代理自动探测 */
   proxyEnabled?: boolean;
   /** 手动代理地址，如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080 */
   proxyUrl?: string;
+  /** 国内服务直连绕过代理（默认开启：百度/有道/腾讯/DeepSeek/硅基流动等国内接口不走代理） */
+  proxyBypassDomestic?: boolean;
+  /** 重试策略预设：'none' | 'fast' | 'balanced' | 'resilient'（默认 'balanced'） */
+  retryPreset?: RetryPreset;
   /** TTS 朗读语速 (0.5 ~ 2.0，默认 1.0) */
   ttsRate?: number;
   /** 截图划词时自动识别前台 3D/CG 软件并切换对应专业词库（默认开启） */

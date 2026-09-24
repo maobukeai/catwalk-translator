@@ -248,6 +248,41 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
     await screen.findByText(/已停止区域监控/);
   });
 
+  it('region watch refreshes card geometry when text stays the same but moves', async () => {
+    let layoutCall = 0;
+    await openWithResult({
+      layoutImpl: () => {
+        const logicalX = layoutCall++ === 0 ? 110 : 310;
+        return Promise.resolve({
+          ...STANDARD_LAYOUT,
+          blocks: [{ ...STANDARD_LAYOUT.blocks[0], logicalX }],
+        });
+      },
+    });
+    const card = document.querySelector('.overlay-block') as HTMLElement;
+    expect(card.style.left).toBe('110px');
+
+    pressKey('w', 'KeyW');
+    await waitFor(() => {
+      expect((document.querySelector('.overlay-block') as HTMLElement).style.left).toBe('310px');
+    });
+  });
+
+  it('region watch clears stale cards when the watched area becomes empty', async () => {
+    let layoutCall = 0;
+    await openWithResult({
+      layoutImpl: () => Promise.resolve(layoutCall++ === 0
+        ? { ...STANDARD_LAYOUT, blocks: [{ ...STANDARD_LAYOUT.blocks[0] }] }
+        : { ...STANDARD_LAYOUT, blocks: [] }),
+    });
+    expect(document.querySelector('.overlay-block')).not.toBeNull();
+
+    pressKey('w', 'KeyW');
+    await waitFor(() => {
+      expect(document.querySelector('.overlay-block')).toBeNull();
+    });
+  });
+
   it('persistent quiet-path failures auto-stop the watch instead of flickering forever', async () => {
     // Shrink the interval so three failures land inside the assertion window
     useSettingsStore.getState().setWatchIntervalMs(1000);

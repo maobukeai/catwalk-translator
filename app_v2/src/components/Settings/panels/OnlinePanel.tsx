@@ -10,6 +10,7 @@ import {
 import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
 import { NetworkDiagCard } from './NetworkDiagCard';
+import { NetworkSettingsCard } from './NetworkSettingsCard';
 import {
   cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall,
   cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart, cmdUniversalTranslate,
@@ -677,6 +678,9 @@ export const OnlinePanel: React.FC = () => {
           {/* AI 大语言模型服务配置 (1 供应商多模型体系) */}
           <LlmProviderConfigCard isLight={isLight} />
         </div>
+
+        {/* 网络代理与重试策略配置 */}
+        <NetworkSettingsCard />
 
         {/* 网络诊断：区分网络问题与配置问题 */}
         <NetworkDiagCard />

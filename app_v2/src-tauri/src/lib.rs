@@ -517,6 +517,10 @@ pub fn run() {
             let _ = register_all_user_shortcuts(app.handle(), &current_settings);
 
             // 翻译记忆持久化：启动加载历史缓存（跨重启复用，重复划词零网络延迟）
+            // 启动时优先应用网络配置（三态代理模式 + 国内直连分流 + 重试预设），
+            // 确保后续 shared_pipeline() 初始化时使用正确的代理与超时配置
+            translator::set_network_config_from_settings(&current_settings);
+
             translator::set_tm_path(
                 commands::get_app_config_dir(app.handle()).join("translation_memory.json"),
             );
@@ -532,17 +536,6 @@ pub fn run() {
                 yandex_api_key: current_settings.yandex_api_key.clone(),
                 yandex_folder_id: current_settings.yandex_folder_id.clone(),
             });
-
-            // 启动时应用手动代理（优先于系统代理自动探测）
-            let manual_proxy = if current_settings.proxy_enabled.unwrap_or(false) {
-                current_settings
-                    .proxy_url
-                    .clone()
-                    .filter(|u| !u.trim().is_empty())
-            } else {
-                None
-            };
-            translator::set_manual_proxy(manual_proxy);
 
             // 启动时应用主窗口置顶设置
             if current_settings.always_on_top.unwrap_or(false) {
@@ -572,7 +565,24 @@ pub fn run() {
             );
 
             if let Some(ref ver) = current_settings.ocr_version {
-                onnx_ocr::set_active_version(ver);
+                let effective = onnx_ocr::best_available_version(ver)
+                    .unwrap_or_else(|| ver.clone());
+                onnx_ocr::set_active_version(&effective);
+                if &effective != ver {
+                    eprintln!(
+                        "[OCR] requested PP-OCR{} is not installed; using installed PP-OCR{}",
+                        ver.to_uppercase(),
+                        effective.to_uppercase()
+                    );
+                    // Keep persisted/UI state honest after recovering an invalid
+                    // saved model selection (for example after uninstalling v6).
+                    if let Some(state) = app.try_state::<AppState>() {
+                        if let Ok(mut settings) = state.settings.lock() {
+                            settings.ocr_version = Some(effective);
+                            commands::save_settings_file(app.handle(), &settings);
+                        }
+                    }
+                }
             }
 
             // System Tray setup

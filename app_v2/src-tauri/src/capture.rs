@@ -167,6 +167,7 @@ pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
     const SM_CYVIRTUALSCREEN: i32 = 79;
 
     const SRCCOPY: u32 = 0x00CC0020;
+    const CAPTUREBLT: u32 = 0x40000000;
     const DIB_RGB_COLORS: u32 = 0;
     // GetDeviceCaps constants for DPI
     const LOGPIXELSX: i32 = 88;
@@ -254,7 +255,24 @@ pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
         }
 
         let old_obj = SelectObject(mem_dc, h_bitmap);
-        BitBlt(mem_dc, 0, 0, width, height, screen_dc, vx, vy, SRCCOPY);
+        let blt_ok = BitBlt(
+            mem_dc,
+            0,
+            0,
+            width,
+            height,
+            screen_dc,
+            vx,
+            vy,
+            SRCCOPY | CAPTUREBLT,
+        );
+        if blt_ok == 0 {
+            SelectObject(mem_dc, old_obj);
+            DeleteObject(h_bitmap);
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return Err("BitBlt desktop capture failed".to_string());
+        }
 
         let mut bmi = BITMAPINFO {
             bmi_header: BITMAPINFOHEADER {
@@ -291,7 +309,7 @@ pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
         bmp_data[28..30].copy_from_slice(&32u16.to_le_bytes());
         bmp_data[34..38].copy_from_slice(&(pixel_bytes_len as u32).to_le_bytes());
 
-        GetDIBits(
+        let scan_lines = GetDIBits(
             mem_dc,
             h_bitmap,
             0,
@@ -300,6 +318,17 @@ pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
             &mut bmi,
             DIB_RGB_COLORS,
         );
+
+        if scan_lines != height {
+            SelectObject(mem_dc, old_obj);
+            DeleteObject(h_bitmap);
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return Err(format!(
+                "GetDIBits returned {} of {} desktop rows",
+                scan_lines, height
+            ));
+        }
 
         SelectObject(mem_dc, old_obj);
         DeleteObject(h_bitmap);
@@ -352,6 +381,7 @@ pub fn capture_region_bmp(rect: PhysicalRect) -> Result<(Vec<u8>, u32, u32, f64)
     }
 
     const SRCCOPY: u32 = 0x00CC0020;
+    const CAPTUREBLT: u32 = 0x40000000;
     const DIB_RGB_COLORS: u32 = 0;
     const LOGPIXELSX: i32 = 88;
 
@@ -419,7 +449,24 @@ pub fn capture_region_bmp(rect: PhysicalRect) -> Result<(Vec<u8>, u32, u32, f64)
         }
 
         let old_obj = SelectObject(mem_dc, h_bitmap);
-        BitBlt(mem_dc, 0, 0, rw, rh, screen_dc, rx, ry, SRCCOPY);
+        let blt_ok = BitBlt(
+            mem_dc,
+            0,
+            0,
+            rw,
+            rh,
+            screen_dc,
+            rx,
+            ry,
+            SRCCOPY | CAPTUREBLT,
+        );
+        if blt_ok == 0 {
+            SelectObject(mem_dc, old_obj);
+            DeleteObject(h_bitmap);
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return Err("BitBlt region capture failed".to_string());
+        }
 
         let w = rw as u32;
         let h = rh as u32;
@@ -457,7 +504,7 @@ pub fn capture_region_bmp(rect: PhysicalRect) -> Result<(Vec<u8>, u32, u32, f64)
         bmp_data[28..30].copy_from_slice(&32u16.to_le_bytes());
         bmp_data[34..38].copy_from_slice(&(pixel_bytes_len as u32).to_le_bytes());
 
-        GetDIBits(
+        let scan_lines = GetDIBits(
             mem_dc,
             h_bitmap,
             0,
@@ -466,6 +513,17 @@ pub fn capture_region_bmp(rect: PhysicalRect) -> Result<(Vec<u8>, u32, u32, f64)
             &mut bmi,
             DIB_RGB_COLORS,
         );
+
+        if scan_lines != rh {
+            SelectObject(mem_dc, old_obj);
+            DeleteObject(h_bitmap);
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return Err(format!(
+                "GetDIBits returned {} of {} region rows",
+                scan_lines, rh
+            ));
+        }
 
         SelectObject(mem_dc, old_obj);
         DeleteObject(h_bitmap);

@@ -1329,7 +1329,14 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     const stale = () => !mountedRef.current || epoch !== processEpochRef.current;
 
     if (layout.blocks.length === 0) {
-      if (!isWatch) {
+      if (isWatch) {
+        // The watched region may have scrolled to a blank/loading frame. Never
+        // leave translations from the previous frame floating over new content.
+        setOverlayResult(layout);
+        setRenderedSizes({});
+        setActiveBlockIdx(null);
+        setTranslatingProgress(null);
+      } else {
         setEmptyNotice('未在选区内识别到清晰文本，请重新划框框选');
         if (emptyNoticeTimerRef.current) clearTimeout(emptyNoticeTimerRef.current);
         emptyNoticeTimerRef.current = setTimeout(() => {
@@ -2045,10 +2052,18 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       }
       if (!watchModeRef.current || !mountedRef.current || epoch !== processEpochRef.current) return;
 
-      // Skip re-translation when the recognized text has not changed
-      const text = layout.blocks.map((b) => b.original).join('\n');
-      if (text === lastWatchTextRef.current) return;
-      lastWatchTextRef.current = text;
+      // Text alone is not a frame identity: after scrolling, identical text can
+      // move while coordinates, dimensions and background patches all change.
+      const fingerprint = JSON.stringify(layout.blocks.map((b) => [
+        b.original,
+        Math.round(b.logicalX),
+        Math.round(b.logicalY),
+        Math.round(b.logicalW),
+        Math.round(b.logicalH),
+        b.bgCss,
+      ]));
+      if (fingerprint === lastWatchTextRef.current) return;
+      lastWatchTextRef.current = fingerprint;
       await applyLayoutAndTranslate(layout, true);
     } catch (e) {
       console.warn('[Watch] tick failed:', e);
@@ -2070,7 +2085,14 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     watchModeRef.current = true;
     setWatchMode(true);
     lastWatchTextRef.current = overlayResult
-      ? overlayResult.blocks.map((b) => b.original).join('\n')
+      ? JSON.stringify(overlayResult.blocks.map((b) => [
+          b.original,
+          Math.round(b.logicalX),
+          Math.round(b.logicalY),
+          Math.round(b.logicalW),
+          Math.round(b.logicalH),
+          b.bgCss,
+        ]))
       : null;
     showFeedback(`🔄 区域监控已开启 · 每 ${watchIntervalSec}s 自动重译 (W 停止)`);
     runWatchTick();
@@ -3211,7 +3233,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       {/* ── In-place translated text blocks (cover mode) ─────────────────────── */}
       {phase === 'overlay' && displayMode === 'cover' && displayBlocks.map((block) => (
         <OverlayBlockCard
-          key={block.__i}
+          key={`${block.__i}:${block.original}:${Math.round(block.logicalX)}:${Math.round(block.logicalY)}`}
           block={block}
           blockIndex={block.__i}
           onClose={handleClose}

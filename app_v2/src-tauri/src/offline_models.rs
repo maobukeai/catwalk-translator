@@ -293,25 +293,35 @@ pub fn cmd_switch_ocr_version(
     state: tauri::State<'_, crate::commands::AppState>,
     version: String,
 ) -> Result<bool, String> {
-    crate::onnx_ocr::set_active_version(&version);
-
-    if let Ok(mut lock) = state.settings.lock() {
-        lock.ocr_version = Some(version.clone());
-        crate::commands::save_settings_file(&app_handle, &lock);
+    // Do not persist a selection that cannot be loaded. Previously this made
+    // the UI claim "v6" while inference silently ran v4 after the next launch.
+    if !crate::onnx_ocr::model_files_present_for_version(&version) {
+        return Ok(false);
     }
 
+    let previous_version = crate::onnx_ocr::get_active_version();
+    crate::onnx_ocr::set_active_version(&version);
     let engine = crate::onnx_ocr::get_engine();
     engine.unload();
-    if crate::onnx_ocr::model_files_present_for_version(&version) {
-        if let Err(e) = engine.ensure_loaded() {
+    if let Err(e) = engine.ensure_loaded() {
+        // The files may exist but still be corrupt/incompatible. Restore the
+        // last working generation so one failed switch does not break all
+        // subsequent captures for the rest of the process lifetime.
+        crate::onnx_ocr::set_active_version(&previous_version);
+        engine.unload();
+        if engine.ensure_loaded().is_ok() {
+            crate::ocr::mark_onnx_ready();
+        } else {
             crate::ocr::mark_onnx_failed();
-            return Err(format!("加载 PP-OCR{} 失败: {}", version, e));
         }
-        crate::ocr::mark_onnx_ready();
-        Ok(true)
-    } else {
-        Ok(false)
+        return Err(format!("加载 PP-OCR{} 失败: {}", version, e));
     }
+    if let Ok(mut lock) = state.settings.lock() {
+        lock.ocr_version = Some(version);
+        crate::commands::save_settings_file(&app_handle, &lock);
+    }
+    crate::ocr::mark_onnx_ready();
+    Ok(true)
 }
 
 static ACTIVE_DOWNLOADS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -398,11 +408,13 @@ async fn download_model(
     spec: &ModelSpec,
     final_path: &std::path::Path,
 ) -> Result<bool, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-        .timeout(Duration::from_secs(180))
-        .build()
-        .map_err(|e| format!("http client: {}", e))?;
+    let client = crate::translator::apply_proxy_to_builder(
+        reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            .timeout(Duration::from_secs(180)),
+    )
+    .build()
+    .map_err(|e| format!("http client: {}", e))?;
 
     let mut last_err = String::new();
     for url in spec.urls {

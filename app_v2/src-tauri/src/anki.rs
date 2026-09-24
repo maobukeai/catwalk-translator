@@ -92,10 +92,11 @@ async fn invoke_anki<P: Serialize, R: for<'de> Deserialize<'de>>(
 
 /// 检查本地 AnkiConnect 连接状态并获取现有牌组与模板列表
 pub async fn check_anki_status(endpoint: &str) -> AnkiCheckResult {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(1500))
-        .build()
-        .unwrap_or_default();
+    let client = crate::translator::apply_proxy_to_builder(
+        reqwest::Client::builder().timeout(Duration::from_millis(1500)),
+    )
+    .build()
+    .unwrap_or_default();
 
     // 1. 获取版本
     let ver_res: Result<u32, _> = invoke_anki::<(), u32>(&client, endpoint, "version", None).await;
@@ -165,10 +166,11 @@ pub async fn sync_notes_to_anki(
         });
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .unwrap_or_default();
+    let client = crate::translator::apply_proxy_to_builder(
+        reqwest::Client::builder().timeout(Duration::from_secs(10)),
+    )
+    .build()
+    .unwrap_or_default();
 
     // 确保牌组存在
     let target_deck = if deck_name.trim().is_empty() { "Catwalk" } else { deck_name.trim() };

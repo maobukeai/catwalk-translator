@@ -422,16 +422,8 @@ pub fn apply_settings_side_effects(
         crate::lookup_monitor::stop_lookup_monitor();
     }
 
-    // 手动代理优先于系统代理自动探测；关闭或地址为空时回落自动探测
-    let manual_proxy = if settings.proxy_enabled.unwrap_or(false) {
-        settings
-            .proxy_url
-            .clone()
-            .filter(|u| !u.trim().is_empty())
-    } else {
-        None
-    };
-    crate::translator::set_manual_proxy(manual_proxy);
+    // 应用网络配置（三态代理模式 system/direct/manual + 国内直连分流 + 重试预设）
+    crate::translator::set_network_config_from_settings(settings);
 
     // 主窗口置顶跟随设置
     if let Some(win) = window {
@@ -646,10 +638,7 @@ pub async fn cmd_fetch_tts_audio(
         _ => "5",
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(4))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = crate::translator::create_http_client(4000);
 
     let encoded_text = crate::translator::urlencoding_encode(trimmed);
 
@@ -661,12 +650,13 @@ pub async fn cmd_fetch_tts_audio(
         spd
     );
 
-    let resp = client
-        .get(&url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
-        .header("Referer", "https://fanyi.baidu.com/")
-        .send()
-        .await;
+    let resp = crate::translator::send_request_with_retry(|| {
+        client
+            .get(&url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+            .header("Referer", "https://fanyi.baidu.com/")
+    })
+    .await;
 
     if let Ok(r) = resp {
         if r.status().is_success() {
@@ -686,11 +676,12 @@ pub async fn cmd_fetch_tts_audio(
             "https://dict.youdao.com/dictvoice?audio={}&type=2",
             encoded_text
         );
-        if let Ok(r) = client
-            .get(&yd_url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            .send()
-            .await
+        if let Ok(r) = crate::translator::send_request_with_retry(|| {
+            client
+                .get(&yd_url)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        })
+        .await
         {
             if r.status().is_success() {
                 if let Ok(bytes) = r.bytes().await {
