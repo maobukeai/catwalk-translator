@@ -1,19 +1,19 @@
 {
-  "version": "0.3.14",
+  "version": "0.3.15",
   "name": "猫步翻译",
-  "release_date": "2026-09-24",
+  "release_date": "2026-09-27",
   "download_url": "https://github.com/maobukeai/catwalk-translator/releases",
-  "release_notes": "1. 新增全局网络与代理中心（支持系统代理自适应、自定义 HTTP/SOCKS5 代理、强制直连）；\n2. 深度优化 ONNX 离线 OCR 识别管线与文本框排版重构精度；\n3. 优化截屏悬浮卡片布局防遮挡与交互体验。",
+  "release_notes": "1. 新增基于 Windows UI 自动化辅助的 OCR 增强机制（极速精准提取屏幕文字与排版几何）；\n2. 深度重构文本框聚类与涂抹修复（Inpainting）算法，提升复杂背景下的显示品质；\n3. 优化截屏覆盖卡片排版、动画与交互响应；\n4. 改进项目本地调试与启动脚本。",
   "assets": [
     {
-      "name": "MaobuTranslator_0.3.14_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.14/MaobuTranslator_0.3.14_x64-setup.exe",
+      "name": "MaobuTranslator_0.3.15_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.15/MaobuTranslator_0.3.15_x64-setup.exe",
       "size": 9069418,
       "sha256": "18dd9d761704d4c622febb12d55fa500194a018025d648abe69de36ab1d93e36"
     },
     {
-      "name": "猫步翻译_0.3.14_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.14/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.14_x64-setup.exe",
+      "name": "猫步翻译_0.3.15_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.15/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.15_x64-setup.exe",
       "size": 9069418,
       "sha256": "18dd9d761704d4c622febb12d55fa500194a018025d648abe69de36ab1d93e36"
     }
