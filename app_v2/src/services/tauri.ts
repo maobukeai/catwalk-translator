@@ -142,15 +142,18 @@ export async function cmdRegionOcrLayout(
   selection: import('./types').PhysicalRect,
   scaleFactor: number,
   overlayWidth?: number,
-  overlayHeight?: number
+  overlayHeight?: number,
+  appPreset?: string
 ): Promise<import('./types').OverlayResult> {
   if (isTauri()) {
-    return await invoke<import('./types').OverlayResult>('cmd_region_ocr_layout', {
+    const args: Record<string, any> = {
       selection,
       scaleFactor,
       overlayWidth: overlayWidth ?? null,
       overlayHeight: overlayHeight ?? null,
-    });
+    };
+    if (appPreset) args.appPreset = appPreset;
+    return await invoke<import('./types').OverlayResult>('cmd_region_ocr_layout', args);
   }
 
   // Web Browser Mock Fallback (Demonstration mode)
@@ -337,14 +340,17 @@ export async function cmdWatchTick(
   selection: { x: number; y: number; width: number; height: number },
   scaleFactor: number,
   overlayWidth?: number,
-  overlayHeight?: number
+  overlayHeight?: number,
+  appPreset?: string
 ): Promise<import('./types').OverlayResult> {
-  return await invoke<import('./types').OverlayResult>('cmd_watch_tick', {
+  const args: Record<string, any> = {
     selection,
     scaleFactor,
     overlayWidth: overlayWidth ?? null,
     overlayHeight: overlayHeight ?? null,
-  });
+  };
+  if (appPreset) args.appPreset = appPreset;
+  return await invoke<import('./types').OverlayResult>('cmd_watch_tick', args);
 }
 
 /// Copy the selected region image to the Windows clipboard (CF_DIB).

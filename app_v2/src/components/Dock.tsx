@@ -107,11 +107,11 @@ export const Dock: React.FC<DockProps> = ({
 
   const updateIndicator = () => {
     const activeEl = itemRefs.current[activeTab];
-    if (activeEl) {
+    if (activeEl && activeEl.offsetWidth > 0) {
       setIndicatorStyle({
         left: activeEl.offsetLeft,
         top: activeEl.offsetTop,
-        width: activeEl.offsetWidth || 42,
+        width: activeEl.offsetWidth,
         height: activeEl.offsetHeight || 42,
         visible: true,
       });

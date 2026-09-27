@@ -11,6 +11,52 @@ use crate::commands::{glass_enabled_for_settings, is_dark_for_settings};
 use crate::sampler::ColorSampler;
 use tauri::State;
 
+static CAPTURE_TARGET_HWND: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+static CAPTURE_VIRTUAL_ORIGIN: std::sync::Mutex<(i32, i32)> =
+    std::sync::Mutex::new((0, 0));
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WatchOcrCacheKey {
+    rect: PhysicalRect,
+    image_hash: [u8; 16],
+    ocr_engine: Option<String>,
+    ocr_model_version: String,
+    ocr_filter: Option<Vec<String>>,
+    app_preset: Option<String>,
+    target_hwnd: isize,
+}
+
+#[derive(Clone)]
+struct WatchOcrCacheEntry {
+    key: WatchOcrCacheKey,
+    blocks: Vec<OverlayBlock>,
+}
+
+/// One-entry cache for the live region watcher. Hashing the selected pixels
+/// avoids repeated OCR on an unchanged frame without retaining whole desktop
+/// screenshots or affecting normal one-shot captures.
+static WATCH_OCR_CACHE: std::sync::Mutex<Option<WatchOcrCacheEntry>> =
+    std::sync::Mutex::new(None);
+
+fn get_watch_cached_blocks(key: &WatchOcrCacheKey) -> Option<Vec<OverlayBlock>> {
+    WATCH_OCR_CACHE
+        .lock()
+        .ok()?
+        .as_ref()
+        .filter(|entry| entry.key == *key)
+        .map(|entry| entry.blocks.clone())
+}
+
+fn store_watch_cached_blocks(key: WatchOcrCacheKey, blocks: &[OverlayBlock]) {
+    if let Ok(mut cache) = WATCH_OCR_CACHE.lock() {
+        *cache = Some(WatchOcrCacheEntry {
+            key,
+            blocks: blocks.to_vec(),
+        });
+    }
+}
+
 /// Convert a logical (overlay CSS px) selection rect to physical BMP pixels.
 /// The BMP covers the whole virtual screen and the overlay window also covers
 /// the whole virtual screen, so the physical-per-logical scale is simply
@@ -107,6 +153,145 @@ fn usable_ocr_block(block: &TextBlock) -> bool {
     block.confidence >= required
 }
 
+/// Restore a real one-glyph OCR fragment only when it is tightly aligned with
+/// a recognized word on the same row. This rescues low-confidence CJK glue
+/// such as `在` in a split terminal line without admitting isolated icon noise.
+pub fn retain_usable_ocr_with_context(blocks: Vec<TextBlock>) -> Vec<TextBlock> {
+    let mut accepted = Vec::new();
+    let mut candidates = Vec::new();
+    for block in blocks {
+        let char_count = block.text.chars().filter(|c| !c.is_whitespace()).count();
+        if char_count == 1 {
+            if block.box_rect.height >= 6
+                && block.confidence >= 0.55
+                && block.text.chars().any(|c| {
+                    c.is_alphanumeric() || ('\u{3400}'..='\u{9fff}').contains(&c)
+                })
+            {
+                candidates.push(block);
+            }
+        } else if usable_ocr_block(&block) {
+            accepted.push(block);
+        }
+    }
+
+    for candidate in candidates {
+        let near_text = accepted.iter().any(|neighbor| {
+            if neighbor.text.chars().filter(|c| !c.is_whitespace()).count() < 2 {
+                return false;
+            }
+            let a = candidate.box_rect;
+            let b = neighbor.box_rect;
+            let min_h = a.height.min(b.height).max(1) as f32;
+            let center_a = a.y as f32 + a.height as f32 * 0.5;
+            let center_b = b.y as f32 + b.height as f32 * 0.5;
+            let same_row = (center_a - center_b).abs() <= min_h * 0.60;
+            // A separate tiny OCR box substantially overlapping a real label
+            // is more likely an icon/decoration duplicate than a missing
+            // neighboring glyph. True split characters sit beside the word.
+            if spatial_overlap_ratio(a, b) >= 0.20 {
+                return false;
+            }
+            let gap = if a.x + a.width as i32 <= b.x {
+                b.x - (a.x + a.width as i32)
+            } else if b.x + b.width as i32 <= a.x {
+                a.x - (b.x + b.width as i32)
+            } else {
+                0
+            };
+            same_row && gap as f32 <= min_h * 0.55
+        });
+        if near_text {
+            accepted.push(candidate);
+        }
+    }
+    accepted
+}
+
+fn normalize_for_spatial_dedup(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn rects_overlap(a: BoundingBox, b: BoundingBox) -> bool {
+    let overlap_w = (a.x + a.width as i32).min(b.x + b.width as i32) - a.x.max(b.x);
+    let overlap_h = (a.y + a.height as i32).min(b.y + b.height as i32) - a.y.max(b.y);
+    overlap_w > 0 && overlap_h > 0
+}
+
+fn spatial_overlap_ratio(a: BoundingBox, b: BoundingBox) -> f64 {
+    let overlap_w = ((a.x + a.width as i32).min(b.x + b.width as i32) - a.x.max(b.x)).max(0) as u64;
+    let overlap_h = ((a.y + a.height as i32).min(b.y + b.height as i32) - a.y.max(b.y)).max(0) as u64;
+    let overlap = overlap_w.saturating_mul(overlap_h) as f64;
+    let smaller = (a.width as u64)
+        .saturating_mul(a.height as u64)
+        .min((b.width as u64).saturating_mul(b.height as u64)) as f64;
+    if smaller == 0.0 { 0.0 } else { overlap / smaller }
+}
+
+/// UIA can expose a container's accessible name over several visual lines.
+/// Such a name must not erase all pixel OCR blocks merely because its large
+/// rectangle contains them. Accept only a single physical row, with either
+/// matching text fragments or a near-identical one-to-one text rectangle.
+fn native_claim_matches_ocr_row(native: &TextBlock, covered: &[&TextBlock]) -> bool {
+    if covered.is_empty() {
+        return true;
+    }
+    let n = native.box_rect;
+    let max_height = covered.iter().map(|block| block.box_rect.height).max().unwrap_or(1);
+    if n.height > max_height.saturating_mul(2) + 4 {
+        return false;
+    }
+    let same_row = covered.iter().all(|block| {
+        let b = block.box_rect;
+        let center_delta = (n.y + n.height as i32 / 2 - b.y - b.height as i32 / 2).abs();
+        center_delta <= (n.height.max(b.height) as i32 / 2).max(5)
+    });
+    if !same_row {
+        return false;
+    }
+    let native_text = normalize_for_spatial_dedup(&native.text);
+    if native_text.chars().count() >= 2 && covered.iter().all(|block| {
+        let ocr_text = normalize_for_spatial_dedup(&block.text);
+        ocr_text.chars().count() >= 2
+            && (native_text.contains(&ocr_text) || ocr_text.contains(&native_text))
+    }) {
+        return true;
+    }
+    if covered.len() != 1 {
+        return false;
+    }
+    let b = covered[0].box_rect;
+    let left_delta = (n.x - b.x).abs();
+    left_delta <= (b.width as i32 / 5).max(8)
+        && (n.width as f64 / b.width.max(1) as f64) >= 0.7
+        && (n.width as f64 / b.width.max(1) as f64) <= 1.6
+        && spatial_overlap_ratio(n, b) >= 0.75
+}
+
+fn merge_native_text_blocks(mut ocr: Vec<TextBlock>, native_blocks: Vec<TextBlock>) -> Vec<TextBlock> {
+    for native in native_blocks {
+        let covered: Vec<&TextBlock> = ocr.iter().filter(|block| {
+            spatial_overlap_ratio(block.box_rect, native.box_rect) >= 0.55
+        }).collect();
+        if !native_claim_matches_ocr_row(&native, &covered) {
+            continue;
+        }
+        if covered.is_empty() && ocr.iter().any(|block| {
+            rects_overlap(block.box_rect, native.box_rect)
+                && normalize_for_spatial_dedup(&block.text)
+                    == normalize_for_spatial_dedup(&native.text)
+        }) {
+            continue;
+        }
+        ocr.retain(|block| spatial_overlap_ratio(block.box_rect, native.box_rect) < 0.55);
+        ocr.push(native);
+    }
+    ocr
+}
+
 fn region_ocr_layout(
     selection: PhysicalRect,
     scale_factor: Option<f64>,
@@ -114,6 +299,7 @@ fn region_ocr_layout(
     overlay_height: Option<f64>,
     ocr_engine: Option<String>,
     ocr_filter: Option<Vec<String>>,
+    app_preset: Option<String>,
 ) -> Result<Vec<OverlayBlock>, String> {
     if selection.width == 0 || selection.height == 0 {
         return Ok(vec![]);
@@ -161,11 +347,17 @@ fn region_ocr_layout(
     // every engine (WinRT 0.99 / daemon ≥0.9 default / ONNX real CTC probs)
     // stays far above this threshold. 物理高度 <6px 的框必是误检——真实文本
     // 在任何缩放下都不可能低于该值，进 rec/聚类只会产出乱码。
-    let confident_blocks: Vec<TextBlock> = ocr_result
-        .blocks
-        .into_iter()
-        .filter(usable_ocr_block)
-        .collect();
+    let mut confident_blocks = retain_usable_ocr_with_context(ocr_result.blocks);
+
+    // UIA is an optional second text source for native controls. Limit it to
+    // the foreground application captured at session start and the selected
+    // pixels; custom-rendered canvases naturally continue through image OCR.
+    let target_hwnd = CAPTURE_TARGET_HWND.load(Ordering::SeqCst);
+    if target_hwnd != 0 {
+        let origin = CAPTURE_VIRTUAL_ORIGIN.lock().map(|value| *value).unwrap_or((0, 0));
+        let native_text = crate::uia_ocr::read_region_text(target_hwnd, origin, phys);
+        confident_blocks = merge_native_text_blocks(confident_blocks, native_text);
+    }
 
     if confident_blocks.is_empty() {
         return Ok(vec![]);
@@ -179,6 +371,15 @@ fn region_ocr_layout(
         .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
+
+    // Use known application labels as a conservative OCR correction hint.
+    if let Some(app_preset) = app_preset.as_deref() {
+        for block in &mut merged_blocks {
+            if let Some(corrected) = crate::app_detect::correct_ocr_ui_term(&block.text, app_preset) {
+                block.text = corrected;
+            }
+        }
+    }
 
     // Filter only after reconstruction. A numeric value and its nearby label
     // can now form "Opacity 50" instead of the value disappearing before the
@@ -292,6 +493,7 @@ pub async fn cmd_region_ocr_layout(
     scale_factor: Option<f64>,
     overlay_width: Option<f64>,
     overlay_height: Option<f64>,
+    app_preset: Option<String>,
 ) -> Result<OverlayResult, String> {
     let (ocr_engine, ocr_filter) = state
         .settings
@@ -301,7 +503,15 @@ pub async fn cmd_region_ocr_layout(
     // OCR 是 CPU 密集的同步推理：放进 blocking 线程池，避免卡死 tokio worker
     //（否则 watch tick、翻译 HTTP 等并发任务都会被一起拖住）。
     let blocks = tauri::async_runtime::spawn_blocking(move || {
-        region_ocr_layout(selection, scale_factor, overlay_width, overlay_height, ocr_engine, ocr_filter)
+        region_ocr_layout(
+            selection,
+            scale_factor,
+            overlay_width,
+            overlay_height,
+            ocr_engine,
+            ocr_filter,
+            app_preset,
+        )
     })
     .await
     .map_err(|e| format!("OCR task join failed: {}", e))??;
@@ -598,9 +808,18 @@ pub async fn cmd_region_ocr_translate(
         .lock()
         .ok().map(|s| (s.ocr_engine.clone(), ocr_filter_from_settings(&s)))
         .unwrap_or((None, None));
+    let ocr_preset = preset.clone();
     // Stage 1: OCR + layout + colors（同步 CPU 推理 → blocking 线程池，不卡 runtime）
     let mut overlay_blocks = tauri::async_runtime::spawn_blocking(move || {
-        region_ocr_layout(selection, scale_factor, overlay_width, overlay_height, ocr_engine, ocr_filter)
+        region_ocr_layout(
+            selection,
+            scale_factor,
+            overlay_width,
+            overlay_height,
+            ocr_engine,
+            ocr_filter,
+            Some(ocr_preset),
+        )
     })
     .await
     .map_err(|e| format!("OCR task join failed: {}", e))??;
@@ -724,11 +943,7 @@ pub async fn cmd_image_ocr_translate(
 
     // 3. OCR + line clustering + word merge (严格遵循用户配置的 OCR 引擎与模型版本).
     let ocr_result = crate::ocr::execute_native_ocr_with_engine(&bmp, ocr_engine.as_deref())?;
-    let confident_blocks = ocr_result
-        .blocks
-        .into_iter()
-        .filter(usable_ocr_block)
-        .collect();
+    let confident_blocks = retain_usable_ocr_with_context(ocr_result.blocks);
     let lines = LineClusterer::cluster_into_lines(confident_blocks, 8.0);
     let mut merged_blocks: Vec<TextBlock> = lines
         .into_iter()
@@ -900,6 +1115,18 @@ pub async fn cmd_begin_capture(
     // 0. 采样前台窗口识别 3D/CG 软件（必须在隐藏主窗口之前，此时前台即用户正在使用的软件）
     let detected_app = crate::app_detect::detect_foreground_app();
 
+    // Save the virtual desktop origin used to convert UIA desktop rectangles
+    // into the screenshot bitmap's coordinate space.
+    #[cfg(target_os = "windows")]
+    {
+        const SM_XVIRTUALSCREEN: i32 = 76;
+        const SM_YVIRTUALSCREEN: i32 = 77;
+        #[link(name = "user32")]
+        extern "system" { fn GetSystemMetrics(n_index: i32) -> i32; }
+        let origin = unsafe { (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN)) };
+        if let Ok(mut saved_origin) = CAPTURE_VIRTUAL_ORIGIN.lock() { *saved_origin = origin; }
+    }
+
     // 1. Hide the window so the underlying desktop is 100% clean and un-obscured
     let _ = window.hide();
 
@@ -909,6 +1136,28 @@ pub async fn cmd_begin_capture(
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
     } else {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+
+    // Sample after our window is hidden so a click on the app's Capture button
+    // resolves to the window underneath it. When capture was hotkey-triggered,
+    // the foreign foreground window remains unchanged. Never inspect our own
+    // UI tree; image OCR stays the fallback for either case.
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::System::Threading::GetCurrentProcessId;
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+        let hwnd = unsafe { GetForegroundWindow() };
+        let mut target_pid = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut target_pid)); }
+        let own_pid = unsafe { GetCurrentProcessId() };
+        CAPTURE_TARGET_HWND.store(
+            if !hwnd.0.is_null() && target_pid != 0 && target_pid != own_pid {
+                hwnd.0 as isize
+            } else {
+                0
+            },
+            Ordering::SeqCst,
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -1084,6 +1333,7 @@ pub async fn cmd_watch_tick(
     scale_factor: Option<f64>,
     overlay_width: Option<f64>,
     overlay_height: Option<f64>,
+    app_preset: Option<String>,
 ) -> Result<OverlayResult, String> {
     #[cfg(target_os = "windows")]
     {
@@ -1116,10 +1366,40 @@ pub async fn cmd_watch_tick(
         .lock()
         .ok().map(|s| (s.ocr_engine.clone(), ocr_filter_from_settings(&s)))
         .unwrap_or((None, None));
-        // 安静刷新(GDI BitBlt) + stage-1 OCR 都是同步阻塞操作 → blocking 线程池
+        let app_preset = app_preset.filter(|preset| {
+            matches!(preset.as_str(), "blender" | "maya" | "unity")
+        });
+        // 安静刷新(GDI BitBlt) + 区域像素比较 + 必要时的 OCR 都是同步工作 → blocking 线程池。
+        // 画面像素、选区与 OCR 配置全相同则返回缓存布局，跳过模型推理。
         let blocks = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<OverlayBlock>, String> {
             crate::capture::refresh_capture_region_quietly(hwnd_isize, phys)?;
-            region_ocr_layout(selection, scale_factor, overlay_width, overlay_height, ocr_engine, ocr_filter)
+            let (bmp_data, latest_w, latest_h, _) = crate::capture::get_latest_capture()
+                .ok_or("No desktop capture available in memory")?;
+            let crop = crate::ocr::crop_bmp(&bmp_data, latest_w, latest_h, phys)
+                .ok_or("Watch region out of desktop bounds")?;
+            let key = WatchOcrCacheKey {
+                rect: phys,
+                image_hash: md5::compute(&crop).0,
+                ocr_engine: ocr_engine.clone(),
+                ocr_model_version: crate::onnx_ocr::get_active_version(),
+                ocr_filter: ocr_filter.clone(),
+                app_preset: app_preset.clone(),
+                target_hwnd: CAPTURE_TARGET_HWND.load(Ordering::SeqCst),
+            };
+            if let Some(blocks) = get_watch_cached_blocks(&key) {
+                return Ok(blocks);
+            }
+            let blocks = region_ocr_layout(
+                selection,
+                scale_factor,
+                overlay_width,
+                overlay_height,
+                ocr_engine,
+                ocr_filter,
+                app_preset,
+            )?;
+            store_watch_cached_blocks(key, &blocks);
+            Ok(blocks)
         })
         .await
         .map_err(|e| format!("watch tick join failed: {}", e))??;
@@ -1133,7 +1413,7 @@ pub async fn cmd_watch_tick(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (window, selection, scale_factor, overlay_width, overlay_height);
+        let _ = (window, selection, scale_factor, overlay_width, overlay_height, app_preset);
         Err("Quiet watch capture is Windows-only".to_string())
     }
 }
@@ -1563,6 +1843,52 @@ pub async fn cmd_sample_colors(
 }
 
 #[cfg(test)]
+mod native_ocr_merge_tests {
+    use super::*;
+
+    fn block(text: &str, x: i32, y: i32, width: u32, height: u32) -> TextBlock {
+        TextBlock {
+            text: text.into(), confidence: 0.96,
+            box_rect: BoundingBox { x, y, width, height },
+        }
+    }
+
+    #[test]
+    fn large_accessible_container_cannot_erase_two_visible_ocr_rows() {
+        let ocr = vec![
+            block("File Edit View", 10, 12, 120, 18),
+            block("Save your work", 10, 42, 145, 18),
+        ];
+        let native = block("Main panel", 8, 8, 170, 60);
+        let merged = merge_native_text_blocks(ocr, vec![native]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].text, "File Edit View");
+        assert_eq!(merged[1].text, "Save your work");
+    }
+
+    #[test]
+    fn same_line_accessible_text_corrects_ocr_without_duplicating_it() {
+        let ocr = vec![block("Yot’ll stay signed in", 20, 30, 205, 25)];
+        let native = block("You’ll stay signed in", 19, 30, 208, 25);
+        let merged = merge_native_text_blocks(ocr, vec![native]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, "You’ll stay signed in");
+    }
+
+    #[test]
+    fn same_line_exact_fragments_can_be_replaced_by_one_native_line() {
+        let ocr = vec![
+            block("cargo run", 10, 30, 80, 20),
+            block("--release", 95, 30, 90, 20),
+        ];
+        let native = block("cargo run --release", 9, 29, 180, 22);
+        let merged = merge_native_text_blocks(ocr, vec![native]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, "cargo run --release");
+    }
+}
+
+#[cfg(test)]
 mod mapping_tests {
     use super::logical_selection_to_physical;
     use crate::models::PhysicalRect;
@@ -1687,5 +2013,132 @@ mod ocr_filter_tests {
             ..Default::default()
         };
         assert!(ocr_filter_from_settings(&settings).is_none());
+    }
+
+    #[test]
+    fn low_confidence_single_cjk_fragment_survives_only_next_to_same_row_text() {
+        let make = |text: &str, x: i32, confidence: f32| TextBlock {
+            text: text.to_string(),
+            confidence,
+            box_rect: BoundingBox {
+                x,
+                y: 20,
+                width: if text == "在" { 10 } else { 86 },
+                height: 21,
+            },
+        };
+        let rescued = retain_usable_ocr_with_context(vec![
+            make("在", 70, 0.65),
+            make("检测并释放", 88, 1.0),
+        ]);
+        assert_eq!(rescued.len(), 2);
+        assert!(rescued.iter().any(|b| b.text == "在"));
+
+        let isolated = retain_usable_ocr_with_context(vec![make("在", 400, 0.65)]);
+        assert!(isolated.is_empty());
+    }
+
+    #[test]
+    fn isolated_high_confidence_icon_glyph_is_rejected_but_label_is_kept() {
+        let icon = TextBlock {
+            text: "0".to_string(),
+            confidence: 0.99,
+            box_rect: BoundingBox {
+                x: 10,
+                y: 10,
+                width: 38,
+                height: 33,
+            },
+        };
+        let label = TextBlock {
+            text: "用户透视".to_string(),
+            confidence: 0.99,
+            box_rect: BoundingBox {
+                x: 67,
+                y: 10,
+                width: 44,
+                height: 12,
+            },
+        };
+        let accepted = retain_usable_ocr_with_context(vec![icon, label]);
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].text, "用户透视");
+    }
+
+    #[test]
+    fn overlapping_decoration_glyph_is_not_glued_to_a_real_label() {
+        let decoration = TextBlock {
+            text: "石".to_string(),
+            confidence: 0.91,
+            box_rect: BoundingBox {
+                x: 1,
+                y: 29,
+                width: 30,
+                height: 15,
+            },
+        };
+        let label = TextBlock {
+            text: "文件".to_string(),
+            confidence: 0.99,
+            box_rect: BoundingBox {
+                x: 23,
+                y: 29,
+                width: 36,
+                height: 15,
+            },
+        };
+        let accepted = retain_usable_ocr_with_context(vec![decoration, label]);
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].text, "文件");
+    }
+}
+
+#[cfg(test)]
+mod watch_cache_tests {
+    use super::{get_watch_cached_blocks, store_watch_cached_blocks, WatchOcrCacheKey, WATCH_OCR_CACHE};
+    use crate::models::{OverlayBlock, PhysicalRect};
+
+    fn key(image_hash: [u8; 16]) -> WatchOcrCacheKey {
+        WatchOcrCacheKey {
+            rect: PhysicalRect { x: 20, y: 30, width: 120, height: 40 },
+            image_hash,
+            ocr_engine: Some("onnx".into()),
+            ocr_model_version: "v6t".into(),
+            ocr_filter: None,
+            app_preset: Some("blender".into()),
+            target_hwnd: 0,
+        }
+    }
+
+    #[test]
+    fn reuses_only_an_identical_region_and_configuration() {
+        if let Ok(mut cache) = WATCH_OCR_CACHE.lock() {
+            *cache = None;
+        }
+        let first_key = key([7; 16]);
+        let block = OverlayBlock {
+            original: "UV Editing".into(),
+            translated: "UV 编辑".into(),
+            source_tier: "test".into(),
+            logical_x: 1.0,
+            logical_y: 2.0,
+            logical_w: 30.0,
+            logical_h: 14.0,
+            bg_css: "rgb(0,0,0)".into(),
+            fg_css: "rgb(255,255,255)".into(),
+            patch_png: None,
+            patch_x: 0.0,
+            patch_y: 0.0,
+            patch_w: 0.0,
+            patch_h: 0.0,
+        };
+        store_watch_cached_blocks(first_key.clone(), &[block.clone()]);
+
+        assert_eq!(get_watch_cached_blocks(&first_key), Some(vec![block]));
+        assert!(get_watch_cached_blocks(&key([8; 16])).is_none());
+
+        if let Ok(mut cache) = WATCH_OCR_CACHE.lock() {
+            *cache = None;
+        }
     }
 }

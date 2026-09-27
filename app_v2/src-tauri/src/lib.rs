@@ -21,6 +21,7 @@ pub mod reconstruction;
 pub mod sampler;
 pub mod translator;
 pub mod updater;
+pub mod uia_ocr;
 pub mod webdav;
 pub mod anki;
 pub mod glossary;

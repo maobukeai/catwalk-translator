@@ -23,6 +23,59 @@ import { OverlayBlock } from './types';
  */
 const COLLISION_EPS = 3;
 
+/**
+ * Estimate a stable per-line source height for font sizing. OCR boxes in a
+ * dense toolbar often include inconsistent padding or absorb a nearby glyph;
+ * sizing each card directly from that raw height makes one translated label
+ * much larger than its neighbours. Use nearby blocks on the same visual row
+ * as a local reference, while leaving isolated headings and sparse layouts
+ * untouched.
+ */
+export function estimateDenseRowFontHeights(
+  blocks: Array<Pick<OverlayBlock, 'original' | 'logicalY' | 'logicalH'>>
+): number[] {
+  const heights = blocks.map((block) => {
+    const lineCount = Math.max(1, block.original.split(/\r?\n/).filter(Boolean).length);
+    return Math.max(1, block.logicalH / lineCount);
+  });
+  const rows: number[][] = [];
+  const order = blocks.map((_, i) => i).sort((a, b) => blocks[a].logicalY - blocks[b].logicalY);
+
+  for (const index of order) {
+    const row = rows.find((indices) => {
+      const rowYs = indices.map((i) => blocks[i].logicalY);
+      const minY = Math.min(...rowYs, blocks[index].logicalY);
+      const maxY = Math.max(...rowYs, blocks[index].logicalY);
+      return maxY - minY <= 6;
+    });
+    if (row) row.push(index);
+    else rows.push([index]);
+  }
+
+  const normalized = [...heights];
+  for (const row of rows) {
+    if (row.length < 2) continue;
+    const sortedHeights = row.map((i) => heights[i]).sort((a, b) => a - b);
+    // The lower median resists tall outlier boxes better when a row has an
+    // even number of OCR blocks (e.g. one icon-sized false detection).
+    const reference = sortedHeights[Math.floor((sortedHeights.length - 1) / 2)];
+    for (const index of row) {
+      const ratio = heights[index] / reference;
+      if (row.length >= 3) {
+        normalized[index] = Math.min(
+          Math.max(heights[index], reference * 0.8),
+          reference * 1.2
+        );
+      } else if (ratio >= 1.55) {
+        // With only two peers, adjust only a clear outlier; ordinary mixed-size
+        // labels are too ambiguous to flatten confidently.
+        normalized[index] = Math.min(heights[index], reference * 1.2);
+      }
+    }
+  }
+  return normalized;
+}
+
 /** Horizontal intersection of two blocks (> COLLISION_EPS → same column band). */
 function overlapXOf<T extends OverlayBlock>(getW: (b: T) => number, a: T, b: T): number {
   return (

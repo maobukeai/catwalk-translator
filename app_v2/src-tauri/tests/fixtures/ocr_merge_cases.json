@@ -1,0 +1,35 @@
+[
+  {
+    "name": "recover_latin_prefix_in_dense_toolbar",
+    "primary": [{"text":"编辑","confidence":0.99,"boxRect":{"x":441,"y":29,"width":48,"height":15}}],
+    "secondary": [{"text":"UV编辑","confidence":0.94,"boxRect":{"x":441,"y":29,"width":48,"height":15}}],
+    "expected": ["UV编辑"]
+  },
+  {
+    "name": "keep_higher_confidence_primary_glyphs",
+    "primary": [{"text":"渲染","confidence":0.98,"boxRect":{"x":646,"y":29,"width":33,"height":15}}],
+    "secondary": [{"text":"沧染","confidence":0.74,"boxRect":{"x":646,"y":29,"width":33,"height":15}}],
+    "expected": ["渲染"]
+  },
+  {
+    "name": "match_wide_secondary_box_by_text_before_icon_overlap",
+    "primary": [
+      {"text":"物体","confidence":0.99,"boxRect":{"x":259,"y":51,"width":21,"height":20}},
+      {"text":"D","confidence":0.42,"boxRect":{"x":325,"y":51,"width":13,"height":20}}
+    ],
+    "secondary": [{"text":"物体","confidence":1.0,"boxRect":{"x":252,"y":50,"width":90,"height":22}}],
+    "expected": ["物体","D"]
+  },
+  {
+    "name": "reject_single_character_icon_noise",
+    "primary": [{"text":"布局","confidence":0.96,"boxRect":{"x":317,"y":29,"width":29,"height":15}}],
+    "secondary": [{"text":"0","confidence":0.99,"boxRect":{"x":0,"y":28,"width":16,"height":17}}],
+    "expected": ["布局"]
+  },
+  {
+    "name": "recover_missing_high_confidence_non_overlapping_label",
+    "primary": [{"text":"文件","confidence":0.98,"boxRect":{"x":32,"y":28,"width":18,"height":17}}],
+    "secondary": [{"text":"布局","confidence":0.93,"boxRect":{"x":317,"y":29,"width":29,"height":15}}],
+    "expected": ["文件","布局"]
+  }
+]

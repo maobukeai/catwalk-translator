@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { resolveAABBCollisions } from '../services/overlayLayout';
+import { estimateDenseRowFontHeights, resolveAABBCollisions } from '../services/overlayLayout';
 import { OverlayBlock } from '../services/types';
-import { toTranslucentBg, toSolidBg, isLightBg } from '../components/Overlay/OverlayBlockCard';
+import { toTranslucentBg, toSolidBg, isLightBg, getCardTextColor } from '../components/Overlay/OverlayBlockCard';
 
 describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
   const createMockBlock = (id: string, x: number, y: number, w: number, h: number): OverlayBlock => ({
@@ -14,6 +14,44 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
     logicalH: h,
     bgCss: 'rgba(0, 0, 0, 0.8)',
     fgCss: '#ffffff',
+  });
+
+  describe('estimateDenseRowFontHeights', () => {
+    it('dampens oversized OCR boxes within a dense row without changing normal peers', () => {
+      const heights = estimateDenseRowFontHeights([
+        { original: '文件编辑', logicalY: 20, logicalH: 18 },
+        { original: '渲染', logicalY: 22, logicalH: 11 },
+        { original: '窗口帮助', logicalY: 25, logicalH: 11 },
+      ]);
+      expect(heights[0]).toBeCloseTo(13.2);
+      expect(heights[1]).toBe(11);
+      expect(heights[2]).toBe(11);
+    });
+
+    it('caps a clear two-block outlier but preserves ordinary two-size rows', () => {
+      const noisy = estimateDenseRowFontHeights([
+        { original: '0', logicalY: 100, logicalH: 33 },
+        { original: '用户透视', logicalY: 100, logicalH: 12 },
+      ]);
+      expect(noisy[0]).toBeCloseTo(14.4);
+      expect(noisy[1]).toBe(12);
+
+      const mixed = estimateDenseRowFontHeights([
+        { original: 'File', logicalY: 100, logicalH: 16 },
+        { original: 'Edit', logicalY: 100, logicalH: 12 },
+      ]);
+      expect(mixed).toEqual([16, 12]);
+    });
+
+    it('does not normalize headings on separate rows or isolated blocks', () => {
+      expect(estimateDenseRowFontHeights([
+        { original: 'Application title', logicalY: 8, logicalH: 24 },
+        { original: 'File Edit View', logicalY: 32, logicalH: 12 },
+      ])).toEqual([24, 12]);
+      expect(estimateDenseRowFontHeights([
+        { original: 'Heading', logicalY: 8, logicalH: 30 },
+      ])).toEqual([30]);
+    });
   });
 
   describe('resolveAABBCollisions', () => {
@@ -211,8 +249,12 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
       expect(isLightBg('#ffffff')).toBe(true);
       expect(isLightBg('#fff')).toBe(true);
       expect(isLightBg(undefined, '#000000')).toBe(true);
-      expect(isLightBg('rgb(20, 24, 30)', '#000000')).toBe(true);
+      expect(isLightBg('rgb(20, 24, 30)', '#000000')).toBe(false);
       expect(isLightBg('rgb(20, 24, 30)', '#ffffff')).toBe(false);
+      expect(isLightBg('#14181e', 'rgb(0,0,0)')).toBe(false);
+      expect(getCardTextColor('rgb(20, 24, 30)', '#000000')).toBe('#ffffff');
+      expect(getCardTextColor('#14181e', 'rgb(0,0,0)')).toBe('#ffffff');
+      expect(getCardTextColor('rgb(240,240,240)', '#000000')).toBe('#000000');
     });
   });
 });

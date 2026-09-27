@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { CaptureOverlay } from '../components/Overlay/CaptureOverlay';
 import { detectSpeechLang } from '../services/langDetect';
 import { createMockIpcHarness, getActiveHarness } from './harness/tauriIpcMock';
@@ -256,6 +256,38 @@ describe('result reading experience (view cycle / selectable / zoom / active car
         expect(parseFloat(card2.style.top)).toBeGreaterThanOrEqual(100 + 90 - 1);
       });
       void card1;
+    } finally {
+      delete (globalThis as any).ResizeObserver;
+    }
+  });
+
+  it('keeps a card mounted when a measured neighbour pushes it to a new position', async () => {
+    class ControlledRO {
+      static instances: ControlledRO[] = [];
+      cb: (entries: Array<{ contentRect: { height: number; width: number } }>) => void;
+      constructor(cb: (entries: Array<{ contentRect: { height: number; width: number } }>) => void) {
+        this.cb = cb;
+        ControlledRO.instances.push(this);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    (globalThis as any).ResizeObserver = ControlledRO;
+
+    try {
+      await openWithResult();
+      const secondCard = screen.getByText('粗糙度').closest('.overlay-block') as HTMLElement;
+      expect(ControlledRO.instances.length).toBeGreaterThanOrEqual(2);
+
+      // The first card grows after translation; AABB moves the second card.
+      act(() => {
+        ControlledRO.instances[0].cb([{ contentRect: { height: 90, width: 180 } }]);
+      });
+      await waitFor(() => {
+        const currentCard = screen.getByText('粗糙度').closest('.overlay-block') as HTMLElement;
+        expect(parseFloat(currentCard.style.top)).toBeGreaterThanOrEqual(189);
+        expect(currentCard).toBe(secondCard);
+      });
     } finally {
       delete (globalThis as any).ResizeObserver;
     }

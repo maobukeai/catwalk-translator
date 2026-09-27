@@ -12,11 +12,14 @@ import type { OverlayResult, CaptureSession } from '../services/types';
 const MOCK_PAYLOAD = { width: 1920, height: 1080, scaleFactor: 1.0 };
 const BASE_CMDS = ['cmd_show_overlay', 'cmd_close_overlay'] as const;
 
-function wireOverlayHarness(translateDelayMs = 0) {
+function wireOverlayHarness(
+  translateDelayMs = 0,
+  detectedApp?: { preset: string; appName: string }
+) {
   const calls: Array<{ cmd: string; args: any }> = [];
   (getActiveHarness()!.invokeMock as any).mockImplementation((cmd: string, args?: any): any => {
     calls.push({ cmd, args });
-    if (cmd === 'cmd_begin_capture') return Promise.resolve(MOCK_PAYLOAD);
+    if (cmd === 'cmd_begin_capture') return Promise.resolve({ ...MOCK_PAYLOAD, detectedApp });
     if (BASE_CMDS.some((k) => k === cmd)) return Promise.resolve(undefined);
     if (cmd === 'cmd_region_ocr_layout') {
       const result: OverlayResult = {
@@ -118,6 +121,21 @@ describe('capture overlay upgrade regressions', () => {
     const layoutCall = calls.find((c) => c.cmd === 'cmd_region_ocr_layout')!;
     expect(layoutCall.args.overlayWidth).toBe(window.innerWidth);
     expect(layoutCall.args.overlayHeight).toBe(window.innerHeight);
+  });
+
+  it('passes the detected foreground app preset to OCR for its UI lexicon', async () => {
+    createMockIpcHarness();
+    const calls = wireOverlayHarness(0, { preset: 'unity', appName: 'Unity' });
+    (window as any).__TAURI_INTERNALS__ = {};
+
+    render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
+    await screen.findByText(/猫步划词/);
+    await mouseSelection();
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.cmd === 'cmd_region_ocr_layout')).toBe(true);
+    });
+    expect(calls.find((c) => c.cmd === 'cmd_region_ocr_layout')!.args.appPreset).toBe('unity');
   });
 
   it('renders OCR text immediately, then swaps in the stage-2 translation progressively', async () => {

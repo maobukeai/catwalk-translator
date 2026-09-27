@@ -58,6 +58,8 @@ interface OverlayBlockCardProps {
   viewMode?: CardViewMode;
   /** Per-card zoom multiplier (Ctrl+wheel / A± buttons), clamped 0.6–2.0. */
   scale?: number;
+  /** Row-normalized OCR line height used for stable source-matched font sizing. */
+  fontLineHeight?: number;
   onScaleChange?: (scale: number) => void;
   onViewCycle?: () => void;
   /** Hover marks this card as the active keyboard target (Space / Ctrl+D / ↑↓). */
@@ -152,39 +154,40 @@ export function toTranslucentBg(bgCss?: string, alpha = 0.78): string {
   return str;
 }
 
-/**
- * 判断当前采样背景是否为浅色底，从而自适应选择浅色或深色微透明边框
- */
-export function isLightBg(bgCss?: string, fgCss?: string): boolean {
-  if (fgCss) {
-    const lowerFg = fgCss.toLowerCase().replace(/\s/g, '');
-    if (lowerFg === '#000' || lowerFg === '#000000' || lowerFg === 'black' || lowerFg === 'rgb(0,0,0)') {
-      return true;
-    }
-  }
-  if (!bgCss) return false;
-  const rgbMatch = bgCss.match(/rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+function cssLuminance(color?: string): number | null {
+  if (!color || color === 'transparent') return null;
+  const value = color.trim().toLowerCase();
+  if (value === 'black') return 0;
+  if (value === 'white') return 255;
+  const rgbMatch = value.match(/^rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
   if (rgbMatch) {
     const r = parseInt(rgbMatch[1], 10);
     const g = parseInt(rgbMatch[2], 10);
     const b = parseInt(rgbMatch[3], 10);
-    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-    return lum > 140;
+    return 0.299 * r + 0.587 * g + 0.114 * b;
   }
-  if (bgCss.startsWith('#')) {
-    let hex = bgCss.slice(1);
+  if (value.startsWith('#')) {
+    let hex = value.slice(1);
     if (hex.length === 3 || hex.length === 4) {
       hex = hex.split('').map((c) => c + c).join('');
     }
-    if (hex.length >= 6) {
+    if (/^[\da-f]{6}(?:[\da-f]{2})?$/.test(hex)) {
       const r = parseInt(hex.slice(0, 2), 16);
       const g = parseInt(hex.slice(2, 4), 16);
       const b = parseInt(hex.slice(4, 6), 16);
-      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-      return lum > 140;
+      return 0.299 * r + 0.587 * g + 0.114 * b;
     }
   }
-  return false;
+  return null;
+}
+
+/** The sampled background is authoritative; an erroneous dark ink sample
+ * must not turn an actually dark image into a falsely light card. */
+export function isLightBg(bgCss?: string, fgCss?: string): boolean {
+  const background = cssLuminance(bgCss);
+  if (background !== null) return background > 140;
+  const foreground = cssLuminance(fgCss);
+  return foreground !== null && foreground < 140;
 }
 
 /**
@@ -198,14 +201,8 @@ export function getCardTextColor(bgCss?: string, fgCss?: string): string {
     return '#000000';
   }
   if (fgCss && fgCss !== 'transparent') {
-    const rgbMatch = fgCss.match(/rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
-    if (rgbMatch) {
-      const r = parseInt(rgbMatch[1], 10);
-      const g = parseInt(rgbMatch[2], 10);
-      const b = parseInt(rgbMatch[3], 10);
-      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-      if (lum < 160) return '#ffffff';
-    }
+    const foreground = cssLuminance(fgCss);
+    if (foreground !== null && foreground < 160) return '#ffffff';
     return fgCss;
   }
   return '#ffffff';
@@ -222,6 +219,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   onRetry,
   viewMode = 'translated',
   scale = 1,
+  fontLineHeight,
   onScaleChange,
   onViewCycle,
   onActive,
@@ -298,7 +296,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   // 否则译文会被直接渲染成两行
   const renderText =
     lineCount === 1 ? primaryText.replace(/\s*\n+\s*/g, ' ').trim() : primaryText;
-  const singleLineH = Math.max(10, block.logicalH / lineCount);
+  const singleLineH = Math.max(10, fontLineHeight ?? block.logicalH / lineCount);
   const nonSpaceLen = Math.max(1, block.original.replace(/\s/g, '').length);
   const cjkCount = (block.original.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
   // OCR 检测框天然包含行距与 DBNet unclip 安全扩展，真实印刷字高约占框高的 68%~72%。
@@ -374,7 +372,10 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   const hasPatch = !!block.patchPng && (block.patchW ?? 0) > 0;
   const solidBg = toSolidBg(block.bgCss, block.fgCss);
   const isMoved = dragging || userDraggedRef.current;
-  const renderedTextW = baseFontSize > 0 ? (estimatedWidth * (fontSize / (baseFontSize * Math.max(scale, 0.01)))) : estimatedWidth;
+  // `fontSize` already includes the user's zoom. Dividing by `scale` here
+  // cancels that zoom, so enlarged text can spill outside the erased patch
+  // while the card incorrectly remains transparent.
+  const renderedTextW = baseFontSize > 0 ? estimatedWidth * (fontSize / baseFontSize) : estimatedWidth;
   const patchW = block.patchW ?? block.logicalW;
   const patchH = block.patchH ?? block.logicalH;
   const isOverflowingPatch = hasPatch && (patchW < Math.min(maxWidth, renderedTextW) || patchH < block.logicalH);

@@ -25,6 +25,105 @@ const TABLE: &[(&str, &str, &str)] = &[
     ("unity", "unity", "Unity"),
 ];
 
+/// High-confidence vocabulary anchors for correcting common application UI
+/// OCR slips. Kept separate from translation dictionaries: these are labels
+/// whose near-miss OCR output can be safely snapped back to a known UI term.
+const OCR_UI_TERMS: &[(&str, &[&str])] = &[
+    (
+        "blender",
+        &[
+            "Animation", "Compositing", "Geometry Nodes", "Layout", "Modeling", "Object Mode",
+            "Sculpting", "Scripting", "Shading", "Texture Paint", "UV Editing", "纹理绘制",
+            "几何节点", "物体模式",
+        ],
+    ),
+    (
+        "maya",
+        &[
+            "Animation", "Bifrost", "Deform", "Edit Mesh", "Modeling", "Rigging", "UV Editor",
+            "Viewport", "Hypershade",
+        ],
+    ),
+    (
+        "unity",
+        &[
+            "Animator", "GameObject", "Hierarchy", "Inspector", "NavMesh", "Package Manager",
+            "Project", "Scene", "Terrain", "Timeline",
+        ],
+    ),
+];
+
+/// Correct a near-match to a known UI label only when the preset is known and
+/// the closest term is uniquely within a conservative edit-distance bound.
+pub fn correct_ocr_ui_term(text: &str, preset: &str) -> Option<String> {
+    let terms = OCR_UI_TERMS
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(preset.trim()))?
+        .1;
+    let source = normalized_label(text);
+    if source.len() < 4 {
+        return None;
+    }
+
+    let mut best: Option<(&str, usize)> = None;
+    let mut ambiguous = false;
+    for &term in terms {
+        let normalized = normalized_label(term);
+        let term_len = normalized.len();
+        if term_len < 4 {
+            continue;
+        }
+        let max_distance = if term_len >= 10 { 2 } else { 1 };
+        let distance = levenshtein_chars(&source, &normalized);
+        if distance > max_distance {
+            continue;
+        }
+        match best {
+            None => {
+                best = Some((term, distance));
+                ambiguous = false;
+            }
+            Some((_, best_distance)) if distance < best_distance => {
+                best = Some((term, distance));
+                ambiguous = false;
+            }
+            Some((best_term, best_distance)) if distance == best_distance && term != best_term => {
+                ambiguous = true;
+            }
+            _ => {}
+        }
+    }
+
+    if ambiguous {
+        return None;
+    }
+    let (term, distance) = best?;
+    (distance > 0 || text != term).then(|| term.to_string())
+}
+
+fn normalized_label(text: &str) -> Vec<char> {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn levenshtein_chars(a: &[char], b: &[char]) -> usize {
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (row[j + 1] + 1)
+                .min(row[j] + 1)
+                .min(diagonal + usize::from(ca != cb));
+            diagonal = above;
+        }
+    }
+    row[b.len()]
+}
+
 /// 纯匹配函数（可单测）：可执行文件名 + 窗口标题 → 词库 preset。
 /// 输入在内部统一小写；两者任一命中即返回。
 pub fn match_preset(exe: &str, title: &str) -> Option<DetectedApp> {
@@ -145,5 +244,24 @@ mod tests {
         assert_eq!(match_preset("MaobuTranslator.exe", "猫步翻译"), None);
         assert_eq!(match_preset("code.exe", "main.rs - VSCode"), None);
         assert_eq!(match_preset("", ""), None);
+    }
+
+    #[test]
+    fn corrects_near_match_only_with_the_matching_app_lexicon() {
+        assert_eq!(
+            correct_ocr_ui_term("UV Editng", "blender"),
+            Some("UV Editing".into())
+        );
+        assert_eq!(
+            correct_ocr_ui_term("Gamelbject", "unity"),
+            Some("GameObject".into())
+        );
+        assert_eq!(
+            correct_ocr_ui_term("UV Edtor", "maya"),
+            Some("UV Editor".into())
+        );
+        assert_eq!(correct_ocr_ui_term("UV Editng", "maya"), None);
+        assert_eq!(correct_ocr_ui_term("Play", "unity"), None);
+        assert_eq!(correct_ocr_ui_term("UV Editing", "unknown"), None);
     }
 }

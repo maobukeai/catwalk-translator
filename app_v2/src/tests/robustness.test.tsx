@@ -28,7 +28,7 @@ const STANDARD_LAYOUT: OverlayResult = {
   selectionH: 100,
 };
 
-type Ctx = { layoutImpl?: (args: any) => any };
+type Ctx = { layoutImpl?: (args: any) => any; watchImpl?: (args: any) => any };
 
 function wireHarness(ctx: Ctx = {}) {
   const calls: Array<{ cmd: string; args: any }> = [];
@@ -37,6 +37,7 @@ function wireHarness(ctx: Ctx = {}) {
     if (cmd === 'cmd_begin_capture') return Promise.resolve(MOCK_PAYLOAD);
     if (BASE_CMDS.some((k) => k === cmd)) return Promise.resolve(undefined);
     if (cmd === 'cmd_region_image') return Promise.resolve('');
+    if (cmd === 'cmd_watch_tick' && ctx.watchImpl) return ctx.watchImpl(args);
     if (cmd === 'cmd_region_ocr_layout' || cmd === 'cmd_watch_tick') {
       const impl = ctx.layoutImpl;
       if (impl) return impl(args);
@@ -246,6 +247,16 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
 
     pressKey('w', 'KeyW');
     await screen.findByText(/已停止区域监控/);
+  });
+
+  it('treats a resolved but invalid quiet-watch layout as a fallback failure', async () => {
+    const { calls } = await openWithResult({ watchImpl: () => Promise.resolve(undefined) });
+    const before = countCmd(calls, 'cmd_region_ocr_layout');
+    pressKey('w', 'KeyW');
+    await waitFor(() => expect(countCmd(calls, 'cmd_watch_tick')).toBeGreaterThanOrEqual(1));
+    await waitFor(() => expect(countCmd(calls, 'cmd_region_ocr_layout')).toBeGreaterThan(before));
+    expect(screen.getByText('粗糙度')).toBeInTheDocument();
+    pressKey('w', 'KeyW');
   });
 
   it('region watch refreshes card geometry when text stays the same but moves', async () => {

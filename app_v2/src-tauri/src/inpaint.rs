@@ -267,36 +267,40 @@ pub fn build_erased_patch_png(
         left_col_median
     };
 
-    let left_col_lum = crate::sampler::ColorSampler::calc_perceived_brightness(
-        left_col_median[0],
-        left_col_median[1],
-        left_col_median[2],
-    );
-    let right_col_lum = crate::sampler::ColorSampler::calc_perceived_brightness(
-        right_col_median[0],
-        right_col_median[1],
-        right_col_median[2],
-    );
-
-    // Any pixel that deviates strongly from the column's ambient background is "ink"
-    // (such as a bullet point '•', punctuation, icon, or cursor) and must NOT be used for inpainting.
-    let is_clean_left = |c: [u8; 3]| -> bool {
-        let lum = crate::sampler::ColorSampler::calc_perceived_brightness(c[0], c[1], c[2]);
-        let lum_diff = (lum - left_col_lum).abs();
-        let col_diff = (c[0] as i32 - left_col_median[0] as i32)
-            .abs()
-            .max((c[1] as i32 - left_col_median[1] as i32).abs())
-            .max((c[2] as i32 - left_col_median[2] as i32).abs());
-        lum_diff < 45.0 && col_diff < 50
+    // Use a local vertical median for each row. A whole-column median mistakes
+    // the top/bottom of a steep vertical gradient for ink and paints a flat
+    // stripe across the erased text. The 25-row window still rejects short
+    // neighbouring glyphs and bullets in the side sampling strips.
+    let local_side = |edge_x: i32, direction: i32, y: i32, fallback: [u8; 3]| -> [u8; 3] {
+        let mut samples = Vec::with_capacity(25 * 3);
+        for sample_y in (y - 12).max(0)..=(y + 12).min(full_h as i32 - 1) {
+            for offset in 1..=3 {
+                if let Some(p) = get_px(bmp, full_w, edge_x + direction * offset, sample_y) {
+                    samples.push(px(p));
+                }
+            }
+        }
+        if samples.is_empty() {
+            fallback
+        } else {
+            median3(samples)
+        }
     };
 
-    let is_clean_right = |c: [u8; 3]| -> bool {
+    // Any pixel that deviates strongly from its local ambient background is
+    // ink (bullet, punctuation, icon, cursor) and must not be smeared inward.
+    let is_clean = |c: [u8; 3], reference: [u8; 3]| -> bool {
         let lum = crate::sampler::ColorSampler::calc_perceived_brightness(c[0], c[1], c[2]);
-        let lum_diff = (lum - right_col_lum).abs();
-        let col_diff = (c[0] as i32 - right_col_median[0] as i32)
+        let ref_lum = crate::sampler::ColorSampler::calc_perceived_brightness(
+            reference[0],
+            reference[1],
+            reference[2],
+        );
+        let lum_diff = (lum - ref_lum).abs();
+        let col_diff = (c[0] as i32 - reference[0] as i32)
             .abs()
-            .max((c[1] as i32 - right_col_median[1] as i32).abs())
-            .max((c[2] as i32 - right_col_median[2] as i32).abs());
+            .max((c[1] as i32 - reference[1] as i32).abs())
+            .max((c[2] as i32 - reference[2] as i32).abs());
         lum_diff < 45.0 && col_diff < 50
     };
 
@@ -304,6 +308,8 @@ pub fn build_erased_patch_png(
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
 
     for y in y0..=y1 {
+        let left_background = local_side(x0, -1, y, left_col_median);
+        let right_background = local_side(x1, 1, y, right_col_median);
         let mut left = [0u32; 3];
         let mut left_n = 0u32;
         let mut right = [0u32; 3];
@@ -312,7 +318,7 @@ pub fn build_erased_patch_png(
         for s in 1..=STRIP {
             if let Some(p) = get_px(bmp, full_w, x0 - s, y) {
                 let c = px(p);
-                if is_clean_left(c) {
+                if is_clean(c, left_background) {
                     left[0] += c[0] as u32;
                     left[1] += c[1] as u32;
                     left[2] += c[2] as u32;
@@ -321,7 +327,7 @@ pub fn build_erased_patch_png(
             }
             if let Some(p) = get_px(bmp, full_w, x1 + s, y) {
                 let c = px(p);
-                if is_clean_right(c) {
+                if is_clean(c, right_background) {
                     right[0] += c[0] as u32;
                     right[1] += c[1] as u32;
                     right[2] += c[2] as u32;
@@ -340,7 +346,7 @@ pub fn build_erased_patch_png(
                 (left[2] / n) as u8,
             ]
         } else {
-            left_col_median
+            left_background
         };
 
         let r = if let Some(n) = std::num::NonZeroU32::new(right_n) {
@@ -351,7 +357,7 @@ pub fn build_erased_patch_png(
                 (right[2] / n) as u8,
             ]
         } else {
-            right_col_median
+            right_background
         };
 
         for x in x0..=x1 {
@@ -493,6 +499,57 @@ mod tests {
         let mid = img.get_pixel(pw / 2, 5)[0] as i32;
         let expect = (left + right) / 2;
         assert!((mid - expect).abs() <= 6, "mid {} should ≈ {}", mid, expect);
+    }
+
+    #[test]
+    fn test_patch_follows_steep_vertical_gradient_at_every_row() {
+        let (bmp, w, h) = make_bmp(120, 100, |_x, y| {
+            let shade = (y * 2 + 25) as u8;
+            [shade, shade, shade]
+        });
+        let bbox = BoundingBox { x: 40, y: 30, width: 40, height: 40 };
+        let (b64, _, _) = build_erased_patch_png(&bmp, w, h, bbox, &[]).unwrap();
+        let img = image::load_from_memory_with_format(
+            &base64::engine::general_purpose::STANDARD.decode(b64).unwrap(),
+            image::ImageFormat::Png,
+        ).unwrap().to_rgba8();
+        let (_, top, _, _) = erased_patch_rect(bbox, w, h, &[], &bmp);
+        for row in 0..img.height() {
+            let expected = ((top + row as i32) * 2 + 25) as i32;
+            let actual = img.get_pixel(img.width() / 2, row)[0] as i32;
+            assert!((actual - expected).abs() <= 5,
+                "vertical gradient lost at row {row}: expected {expected}, got {actual}");
+        }
+    }
+
+    #[test]
+    fn test_password_heading_real_background_remains_seamless() {
+        let source = image::load_from_memory(include_bytes!("../tests/fixtures/password_heading_crop.png"))
+            .unwrap().to_rgba8();
+        let (bmp, w, h) = make_bmp(source.width(), source.height(), |x, y| {
+            let p = source.get_pixel(x as u32, y as u32);
+            [p[0], p[1], p[2]]
+        });
+        for bbox in [
+            BoundingBox { x: 40, y: 67, width: 938, height: 50 },
+            BoundingBox { x: 41, y: 133, width: 558, height: 50 },
+        ] {
+            let (b64, _, _) = build_erased_patch_png(&bmp, w, h, bbox, &[]).unwrap();
+            let patch = image::load_from_memory_with_format(
+                &base64::engine::general_purpose::STANDARD.decode(b64).unwrap(),
+                image::ImageFormat::Png,
+            ).unwrap().to_rgba8();
+            let (_, top, _, _) = erased_patch_rect(bbox, w, h, &[], &bmp);
+            for row in 0..patch.height() {
+                let actual = patch.get_pixel(patch.width() / 2, row);
+                let background = source.get_pixel(1000, top as u32 + row);
+                for channel in 0..3 {
+                    assert!((actual[channel] as i32 - background[channel] as i32).abs() <= 12,
+                        "real screenshot patch seam at y={} channel={}: {:?} vs {:?}",
+                        top + row as i32, channel, actual, background);
+                }
+            }
+        }
     }
 
     #[test]

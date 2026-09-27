@@ -34,7 +34,7 @@ import {
 } from '../../services/tauri';
 import { matchesHotkey } from '../../services/hotkeys';
 import { speakText, stopSpeech } from "../../services/tts";
-import { resolveAABBCollisions } from '../../services/overlayLayout';
+import { estimateDenseRowFontHeights, resolveAABBCollisions } from '../../services/overlayLayout';
 import { detectSpeechLang } from '../../services/langDetect';
 import { buildCaptureEngineChoices, flattenCaptureEngineChoices } from '../../services/engineOptions';
 import type { OverlayBlock, OverlayResult, LanguageCode, TranslationResult } from '../../services/types';
@@ -284,6 +284,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   const [globalFontScale, setGlobalFontScale] = useState<number>(1.0);
   const [cardScales, setCardScales] = useState<Record<number, number>>({});
   const [renderedSizes, setRenderedSizes] = useState<Record<number, { width: number; height: number }>>({});
+  // Only a fresh OCR layout replaces card identity. Collision avoidance can
+  // move logicalX/Y after ResizeObserver fires; those derived coordinates must
+  // never become React keys or the card remounts and loses its local state.
+  const [cardLayoutGeneration, setCardLayoutGeneration] = useState(0);
   const [activeBlockIdx, setActiveBlockIdx] = useState<number | null>(null);
 
   // ── Hover lookup (frozen-frame word taking): debounced OCR at the cursor.
@@ -328,7 +332,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   // result. `__i` carries the original overlayResult index through the internal
   // sort so per-card actions (context menu / retry) address the right block.
   const displayBlocks = React.useMemo(() => {
-    if (!overlayResult || overlayResult.blocks.length === 0) return [] as (OverlayBlock & { __i: number })[];
+    if (!overlayResult || overlayResult.blocks.length === 0) {
+      return [] as (OverlayBlock & { __i: number; fontLineHeight: number })[];
+    }
+    const fontLineHeights = estimateDenseRowFontHeights(overlayResult.blocks);
     const kept = overlayResult.blocks
       .map((block, i) => {
         // Rendered cards are typically taller than the OCR box (font fit × 1.2
@@ -339,7 +346,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         const real = renderedSizes[i];
         const aabbH = real?.height && real.height > block.logicalH ? real.height : block.logicalH;
         const aabbW = real?.width && real.width > block.logicalW ? real.width : block.logicalW;
-        return { ...block, aabbH, aabbW, __i: i };
+        return { ...block, aabbH, aabbW, fontLineHeight: fontLineHeights[i], __i: i };
       })
       .filter((b) => !dismissedBlockIndexes.includes(b.__i));
     if (!enableAabb) return kept;
@@ -366,6 +373,14 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     (useSettingsStore.getState().settings.autoDetectPreset !== false && detectedPresetRef.current?.preset) ||
     settings.defaultPreset ||
     'blender';
+
+  // OCR correction only uses a lexicon when foreground-app detection actually
+  // identified the captured application; the default translation preset alone
+  // is not evidence that the screenshot came from that application.
+  const detectedOcrPreset = () =>
+    useSettingsStore.getState().settings.autoDetectPreset !== false
+      ? detectedPresetRef.current?.preset
+      : undefined;
 
   /** Clipboard write that awaits and reports failures instead of fire-and-forget. */
   const copyTextSafely = useCallback(async (text: string, okMsg?: string) => {
@@ -1332,6 +1347,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       if (isWatch) {
         // The watched region may have scrolled to a blank/loading frame. Never
         // leave translations from the previous frame floating over new content.
+        setCardLayoutGeneration((generation) => generation + 1);
         setOverlayResult(layout);
         setRenderedSizes({});
         setActiveBlockIdx(null);
@@ -1355,6 +1371,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     }
 
     // Cards visible NOW with original text + shimmer placeholders
+    setCardLayoutGeneration((generation) => generation + 1);
     setOverlayResult(layout);
     setPhase('overlay');
     setStartPos(null);
@@ -1677,7 +1694,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
             // 2. 原位 1:1 视觉翻译合成（底色抹除层 + 译文文本）
             if (includeTranslations && overlayResult?.blocks && overlayResult.blocks.length > 0) {
-              for (const block of overlayResult.blocks) {
+              const fontLineHeights = estimateDenseRowFontHeights(overlayResult.blocks);
+              overlayResult.blocks.forEach((block, blockIndex) => {
                 const bx = (block.logicalX - rect.x) * scaleX;
                 const by = (block.logicalY - rect.y) * scaleY;
                 const bw = block.logicalW * scaleX;
@@ -1687,13 +1705,15 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                 ctx.fillRect(bx, by, bw, bh);
 
                 if (block.translated) {
-                  const fontSize = Math.round(Math.max(11, block.logicalH * 0.72) * scaleY);
+                  const fontSize = Math.round(
+                    Math.max(11, fontLineHeights[blockIndex] * 0.72) * scaleY
+                  );
                   ctx.font = `600 ${fontSize}px "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif`;
                   ctx.fillStyle = getCardTextColor(block.bgCss, block.fgCss);
                   ctx.textBaseline = 'top';
                   ctx.fillText(block.translated, bx + 2 * scaleX, by + 2 * scaleY, bw);
                 }
-              }
+              });
             }
 
             // 3. SVG 标注绘制（矩形、箭头、涂鸦画笔、马赛克、文字）
@@ -1914,6 +1934,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         scaleFactor,
         viewportW,
         viewportH,
+        detectedOcrPreset(),
       );
 
       if (!mountedRef.current) return;
@@ -1939,7 +1960,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         },
       });
     }
-  }, [scaleFactor, applyLayoutAndTranslate, adjustRect, settings.captureReleaseAction]);
+  }, [scaleFactor, applyLayoutAndTranslate, adjustRect, settings.captureReleaseAction, detectedOcrPreset]);
 
   // ── Shift multi-select: OCR every queued rect, merge into a single overlay ──
   const processPendingRects = useCallback(async (override?: SelRect[]) => {
@@ -1956,7 +1977,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
       const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
       const layouts = await Promise.all(
-        rects.map((sel) => cmdRegionOcrLayout(sel, scaleFactor, vw, vh)),
+        rects.map((sel) => cmdRegionOcrLayout(sel, scaleFactor, vw, vh, detectedOcrPreset())),
       );
       if (!mountedRef.current || epoch !== processEpochRef.current) return;
 
@@ -2002,7 +2023,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         },
       });
     }
-  }, [pendingRects, scaleFactor, applyLayoutAndTranslate]);
+  }, [pendingRects, scaleFactor, applyLayoutAndTranslate, detectedOcrPreset]);
 
   // ── Region watch: refresh the pinned region on an interval ─────────────────
   const stopWatch = useCallback(() => {
@@ -2031,7 +2052,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         try {
           // Quiet path: Rust refreshes only the watched rect in place — the
           // overlay window never hides, so there is zero on-screen flicker.
-          layout = await cmdWatchTick(LAST_SELECTION, scaleFactor, vw, vh);
+          layout = await cmdWatchTick(LAST_SELECTION, scaleFactor, vw, vh, detectedOcrPreset());
+          if (!layout || !Array.isArray(layout.blocks)) {
+            throw new Error('区域监控返回了无效 OCR 布局');
+          }
           watchQuietFailuresRef.current = 0;
         } catch {
           // Fallback: legacy refresh (hide overlay → capture → restore).
@@ -2045,12 +2069,15 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           }
           await cmdBeginCapture();
           await cmdShowOverlay();
-          layout = await cmdRegionOcrLayout(LAST_SELECTION, scaleFactor, vw, vh);
+          layout = await cmdRegionOcrLayout(LAST_SELECTION, scaleFactor, vw, vh, detectedOcrPreset());
         }
       } else {
-        layout = await cmdRegionOcrLayout(LAST_SELECTION, scaleFactor, vw, vh);
+        layout = await cmdRegionOcrLayout(LAST_SELECTION, scaleFactor, vw, vh, detectedOcrPreset());
       }
       if (!watchModeRef.current || !mountedRef.current || epoch !== processEpochRef.current) return;
+      if (!layout || !Array.isArray(layout.blocks)) {
+        throw new Error('区域监控回退后仍未得到有效 OCR 布局');
+      }
 
       // Text alone is not a frame identity: after scrolling, identical text can
       // move while coordinates, dimensions and background patches all change.
@@ -2070,7 +2097,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     } finally {
       watchTickBusyRef.current = false;
     }
-  }, [scaleFactor, applyLayoutAndTranslate]);
+  }, [scaleFactor, applyLayoutAndTranslate, detectedOcrPreset]);
 
   const toggleWatch = useCallback(() => {
     if (watchModeRef.current) {
@@ -2155,7 +2182,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     try {
       const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
       const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
-      const layout = await cmdRegionOcrLayout(rectToOcr, scaleFactor, vw, vh);
+      const layout = await cmdRegionOcrLayout(rectToOcr, scaleFactor, vw, vh, detectedOcrPreset());
       if (!mountedRef.current) return;
       const fullText = layout.blocks.map((b) => b.original).join('\n');
       if (!fullText.trim()) {
@@ -2171,7 +2198,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       showFeedback('⚠️ OCR 提取失败');
       setPhase('adjusting');
     }
-  }, [phase, overlayResult, adjustRect, scaleFactor, copyTextSafely]);
+  }, [phase, overlayResult, adjustRect, scaleFactor, copyTextSafely, detectedOcrPreset]);
 
   const onMouseUp = useCallback(async (e?: React.MouseEvent) => {
     // Finish an in-progress drawing annotation
@@ -3233,7 +3260,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       {/* ── In-place translated text blocks (cover mode) ─────────────────────── */}
       {phase === 'overlay' && displayMode === 'cover' && displayBlocks.map((block) => (
         <OverlayBlockCard
-          key={`${block.__i}:${block.original}:${Math.round(block.logicalX)}:${Math.round(block.logicalY)}`}
+          key={`${cardLayoutGeneration}:${block.__i}`}
           block={block}
           blockIndex={block.__i}
           onClose={handleClose}
@@ -3259,6 +3286,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           onRetry={block.translationFailed ? () => { void retryBlockTranslation(block.__i); } : undefined}
           viewMode={cardViewMode}
           scale={(cardScales[block.__i] ?? 1.0) * globalFontScale}
+          fontLineHeight={block.fontLineHeight}
           onScaleChange={(s) => setCardScales((prev) => ({ ...prev, [block.__i]: s }))}
           onViewCycle={cycleCardView}
           onActive={() => setActiveBlockIdx(block.__i)}

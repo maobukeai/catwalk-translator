@@ -84,21 +84,20 @@ pub fn get_active_version() -> String {
         .unwrap_or_else(|_| "v6t".to_string())
 }
 
-/// Set the active OCR model version ("v3" | "v4" | "v5" | "v6" | "v6t").
-pub fn set_active_version(ver: &str) {
-    let clean_ver = match ver.to_ascii_lowercase().as_str() {
+fn normalize_version(ver: &str) -> &'static str {
+    match ver.to_ascii_lowercase().as_str() {
         "v3" | "ppocrv3" | "pp-ocrv3" => "v3",
-        // v4 必须显式列出：旧版用 `_ => "v4"` 兜底，改成 v6t 兜底后如果不写
-        // 这个分支，set_active_version("v4") 会被静默归到 v6t——表现为
-        // 「选了 v4 却加载 v6Tiny」。
         "v4" | "ppocrv4" | "pp-ocrv4" => "v4",
         "v5" | "ppocrv5" | "pp-ocrv5" => "v5",
-        // v6t 必须排在 v6 之前判定：两者前缀相同，顺序反了会把 Tiny 归到 Small。
         "v6t" | "ppocrv6t" | "pp-ocrv6-tiny" => "v6t",
         "v6" | "ppocrv6" | "pp-ocrv6" => "v6",
-        // 未知值回退到默认档 v6Tiny（与 AppSettings 默认一致）
         _ => "v6t",
-    };
+    }
+}
+
+/// Set the active OCR model version ("v3" | "v4" | "v5" | "v6" | "v6t").
+pub fn set_active_version(ver: &str) {
+    let clean_ver = normalize_version(ver);
     if let Ok(mut g) = active_version_lock().lock() {
         *g = clean_ver.to_string();
     }
@@ -155,9 +154,13 @@ pub fn resolved_models_dir() -> Option<std::path::PathBuf> {
 
 /// Resolve the directory holding models for a specific version.
 pub fn resolve_models_dir_for_version(ver: &str) -> Option<std::path::PathBuf> {
-    let (det_file, rec_file, _) = get_model_filenames_for_version(ver);
+    let version = normalize_version(ver);
+    let (det_file, rec_file, cls_file) = get_model_filenames_for_version(version);
     let exists = |dir: std::path::PathBuf| -> Option<std::path::PathBuf> {
-        if dir.join(det_file).exists() && dir.join(rec_file).exists() {
+        if [det_file, rec_file, cls_file]
+            .iter()
+            .all(|file| model_file_is_usable(&dir, version, file))
+        {
             Some(dir)
         } else {
             None
@@ -189,6 +192,22 @@ pub fn resolve_models_dir_for_version(ver: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+fn model_file_is_usable(dir: &std::path::Path, version: &str, file: &str) -> bool {
+    let Some(spec) = crate::offline_models::MODELS
+        .iter()
+        .find(|spec| spec.version == version && spec.file == file)
+    else {
+        return false;
+    };
+    std::fs::metadata(dir.join(file))
+        .map(|meta| {
+            meta.is_file()
+                && meta.len() >= 64 * 1024
+                && !crate::offline_models::is_stale_size(spec, meta.len())
+        })
+        .unwrap_or(false)
 }
 
 fn resolve_models_dir() -> Option<std::path::PathBuf> {
@@ -231,7 +250,10 @@ pub fn best_available_version(preferred: &str) -> Option<String> {
     if model_files_present_for_version(normalized) {
         return Some(normalized.to_string());
     }
-    ["v6t", "v6", "v5", "v4", "v3"]
+    // When a requested model is unavailable, prefer accuracy-oriented models
+    // before Tiny. The real desktop fixtures show Tiny is faster but can split
+    // terminal and dialog text more severely than v4.
+    ["v6", "v5", "v4", "v3", "v6t"]
         .into_iter()
         .find(|v| model_files_present_for_version(v))
         .map(str::to_string)
@@ -315,6 +337,8 @@ pub fn accel_status_text() -> String {
 }
 
 static ONNX_ENGINE: OnceLock<Mutex<OnnxOcrEngine>> = OnceLock::new();
+static ENSEMBLE_V3_ENGINE: OnceLock<OnnxOcrEngine> = OnceLock::new();
+static ENSEMBLE_V6T_ENGINE: OnceLock<OnnxOcrEngine> = OnceLock::new();
 
 /// Global singleton accessor for the ONNX OCR engine.
 pub fn get_engine() -> MutexGuard<'static, OnnxOcrEngine> {
@@ -343,6 +367,23 @@ pub fn recognize_bmp(bmp: &[u8]) -> Result<OcrResult, String> {
     engine.recognize_bmp(bmp)
 }
 
+fn ensemble_engine(version: &str) -> Option<&'static OnnxOcrEngine> {
+    match normalize_version(version) {
+        "v3" => Some(ENSEMBLE_V3_ENGINE.get_or_init(|| OnnxOcrEngine::new_for_version("v3"))),
+        "v6t" => Some(ENSEMBLE_V6T_ENGINE.get_or_init(|| OnnxOcrEngine::new_for_version("v6t"))),
+        _ => None,
+    }
+}
+
+fn secondary_version_for(primary: &str) -> Option<&'static str> {
+    let candidate = if normalize_version(primary) == "v6t" {
+        "v3"
+    } else {
+        "v6t"
+    };
+    model_files_present_for_version(candidate).then_some(candidate)
+}
+
 /// Thread-safe ONNX OCR engine (sessions require `&mut` to run, so the engine
 /// serializes inference under a mutex - fine for region-crop OCR).
 pub struct OnnxOcrEngine {
@@ -350,6 +391,12 @@ pub struct OnnxOcrEngine {
     load_error: Mutex<Option<String>>,
     /// 最近一次成功加载时期的加速方式(会话卸载后清空)。
     accel: Mutex<Option<AccelInfo>>,
+    /// Ensemble engines pin their own generation and never mutate the user's
+    /// globally selected model. `None` is the normal user-facing engine.
+    fixed_version: Option<String>,
+    /// Small secondary passes are latency-sensitive; a second DirectML session
+    /// adds queue/transfer overhead and benchmarked slower on real UI strips.
+    force_cpu: bool,
 }
 
 impl Default for OnnxOcrEngine {
@@ -364,6 +411,18 @@ impl OnnxOcrEngine {
             inner: Mutex::new(None),
             load_error: Mutex::new(None),
             accel: Mutex::new(None),
+            fixed_version: None,
+            force_cpu: false,
+        }
+    }
+
+    fn new_for_version(version: &str) -> Self {
+        Self {
+            inner: Mutex::new(None),
+            load_error: Mutex::new(None),
+            accel: Mutex::new(None),
+            fixed_version: Some(normalize_version(version).to_string()),
+            force_cpu: true,
         }
     }
 
@@ -393,6 +452,12 @@ impl OnnxOcrEngine {
 
     /// Hot-switch to a new model version (e.g. "v3", "v4", "v5").
     pub fn switch_version(&self, ver: &str) -> Result<(), String> {
+        if !model_files_present_for_version(ver) {
+            return Err(format!(
+                "PP-OCR{} model is missing or has an invalid file size",
+                normalize_version(ver).to_uppercase()
+            ));
+        }
         self.unload();
         set_active_version(ver);
         self.ensure_loaded()
@@ -406,7 +471,7 @@ impl OnnxOcrEngine {
         if guard.is_some() {
             return Ok(());
         }
-        match Self::load_sessions() {
+        match Self::load_sessions(self.fixed_version.as_deref(), self.force_cpu) {
             Ok((sess, accel)) => {
                 *guard = Some(sess);
                 if let Ok(mut slot) = self.accel.lock() {
@@ -429,8 +494,14 @@ impl OnnxOcrEngine {
         }
     }
 
-    fn load_sessions() -> Result<(Sessions, AccelInfo), String> {
-        let active = get_active_version();
+    fn load_sessions(
+        requested_version: Option<&str>,
+        force_cpu: bool,
+    ) -> Result<(Sessions, AccelInfo), String> {
+        let active = requested_version
+            .map(normalize_version)
+            .map(str::to_string)
+            .unwrap_or_else(get_active_version);
         let (actual_ver, dir) = if let Some(d) = resolve_models_dir_for_version(&active) {
             (active, d)
         } else {
@@ -459,10 +530,14 @@ impl OnnxOcrEngine {
         const DML_INTRATHREADS: usize = 1;
 
         // EP 覆盖:CATWALK_OCR_EP=cpu|directml|auto(默认 auto 基准)。
-        let ep_override = std::env::var("CATWALK_OCR_EP")
-            .ok()
-            .map(|v| v.trim().to_ascii_lowercase())
-            .filter(|v| !v.is_empty());
+        let ep_override = if force_cpu {
+            Some("cpu".to_string())
+        } else {
+            std::env::var("CATWALK_OCR_EP")
+                .ok()
+                .map(|v| v.trim().to_ascii_lowercase())
+                .filter(|v| !v.is_empty())
+        };
 
         // 返回 (session, 该会话是否成功注册 DirectML)。DirectML 注册失败时
         // 内部退回 CPU builder,由 build 标记整组 ep=Cpu。
@@ -540,7 +615,11 @@ impl OnnxOcrEngine {
                 rec,
                 cls,
                 chars,
-                ep: if dml && dml_ok { Accelerator::DirectML } else { Accelerator::Cpu },
+                ep: if dml && dml_ok {
+                    Accelerator::DirectML
+                } else {
+                    Accelerator::Cpu
+                },
                 scratch: Vec::new(),
                 version: actual_ver.clone(),
             })
@@ -668,8 +747,7 @@ impl OnnxOcrEngine {
             run_detection(sess, &bgr, bw, bh).map_err(|e| format!("bench det: {}", e))?;
             let (data, rw) = rec_preprocess(&crop, 160, 36);
             let items = [(data.clone(), rw), (data, rw)];
-            recognize_prepared_batch(sess, &items)
-                .map_err(|e| format!("bench rec: {}", e))?;
+            recognize_prepared_batch(sess, &items).map_err(|e| format!("bench rec: {}", e))?;
             let dt = t0.elapsed().as_secs_f64() * 1000.0;
             if rep > 0 {
                 best = best.min(dt);
@@ -700,7 +778,9 @@ impl OnnxOcrEngine {
         let (img_w, img_h) = (w as u32, h as u32);
         // 阶段耗时诊断：设 CATWALK_OCR_TIMING=1 时打印 det / rec 分解，
         // 用于定位「文字多时变慢」这类现场报告落在哪个阶段。
-        let timing = std::env::var("CATWALK_OCR_TIMING").map(|v| v != "0").unwrap_or(false);
+        let timing = std::env::var("CATWALK_OCR_TIMING")
+            .map(|v| v != "0")
+            .unwrap_or(false);
         let t_det = std::time::Instant::now();
         // Run DBNet text box detection (long menu bars are properly segmented into word boxes).
         // 检测 + DB 后处理都在 run_detection 内完成(score map 视图借用会话,
@@ -770,7 +850,9 @@ impl OnnxOcrEngine {
 
         for (crop, cw, ch) in crops_all {
             let (final_crop, final_w, final_h) = if cw < ch {
-                let (rot90, rw, rh) = vert_iter.next().unwrap_or_else(|| (rotate90_cw_bgr(&crop, cw, ch), ch, cw));
+                let (rot90, rw, rh) = vert_iter
+                    .next()
+                    .unwrap_or_else(|| (rotate90_cw_bgr(&crop, cw, ch), ch, cw));
                 let needs_180 = rot_iter.next().unwrap_or(false);
                 let final_img = if needs_180 {
                     rotate180_bgr(&rot90, rw, rh)
@@ -793,8 +875,7 @@ impl OnnxOcrEngine {
         for &i in &order {
             let w_i = prepared[i].1;
             let fits = chunks.last().is_some_and(|c: &Vec<usize>| {
-                c.len() < REC_BATCH
-                    && (w_i as f32) <= prepared[c[0]].1 as f32 * 1.6
+                c.len() < REC_BATCH && (w_i as f32) <= prepared[c[0]].1 as f32 * 1.6
             });
             if fits {
                 chunks.last_mut().unwrap().push(i);
@@ -805,8 +886,7 @@ impl OnnxOcrEngine {
 
         let mut recognized: Vec<Option<(String, f32)>> = vec![None; prepared.len()];
         for chunk in &chunks {
-            let items: Vec<(Vec<f32>, u32)> =
-                chunk.iter().map(|&i| prepared[i].clone()).collect();
+            let items: Vec<(Vec<f32>, u32)> = chunk.iter().map(|&i| prepared[i].clone()).collect();
             match recognize_prepared_batch(sessions, &items) {
                 Ok(texts) => {
                     for (&i, t) in chunk.iter().zip(texts) {
@@ -852,7 +932,16 @@ impl OnnxOcrEngine {
         // important: a window title such as "Blender 5.2.1 LTS" is also wide
         // and shallow, but must remain intact; a dense CJK menu string such as
         // "文件编辑渲染窗口帮助" should be re-cut at real visual gutters.
+        let dense_toolbar = blocks.iter().any(should_refine_dense_toolbar);
         blocks = refine_dense_toolbar_blocks(sessions, &bgr, img_w, img_h, blocks)?;
+        if self.fixed_version.is_none() {
+            if dense_toolbar {
+                blocks = ensemble_dense_ui_blocks(bmp, &sessions.version, blocks);
+            } else {
+                blocks = review_suspicious_blocks(&bgr, img_w, img_h, &sessions.version, blocks);
+            }
+        }
+        blocks = collapse_overlapping_ocr_blocks(blocks);
 
         if timing {
             let rec_ms = t_rec.elapsed().as_secs_f64() * 1000.0;
@@ -908,6 +997,39 @@ fn bmp_to_bgr(bmp: &[u8], w: usize, h: usize) -> Vec<u8> {
     out
 }
 
+/// Encode a cropped BGR image as the 32bpp top-down BMP consumed by the OCR
+/// pipeline. Used by targeted secondary-model checks so we do not re-run a
+/// detector over the entire screenshot for one questionable label.
+fn bgr_to_bmp(bgr: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
+    if w == 0 || h == 0 || bgr.len() < w.checked_mul(h)?.checked_mul(3)? {
+        return None;
+    }
+    let pixel_bytes = w.checked_mul(h)?.checked_mul(4)?;
+    let file_bytes = 54usize.checked_add(pixel_bytes)?;
+    if file_bytes > u32::MAX as usize || w > i32::MAX as usize || h > i32::MAX as usize {
+        return None;
+    }
+    let mut bmp = vec![0u8; file_bytes];
+    bmp[0..2].copy_from_slice(b"BM");
+    bmp[2..6].copy_from_slice(&(file_bytes as u32).to_le_bytes());
+    bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+    bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+    bmp[18..22].copy_from_slice(&(w as i32).to_le_bytes());
+    bmp[22..26].copy_from_slice(&(-(h as i32)).to_le_bytes());
+    bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+    bmp[28..30].copy_from_slice(&32u16.to_le_bytes());
+    bmp[34..38].copy_from_slice(&(pixel_bytes as u32).to_le_bytes());
+    for (src, dst) in bgr
+        .chunks_exact(3)
+        .take(w * h)
+        .zip(bmp[54..].chunks_exact_mut(4))
+    {
+        dst[..3].copy_from_slice(src);
+        dst[3] = 255;
+    }
+    Some(bmp)
+}
+
 fn crop_bgr(bgr: &[u8], w: usize, h: usize, x: u32, y: u32, bw: u32, bh: u32) -> Vec<u8> {
     let x0 = (x as usize).min(w);
     let y0 = (y as usize).min(h);
@@ -957,10 +1079,7 @@ fn split_wide_box_at_ink_valleys(
         }
         column.sort_unstable();
         let median = column[column.len() / 2];
-        let contrast_pixels = column
-            .iter()
-            .filter(|&&v| v.abs_diff(median) >= 24)
-            .count();
+        let contrast_pixels = column.iter().filter(|&&v| v.abs_diff(median) >= 24).count();
         *is_active = contrast_pixels >= min_ink_pixels;
     }
 
@@ -1006,7 +1125,11 @@ fn split_wide_box_at_ink_valleys(
         }
     }
 
-    if segments.len() >= 2 { segments } else { vec![rect] }
+    if segments.len() >= 2 {
+        segments
+    } else {
+        vec![rect]
+    }
 }
 
 fn should_refine_dense_toolbar(block: &TextBlock) -> bool {
@@ -1018,7 +1141,9 @@ fn should_refine_dense_toolbar(block: &TextBlock) -> bool {
     let words: Vec<&str> = text.split_whitespace().collect();
     let short_word_row = words.len() >= 3
         && words.iter().all(|w| w.chars().count() <= 12)
-        && !text.chars().any(|c| c.is_ascii_digit() || "()（）.-".contains(c));
+        && !text
+            .chars()
+            .any(|c| c.is_ascii_digit() || "()（）.-".contains(c));
     block.box_rect.width >= block.box_rect.height.saturating_mul(6)
         && (cjk_count >= 4 || short_word_row)
 }
@@ -1052,12 +1177,9 @@ fn refine_dense_toolbar_blocks(
         for (x, y, w, h) in pieces {
             let crop = crop_bgr(bgr, img_w as usize, img_h as usize, x, y, w, h);
             let prepared = rec_preprocess(&crop, w, h);
-            let recognized = recognize_prepared_batch(
-                sessions,
-                std::slice::from_ref(&prepared),
-            )?
-            .into_iter()
-            .next();
+            let recognized = recognize_prepared_batch(sessions, std::slice::from_ref(&prepared))?
+                .into_iter()
+                .next();
             let Some((text, confidence)) = recognized else {
                 continue;
             };
@@ -1066,7 +1188,12 @@ fn refine_dense_toolbar_blocks(
                 piece_blocks.push(TextBlock {
                     text,
                     confidence,
-                    box_rect: BoundingBox { x: x as i32, y: y as i32, width: w, height: h },
+                    box_rect: BoundingBox {
+                        x: x as i32,
+                        y: y as i32,
+                        width: w,
+                        height: h,
+                    },
                 });
             }
         }
@@ -1077,6 +1204,405 @@ fn refine_dense_toolbar_blocks(
         }
     }
     Ok(refined)
+}
+
+fn block_visual_units(text: &str) -> f32 {
+    text.chars()
+        .map(|c| {
+            let cp = c as u32;
+            if matches!(cp, 0x3400..=0x9fff | 0xf900..=0xfaff) {
+                0.65
+            } else if c.is_ascii_alphanumeric() {
+                0.38
+            } else if c.is_whitespace() {
+                0.30
+            } else {
+                0.25
+            }
+        })
+        .sum::<f32>()
+        .max(0.5)
+}
+
+fn block_quality(block: &TextBlock) -> f32 {
+    let expected_w = block_visual_units(block.text.trim()) * block.box_rect.height.max(1) as f32;
+    let actual_w = block.box_rect.width.max(1) as f32;
+    let geometry = (expected_w.min(actual_w) / expected_w.max(actual_w)).clamp(0.0, 1.0);
+    block.confidence.clamp(0.0, 1.0) * 0.70 + geometry * 0.30
+}
+
+fn needs_secondary_review(block: &TextBlock) -> bool {
+    let text = block.text.trim();
+    let len = text.chars().filter(|c| !c.is_whitespace()).count();
+    if !(2..=24).contains(&len) || block.box_rect.height < 7 {
+        return false;
+    }
+    let expected_w = block_visual_units(text) * block.box_rect.height.max(1) as f32;
+    let actual_w = block.box_rect.width as f32;
+    // A detector may crop off the first/last glyph while the recognizer remains
+    // overconfident about the fragment it can still see. Review both unusually
+    // wide boxes and boxes too narrow to physically contain the recognized text.
+    block.confidence < 0.66 || actual_w < expected_w * 0.55 || actual_w > expected_w * 2.1
+}
+
+fn overlap_over_smaller(a: &BoundingBox, b: &BoundingBox) -> f32 {
+    let ax1 = a.x + a.width as i32;
+    let ay1 = a.y + a.height as i32;
+    let bx1 = b.x + b.width as i32;
+    let by1 = b.y + b.height as i32;
+    let iw = (ax1.min(bx1) - a.x.max(b.x)).max(0) as u64;
+    let ih = (ay1.min(by1) - a.y.max(b.y)).max(0) as u64;
+    let intersection = iw * ih;
+    let smaller = ((a.width as u64 * a.height as u64).min(b.width as u64 * b.height as u64)).max(1);
+    intersection as f32 / smaller as f32
+}
+
+fn compact_block_text(text: &str) -> String {
+    text.chars().filter(|character| !character.is_whitespace())
+        .flat_map(char::to_lowercase).collect()
+}
+
+fn reconcile_overlapping_text(left: &str, right: &str) -> Option<String> {
+    let left_key = compact_block_text(left);
+    let right_key = compact_block_text(right);
+    if left_key.chars().count() < 4 || right_key.chars().count() < 4 {
+        return None;
+    }
+    if left_key == right_key {
+        return Some(if left.chars().count() >= right.chars().count() {
+            left.to_owned()
+        } else {
+            right.to_owned()
+        });
+    }
+    if left_key.contains(right_key.as_str()) {
+        return Some(left.to_owned());
+    }
+    if right_key.contains(left_key.as_str()) {
+        return Some(right.to_owned());
+    }
+    // Prefix/suffix stitching requires literal characters; compacting spaces
+    // would make the overlap index unsuitable for slicing the original text.
+    if left.chars().any(char::is_whitespace) || right.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let left_chars: Vec<char> = left.chars().collect();
+    let right_chars: Vec<char> = right.chars().collect();
+    let max_overlap = left_chars.len().min(right_chars.len());
+    for count in (4..=max_overlap).rev() {
+        if left_chars[left_chars.len() - count..] == right_chars[..count]
+            && count * 3 >= max_overlap
+        {
+            let mut merged = left.to_owned();
+            merged.extend(right_chars[count..].iter().copied());
+            return Some(merged);
+        }
+    }
+    None
+}
+
+/// A second detector pass may see only the beginning of a long line and
+/// attach one garbage glyph to that truncated copy. Suppress it only when
+/// the two boxes begin at the same point and virtually all of the shorter
+/// transcript agrees with the longer one; ordinary neighbouring controls
+/// and genuinely different text must remain separate.
+fn reconcile_truncated_duplicate(left: &str, right: &str) -> Option<String> {
+    // OCR commonly alternates ASCII and full-width punctuation in otherwise
+    // identical terminal paths. Fold only this punctuation for comparison;
+    // keep the longer original transcript as the visible result.
+    let fold = |text: &str| compact_block_text(text).chars().map(|c| match c {
+        '：' => ':', '／' => '/', '＼' => '\\', _ => c,
+    }).collect::<String>();
+    let left_key = fold(left);
+    let right_key = fold(right);
+    let (long_text, long_key, short_key) = if left_key.chars().count() >= right_key.chars().count() {
+        (left, left_key, right_key)
+    } else {
+        (right, right_key, left_key)
+    };
+    let long_chars: Vec<char> = long_key.chars().collect();
+    let short_chars: Vec<char> = short_key.chars().collect();
+    if short_chars.len() < 16 || long_chars.len() < short_chars.len() + 4 {
+        return None;
+    }
+    let prefix = long_chars.iter().zip(short_chars.iter())
+        .take_while(|(a, b)| a == b).count();
+    (prefix >= 14 && prefix + 2 >= short_chars.len()).then(|| long_text.to_owned())
+}
+
+fn reconcile_embedded_word(left: &TextBlock, right: &TextBlock) -> Option<String> {
+    let (long, short) = if left.box_rect.width >= right.box_rect.width {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let word = short.text.trim();
+    if !(3..=12).contains(&word.chars().count())
+        || !word.chars().all(char::is_alphanumeric)
+        || short.box_rect.width * 3 > long.box_rect.width
+    {
+        return None;
+    }
+    let long_words = long.text.split(|c: char| !c.is_alphanumeric());
+    long_words
+        .filter(|part| !part.is_empty())
+        .any(|part| part.eq_ignore_ascii_case(word))
+        .then(|| long.text.clone())
+}
+
+/// A close-tab glyph can be recognized both as a tiny "×" box and as an X
+/// appended to the neighbouring title. Require both conflicting readings at
+/// the same pixels before deleting anything; a real trailing X is preserved.
+fn close_icon_suffix_boundary(left: &TextBlock, right: &TextBlock) -> Option<(usize, i32)> {
+    let (long, short) = if left.box_rect.width >= right.box_rect.width {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let long_text = long.text.trim_end();
+    if !matches!(long_text.chars().last(), Some('X' | 'x'))
+        || !short.text.chars().any(|c| matches!(c, '×' | '✕' | '✖'))
+        || short.text.chars().count() > 3
+        || short.box_rect.width > long.box_rect.height.saturating_mul(2)
+    {
+        return None;
+    }
+    let long_right = long.box_rect.x + long.box_rect.width as i32;
+    let icon_left = short.box_rect.x;
+    if icon_left < long_right - long.box_rect.height as i32 * 2
+        || icon_left > long_right + long.box_rect.height as i32 / 2
+        || icon_left - long.box_rect.x < long.box_rect.width as i32 / 2
+    {
+        return None;
+    }
+    Some((long_text.chars().count() - 1, icon_left - 3))
+}
+
+fn collapse_overlapping_ocr_blocks(mut blocks: Vec<TextBlock>) -> Vec<TextBlock> {
+    blocks.sort_by_key(|block| (block.box_rect.y, block.box_rect.x));
+    let mut i = 0;
+    while i < blocks.len() {
+        let mut j = i + 1;
+        while j < blocks.len() {
+            let a = blocks[i].box_rect;
+            let b = blocks[j].box_rect;
+            let center_a = a.y as f32 + a.height as f32 * 0.5;
+            let center_b = b.y as f32 + b.height as f32 * 0.5;
+            if (center_a - center_b).abs() > a.height.min(b.height) as f32 * 0.5
+                || overlap_over_smaller(&a, &b) < 0.55
+            {
+                j += 1;
+                continue;
+            }
+            let (left, right) = if a.x <= b.x { (i, j) } else { (j, i) };
+            let same_origin = (a.x - b.x).abs() <= (a.height.min(b.height) as i32 / 3).max(3);
+            if let Some((keep_chars, text_right)) =
+                close_icon_suffix_boundary(&blocks[i], &blocks[j])
+            {
+                let mut long = if blocks[i].box_rect.width >= blocks[j].box_rect.width {
+                    blocks[i].clone()
+                } else {
+                    blocks[j].clone()
+                };
+                let new_text: String = long.text.trim_end().chars().take(keep_chars)
+                    .collect::<String>().trim_end().to_owned();
+                let new_left = long.box_rect.x;
+                if !new_text.is_empty() && text_right > new_left {
+                    long.text = new_text;
+                    long.box_rect.width = (text_right - new_left) as u32;
+                    blocks[i] = long;
+                    blocks.remove(j);
+                    j = i + 1;
+                    continue;
+                }
+            }
+            let text = reconcile_overlapping_text(&blocks[left].text, &blocks[right].text)
+                .or_else(|| {
+                    (same_origin && overlap_over_smaller(&a, &b) >= 0.85)
+                        .then(|| reconcile_truncated_duplicate(&blocks[left].text, &blocks[right].text))
+                        .flatten()
+                })
+                .or_else(|| {
+                    (overlap_over_smaller(&a, &b) >= 0.95)
+                        .then(|| reconcile_embedded_word(&blocks[left], &blocks[right]))
+                        .flatten()
+                });
+            let Some(text) = text
+            else { j += 1; continue };
+            let x = a.x.min(b.x);
+            let y = a.y.min(b.y);
+            let right_edge = (a.x + a.width as i32).max(b.x + b.width as i32);
+            let bottom_edge = (a.y + a.height as i32).max(b.y + b.height as i32);
+            blocks[i].text = text;
+            blocks[i].confidence = blocks[i].confidence.min(blocks[j].confidence);
+            blocks[i].box_rect = BoundingBox {
+                x, y, width: (right_edge - x).max(1) as u32,
+                height: (bottom_edge - y).max(1) as u32,
+            };
+            blocks.remove(j);
+            j = i + 1;
+        }
+        i += 1;
+    }
+    blocks.sort_by_key(|block| (block.box_rect.y, block.box_rect.x));
+    blocks
+}
+
+fn plausible_secondary_block(block: &TextBlock) -> bool {
+    let len = block.text.chars().filter(|c| !c.is_whitespace()).count();
+    len >= 2 && block.confidence >= 0.72 && block.box_rect.height >= 6
+}
+
+/// Dense toolbars receive one full-frame pass from a complementary model.
+/// This is deliberately scene-gated: v6 Tiny stays the fast path for normal
+/// screenshots, while menus with missing controls can recover boxes that the
+/// primary detector never produced at all. Results are merged geometrically,
+/// not blindly concatenated.
+fn ensemble_dense_ui_blocks(
+    bmp: &[u8],
+    primary_version: &str,
+    primary: Vec<TextBlock>,
+) -> Vec<TextBlock> {
+    let Some(secondary_version) = secondary_version_for(primary_version) else {
+        return primary;
+    };
+    let Some(engine) = ensemble_engine(secondary_version) else {
+        return primary;
+    };
+    let Ok(secondary_result) = engine.recognize_bmp(bmp) else {
+        return primary;
+    };
+
+    merge_secondary_blocks(primary, secondary_result.blocks)
+}
+
+/// Recheck only ambiguous, compact text boxes with the complementary model.
+/// The eight-box cap bounds worst-case latency on noisy full-screen captures.
+fn review_suspicious_blocks(
+    bgr: &[u8],
+    img_w: u32,
+    img_h: u32,
+    primary_version: &str,
+    mut primary: Vec<TextBlock>,
+) -> Vec<TextBlock> {
+    let Some(secondary_version) = secondary_version_for(primary_version) else {
+        return primary;
+    };
+    let Some(engine) = ensemble_engine(secondary_version) else {
+        return primary;
+    };
+
+    let review_indices: Vec<usize> = primary
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| needs_secondary_review(block))
+        .take(8)
+        .map(|(i, _)| i)
+        .collect();
+    for index in review_indices {
+        let original = primary[index].clone();
+        let bx = original.box_rect.x.max(0) as u32;
+        let by = original.box_rect.y.max(0) as u32;
+        let pad_x = (original.box_rect.height / 3).max(4);
+        let pad_y = (original.box_rect.height / 4).max(3);
+        let x0 = bx.saturating_sub(pad_x);
+        let y0 = by.saturating_sub(pad_y);
+        let x1 = bx
+            .saturating_add(original.box_rect.width)
+            .saturating_add(pad_x)
+            .min(img_w);
+        let y1 = by
+            .saturating_add(original.box_rect.height)
+            .saturating_add(pad_y)
+            .min(img_h);
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
+        let crop = crop_bgr(
+            bgr,
+            img_w as usize,
+            img_h as usize,
+            x0,
+            y0,
+            x1 - x0,
+            y1 - y0,
+        );
+        let Some(crop_bmp) = bgr_to_bmp(&crop, (x1 - x0) as usize, (y1 - y0) as usize) else {
+            continue;
+        };
+        let Ok(result) = engine.recognize_bmp(&crop_bmp) else {
+            continue;
+        };
+        let candidates: Vec<TextBlock> = result
+            .blocks
+            .into_iter()
+            .filter(plausible_secondary_block)
+            .map(|mut block| {
+                block.box_rect.x += x0 as i32;
+                block.box_rect.y += y0 as i32;
+                block
+            })
+            .filter(|candidate| {
+                overlap_over_smaller(&original.box_rect, &candidate.box_rect) >= 0.35
+            })
+            .collect();
+        if candidates.is_empty() {
+            continue;
+        }
+        let merged = merge_secondary_blocks(vec![original], candidates);
+        if merged.len() == 1 {
+            primary[index] = merged.into_iter().next().unwrap();
+        }
+    }
+    primary.sort_by_key(|b| (b.box_rect.y, b.box_rect.x));
+    primary
+}
+
+fn merge_secondary_blocks(
+    mut primary: Vec<TextBlock>,
+    secondary: Vec<TextBlock>,
+) -> Vec<TextBlock> {
+    for candidate in secondary.into_iter().filter(plausible_secondary_block) {
+        let best_overlap = primary
+            .iter()
+            .enumerate()
+            .map(|(i, existing)| {
+                let overlap = overlap_over_smaller(&existing.box_rect, &candidate.box_rect);
+                let exact_text_bonus = if existing.text == candidate.text {
+                    2.0
+                } else if existing.text.contains(&candidate.text)
+                    || candidate.text.contains(&existing.text)
+                {
+                    0.5
+                } else {
+                    0.0
+                };
+                (i, overlap, overlap + exact_text_bonus)
+            })
+            .filter(|(_, overlap, _)| *overlap >= 0.45)
+            .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+
+        match best_overlap {
+            Some((index, _, _)) => {
+                let existing_quality = block_quality(&primary[index]);
+                let candidate_quality = block_quality(&candidate);
+                let existing_len = primary[index].text.chars().count();
+                let candidate_len = candidate.text.chars().count();
+                let recovers_missing_text = candidate_len > existing_len
+                    && candidate.confidence >= 0.78
+                    && candidate_quality >= existing_quality - 0.01;
+                if candidate_quality > existing_quality + 0.035 || recovers_missing_text {
+                    primary[index] = candidate;
+                }
+            }
+            _ if candidate.confidence >= 0.86 && block_quality(&candidate) >= 0.68 => {
+                primary.push(candidate);
+            }
+            _ => {}
+        }
+    }
+    primary.sort_by_key(|b| (b.box_rect.y, b.box_rect.x));
+    primary
 }
 
 // ---- Detection (DET) --------------------------------------------------------
@@ -1558,17 +2084,13 @@ fn classify_angle(sessions: &mut Sessions, crop: &[u8], cw: u32, ch: u32) -> Res
                 } else {
                     0.0
                 };
-                input[c * CLS_IMG_H * CLS_IMG_W + y * CLS_IMG_W + x] =
-                    (v - 0.5) / 0.5;
+                input[c * CLS_IMG_H * CLS_IMG_W + y * CLS_IMG_W + x] = (v - 0.5) / 0.5;
             }
         }
     }
 
-    let arr = ndarray::Array4::from_shape_vec(
-        (1, 3, CLS_IMG_H, CLS_IMG_W),
-        input,
-    )
-    .map_err(|e| format!("cls input shape error: {}", e))?;
+    let arr = ndarray::Array4::from_shape_vec((1, 3, CLS_IMG_H, CLS_IMG_W), input)
+        .map_err(|e| format!("cls input shape error: {}", e))?;
     let input_value = ort::value::TensorRef::from_array_view(&arr)
         .map_err(|e| format!("cls input build failed: {}", e))?;
     let outputs = sessions
@@ -1653,7 +2175,11 @@ fn rec_decode(view: &ndarray::ArrayViewD<f32>, b: usize, chars: &[String]) -> (S
                     conf_cnt += 1;
                 }
             }
-            let conf = if conf_cnt > 0 { conf_sum / conf_cnt as f32 } else { 0.0 };
+            let conf = if conf_cnt > 0 {
+                conf_sum / conf_cnt as f32
+            } else {
+                0.0
+            };
             return (text, conf);
         }
     }
@@ -1681,7 +2207,11 @@ fn rec_decode(view: &ndarray::ArrayViewD<f32>, b: usize, chars: &[String]) -> (S
         conf_sum += best_v;
         conf_cnt += 1;
     }
-    let conf = if conf_cnt > 0 { conf_sum / conf_cnt as f32 } else { 0.0 };
+    let conf = if conf_cnt > 0 {
+        conf_sum / conf_cnt as f32
+    } else {
+        0.0
+    };
     (text, conf)
 }
 
@@ -1770,6 +2300,14 @@ fn rotate90_cw_bgr(img: &[u8], w: u32, h: u32) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    #[derive(serde::Deserialize)]
+    struct MergeRegressionCase {
+        name: String,
+        primary: Vec<TextBlock>,
+        secondary: Vec<TextBlock>,
+        expected: Vec<String>,
+    }
+
     #[test]
     fn v6_family_uses_a_smaller_unclip_than_v3_to_v5() {
         // v6 的 det 连通区域天生更大，沿用 1.6 会把「模型名 + 副标题」并框，
@@ -1777,12 +2315,7 @@ mod tests {
         // 两档都必须走 v6 专用系数。
         for ver in ["v6", "v6t", "PP-OCRv6", "pp-ocrv6-tiny"] {
             set_active_version(ver);
-            assert_eq!(
-                active_unclip_ratio(),
-                1.0,
-                "{} 应使用 v6 专用 unclip",
-                ver
-            );
+            assert_eq!(active_unclip_ratio(), 1.0, "{} 应使用 v6 专用 unclip", ver);
         }
         for ver in ["v3", "v4", "v5"] {
             set_active_version(ver);
@@ -1860,10 +2393,10 @@ mod tests {
         // 表格同一行的 4 个独立单元格（间距 25px~40px，大于 14px 词缝合上限）
         // 必须严格保持为 4 个独立的识别框，绝不跨列合并成一条！
         let table_cells = vec![
-            (50, 100, 100, 24),   // 列1: x:50..150
-            (180, 100, 80, 24),   // 列2: x:180..260 (gap=30px)
-            (300, 100, 90, 24),   // 列3: x:300..390 (gap=40px)
-            (425, 100, 70, 24),   // 列4: x:425..495 (gap=35px)
+            (50, 100, 100, 24), // 列1: x:50..150
+            (180, 100, 80, 24), // 列2: x:180..260 (gap=30px)
+            (300, 100, 90, 24), // 列3: x:300..390 (gap=40px)
+            (425, 100, 70, 24), // 列4: x:425..495 (gap=35px)
         ];
         let rows = union_boxes_into_rows(table_cells, 800);
         assert_eq!(rows.len(), 4, "表格各列必须保持独立");
@@ -1873,10 +2406,7 @@ mod tests {
     fn test_union_boxes_keeps_equal_height_compact_labels_separate() {
         // Same-row UI labels with equal typography are independent even when
         // their designer used only a 10px gutter.
-        let rows = union_boxes_into_rows(
-            vec![(10, 20, 36, 20), (56, 20, 36, 20)],
-            200,
-        );
+        let rows = union_boxes_into_rows(vec![(10, 20, 36, 20), (56, 20, 36, 20)], 200);
         assert_eq!(rows.len(), 2);
     }
 
@@ -1934,11 +2464,165 @@ mod tests {
         let make = |text: &str| TextBlock {
             text: text.into(),
             confidence: 0.95,
-            box_rect: BoundingBox { x: 0, y: 0, width: 220, height: 18 },
+            box_rect: BoundingBox {
+                x: 0,
+                y: 0,
+                width: 220,
+                height: 18,
+            },
         };
         assert!(should_refine_dense_toolbar(&make("文件编辑渲染窗口帮助")));
-        assert!(should_refine_dense_toolbar(&make("File Edit Render Window Help")));
+        assert!(should_refine_dense_toolbar(&make(
+            "File Edit Render Window Help"
+        )));
         assert!(!should_refine_dense_toolbar(&make("Blender 5.2.1 LTS")));
+    }
+
+    #[test]
+    fn test_ensemble_merge_regression_corpus() {
+        let cases: Vec<MergeRegressionCase> =
+            serde_json::from_str(include_str!("../tests/fixtures/ocr_merge_cases.json"))
+                .expect("OCR merge regression corpus must be valid JSON");
+        assert!(
+            !cases.is_empty(),
+            "OCR merge regression corpus cannot be empty"
+        );
+        for case in cases {
+            let merged = merge_secondary_blocks(case.primary, case.secondary);
+            let actual: Vec<String> = merged.into_iter().map(|block| block.text).collect();
+            assert_eq!(actual, case.expected, "case: {}", case.name);
+        }
+    }
+
+    #[test]
+    fn overlapping_terminal_boxes_are_stitched_without_joining_separate_controls() {
+        let block = |text: &str, x: i32, y: i32, width: u32| TextBlock {
+            text: text.into(), confidence: 0.95,
+            box_rect: BoundingBox { x, y, width, height: 20 },
+        };
+        let input = vec![
+            block("正在启动热重载开", 53, 160, 136),
+            block("启动热重载开发调试服务", 88, 160, 193),
+            block("VITEv7.3.6readyin239ms", 28, 389, 261),
+            block("ready in 239 ms", 142, 389, 149),
+            block("布局", 317, 29, 29),
+            block("建模", 359, 29, 29),
+        ];
+        let actual = collapse_overlapping_ocr_blocks(input);
+        assert_eq!(actual.len(), 4);
+        assert!(actual.iter().any(|block| block.text == "正在启动热重载开发调试服务"));
+        assert!(actual.iter().any(|block| block.text == "VITEv7.3.6readyin239ms"));
+        assert!(actual.iter().any(|block| block.text == "布局"));
+        assert!(actual.iter().any(|block| block.text == "建模"));
+    }
+
+    #[test]
+    fn clipped_long_line_duplicate_is_removed_only_at_the_same_origin() {
+        let block = |text: &str, x: i32, width: u32| TextBlock {
+            text: text.into(), confidence: 0.95,
+            box_rect: BoundingBox { x, y: 272, width, height: 24 },
+        };
+        let full = "Running BeforeDevCommand ('npm run dev')";
+        let clipped = "RunningBeforeDevCommand餐";
+        let merged = collapse_overlapping_ocr_blocks(vec![
+            block(full, 53, 373), block(clipped, 54, 227),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, full);
+
+        let distinct = collapse_overlapping_ocr_blocks(vec![
+            block(full, 53, 373), block("RunningBeforeDevCommand: cancelled", 54, 227),
+        ]);
+        assert_eq!(distinct.len(), 2, "a genuinely different status must not be hidden");
+
+        let offset = collapse_overlapping_ocr_blocks(vec![
+            block(full, 53, 373), block(clipped, 90, 227),
+        ]);
+        assert_eq!(offset.len(), 2, "a different text origin is not a duplicate");
+    }
+
+    #[test]
+    fn fullwidth_colon_in_truncated_path_does_not_duplicate_the_row() {
+        let block = |text: &str, width: u32| TextBlock {
+            text: text.into(), confidence: 0.95,
+            box_rect: BoundingBox { x: 350, y: 481, width, height: 20 },
+        };
+        let long = "(C：\\Users\\20269\\Desktop\\项目文件夹\\翻译软件\\app";
+        let short = "(C:\\Users\\20269\\Desktop\\项目文件";
+        let merged = collapse_overlapping_ocr_blocks(vec![
+            block(long, 421), block(short, 280),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, long);
+    }
+
+    #[test]
+    fn close_tab_icon_is_not_appended_as_a_trailing_x() {
+        let block = |text: &str, x: i32, y: i32, width: u32, height: u32| TextBlock {
+            text: text.into(), confidence: 0.9,
+            box_rect: BoundingBox { x, y, width, height },
+        };
+        let merged = collapse_overlapping_ocr_blocks(vec![
+            block("npm list @tauri-apps/api @ta  X", 45, 13, 200, 21),
+            block("×一", 224, 14, 17, 14),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, "npm list @tauri-apps/api @ta");
+        assert_eq!(merged[0].box_rect.x + merged[0].box_rect.width as i32, 221);
+
+        let real_x = collapse_overlapping_ocr_blocks(vec![
+            block("variable X", 45, 13, 200, 21),
+            block("help", 224, 14, 17, 14),
+        ]);
+        assert_eq!(real_x.len(), 2, "without a close glyph, a real X remains text");
+    }
+
+    #[test]
+    fn exact_embedded_terminal_words_are_deduplicated_without_hiding_labels() {
+        let block = |text: &str, x: i32, width: u32| TextBlock {
+            text: text.into(), confidence: 0.95,
+            box_rect: BoundingBox { x, y: 272, width, height: 24 },
+        };
+        let full = "Running BeforeDevCommand ('npm run dev')";
+        let actual = collapse_overlapping_ocr_blocks(vec![
+            block(full, 53, 373), block("npm", 298, 32), block("run", 340, 25),
+            block("stop", 380, 36),
+        ]);
+        assert_eq!(actual.len(), 2);
+        assert!(actual.iter().any(|item| item.text == full));
+        assert!(actual.iter().any(|item| item.text == "stop"));
+
+        let neighbour = collapse_overlapping_ocr_blocks(vec![
+            block("Layout", 53, 70), block("run", 130, 25),
+        ]);
+        assert_eq!(neighbour.len(), 2);
+    }
+
+    #[test]
+    fn test_secondary_review_is_gated_to_low_confidence_or_bad_geometry() {
+        let make = |text: &str, confidence: f32, width: u32| TextBlock {
+            text: text.into(),
+            confidence,
+            box_rect: BoundingBox {
+                x: 0,
+                y: 0,
+                width,
+                height: 18,
+            },
+        };
+        assert!(needs_secondary_review(&make("玉字", 0.55, 42)));
+        assert!(needs_secondary_review(&make("识别文字", 0.60, 36)));
+        assert!(needs_secondary_review(&make("UV编辑", 1.0, 18)));
+        assert!(!needs_secondary_review(&make("文件", 0.98, 20)));
+        assert!(!needs_secondary_review(&make("x", 0.30, 30)));
+    }
+
+    #[test]
+    fn test_bgr_to_bmp_round_trip_preserves_dimensions_and_channels() {
+        let bgr = vec![10, 20, 30, 40, 50, 60];
+        let bmp = bgr_to_bmp(&bgr, 2, 1).expect("valid BGR crop should encode");
+        assert_eq!(decode_bmp_size(&bmp).unwrap(), (2, 1));
+        assert_eq!(bmp_to_bgr(&bmp, 2, 1), bgr);
     }
 
     #[test]
@@ -2151,6 +2835,36 @@ mod tests {
     }
 
     #[test]
+    fn stale_v5_files_cannot_masquerade_as_an_installed_model() {
+        let dir = std::env::temp_dir().join(format!(
+            "catwalk-ocr-model-check-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let stale_det = dir.join("ch_PP-OCRv5_det_infer.onnx");
+        let stale_rec = dir.join("ch_PP-OCRv5_rec_infer.onnx");
+        std::fs::File::create(&stale_det).unwrap().set_len(4_745_517).unwrap();
+        std::fs::File::create(&stale_rec).unwrap().set_len(10_857_958).unwrap();
+        assert!(!model_file_is_usable(&dir, "v5", "ch_PP-OCRv5_det_infer.onnx"));
+        assert!(!model_file_is_usable(&dir, "v5", "ch_PP-OCRv5_rec_infer.onnx"));
+
+        // Correct model sizes are accepted, but an incomplete three-model set
+        // still cannot be selected because the shared orientation model is absent.
+        std::fs::File::create(&stale_det).unwrap().set_len(4_819_576).unwrap();
+        std::fs::File::create(&stale_rec).unwrap().set_len(16_631_306).unwrap();
+        assert!(model_file_is_usable(&dir, "v5", "ch_PP-OCRv5_det_infer.onnx"));
+        assert!(model_file_is_usable(&dir, "v5", "ch_PP-OCRv5_rec_infer.onnx"));
+        assert!(!model_file_is_usable(&dir, "v5", "ch_ppocr_mobile_v2.0_cls_infer.onnx"));
+        std::fs::remove_file(&stale_det).unwrap();
+        std::fs::remove_file(&stale_rec).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
     fn test_active_version_normalizes_v6_variants() {
         set_active_version("v6");
         assert_eq!(get_active_version(), "v6");
@@ -2302,8 +3016,8 @@ pub fn union_boxes_into_rows(
             let height_ratio = min_h / max_h;
             let normal_gap = (min_h * 0.35).clamp(4.0, 8.0);
             let fragment_gap = (min_h * 0.70).clamp(8.0, 12.0);
-            let should_merge = (gap as f32) <= normal_gap
-                || (height_ratio < 0.80 && (gap as f32) <= fragment_gap);
+            let should_merge =
+                (gap as f32) <= normal_gap || (height_ratio < 0.80 && (gap as f32) <= fragment_gap);
 
             if should_merge {
                 current_group.push(b);
