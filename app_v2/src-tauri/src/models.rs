@@ -229,6 +229,11 @@ pub struct OverlayBlock {
     pub bg_css: String,
     /// Foreground (text) colour: real sampled ink colour or "#ffffff"/"#141417" fallback
     pub fg_css: String,
+    /// A small list bullet survives just left of the erasure patch. The cover
+    /// renderer omits a duplicated OCR/translation bullet but keeps original
+    /// text intact for copying and translation.
+    #[serde(default)]
+    pub preserve_leading_bullet: bool,
     /// Base64-encoded PNG patch: the padded OCR box with its glyphs erased by
     /// background interpolation, so the overlay card can "remove" the original
     /// text and blend into the real screen pixels. None when patch building
@@ -589,7 +594,7 @@ pub struct AppSettings {
     /// OCR engine preference: "auto" | "onnx" | "winrt"
     #[serde(default)]
     pub ocr_engine: Option<String>,
-    /// Selected ONNX OCR model version: "v3" | "v4" | "v5" | "v6" | "v6t"
+    /// Selected ONNX OCR model version: "v6" | "v6t" | "v6m"
     #[serde(default)]
     pub ocr_version: Option<String>,
     /// Primary translation engine: "auto" | "dict" | "llm" | "online"
@@ -738,9 +743,10 @@ impl Default for AppSettings {
             watch_interval_ms: Some(3000),
             clipboard_watch_enabled: Some(false),
             ocr_engine: None,
-            // 默认档：v6Tiny —— 划词/小图实测 100% 全对且最快（平均 7.3ms/张，
-            // v4 为 14.3ms）；未装模型时引擎会自动回退到已安装的版本。
-            ocr_version: Some("v6t".to_string()),
+            // Small balances recognition quality and latency on mixed UI text.
+            // Existing users retain their saved choice; missing models fall back
+            // to an installed variant at startup.
+            ocr_version: Some("v6".to_string()),
             primary_translation_engine: None,
             baidu_app_id: None,
             baidu_secret: None,

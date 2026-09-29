@@ -144,6 +144,15 @@ fn usable_ocr_block(block: &TextBlock) -> bool {
         return false;
     }
     let chars = block.text.chars().filter(|c| !c.is_whitespace()).count();
+    // A close/menu glyph is commonly read as two characters (e.g. “×一”)
+    // next to a real terminal tab title. Low-confidence near-square symbol
+    // boxes are not text even when they barely pass the generic 2-char floor.
+    if chars <= 2 && block.confidence < 0.75
+        && block.box_rect.width as f32 <= block.box_rect.height as f32 * 1.5
+        && block.text.chars().any(|c| matches!(c, '×' | '✕' | '✖' | '□' | '◻' | '○' | '◯'))
+    {
+        return false;
+    }
     let required = match chars {
         0 => return false,
         1 => 0.75,
@@ -292,6 +301,22 @@ fn merge_native_text_blocks(mut ocr: Vec<TextBlock>, native_blocks: Vec<TextBloc
     ocr
 }
 
+fn should_merge_terminal_rows(bmp: &[u8], width: u32, height: u32, blocks: &[TextBlock]) -> bool {
+    if width < 500 || height < 250 || blocks.len() < 16 { return false; }
+    let cues = blocks.iter().filter(|block| {
+        let text = block.text.as_str();
+        text.starts_with('>') || text.starts_with("[OCR]") || text.starts_with("[*]")
+            || text.contains("Running") || text.contains("cargo")
+            || text.contains("http://") || text.contains("VITE")
+    }).count();
+    if cues < 2 { return false; }
+    let dark = blocks.iter().filter(|block| {
+        let bg = ColorSampler::sample_from_full_bmp(bmp, width, height, block.box_rect, 4);
+        bg[0].max(bg[1]).max(bg[2]) <= 55
+    }).count();
+    dark * 100 >= blocks.len() * 80
+}
+
 fn region_ocr_layout(
     selection: PhysicalRect,
     scale_factor: Option<f64>,
@@ -365,12 +390,17 @@ fn region_ocr_layout(
 
     // 6. Cluster into lines and merge words per line (e.g. "Principled" + "BSDF" -> "Principled BSDF")
     let lines = LineClusterer::cluster_into_lines(confident_blocks, 8.0);
-    let mut merged_blocks: Vec<TextBlock> = lines
+    let merged_blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|line| !line.is_empty())
         .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
+    let mut merged_blocks = WordMerger::merge_prose_rows(merged_blocks);
+    let terminal_scene = should_merge_terminal_rows(&crop_bmp, phys.width, phys.height, &merged_blocks);
+    if terminal_scene {
+        merged_blocks = WordMerger::merge_terminal_row_fragments(merged_blocks);
+    }
 
     // Use known application labels as a conservative OCR correction hint.
     if let Some(app_preset) = app_preset.as_deref() {
@@ -431,6 +461,9 @@ fn region_ocr_layout(
             .filter(|(i, _)| *i != block_idx)
             .map(|(_, r)| *r)
             .collect();
+        let erase_phys = if terminal_scene {
+            crate::inpaint::extend_terminal_tail_bbox(&bmp_data, bmp_w, bmp_h, abs_phys, &neighbors)
+        } else { abs_phys };
         let bg_rgb = ColorSampler::sample_from_full_bmp(&bmp_data, bmp_w, bmp_h, abs_phys, 4);
 
         // Real glyph colour: median of the "ink" pixels inside the box, falling
@@ -442,12 +475,12 @@ fn region_ocr_layout(
         // interpolation, encoded as PNG. The card uses it as background so the
         // original text disappears and the card edges continue the real screen.
         let (patch_png, patch_rect) =
-            match crate::inpaint::build_erased_patch_png(&bmp_data, bmp_w, bmp_h, abs_phys, &neighbors) {
+            match crate::inpaint::build_erased_patch_png(&bmp_data, bmp_w, bmp_h, erase_phys, &neighbors) {
                 Some((b64, pw, ph)) => {
                     // The logical coords MUST come from the same clamped rect
                     // that produced the PNG, or the patch would be misplaced.
                     let (x0, y0, _x1, _y1) =
-                        crate::inpaint::erased_patch_rect(abs_phys, bmp_w, bmp_h, &neighbors, &bmp_data);
+                        crate::inpaint::erased_patch_rect(erase_phys, bmp_w, bmp_h, &neighbors, &bmp_data);
                     let lx =
                         (selection.x as f64 + ((x0 - phys.x) as f64 / sf_x)).round();
                     let ly =
@@ -471,6 +504,8 @@ fn region_ocr_layout(
             logical_h,
             bg_css,
             fg_css,
+            preserve_leading_bullet: crate::inpaint::has_unerased_leading_bullet(
+                &bmp_data, bmp_w, bmp_h, abs_phys, &block.text),
             patch_png,
             patch_x: patch_rect.0,
             patch_y: patch_rect.1,
@@ -945,12 +980,17 @@ pub async fn cmd_image_ocr_translate(
     let ocr_result = crate::ocr::execute_native_ocr_with_engine(&bmp, ocr_engine.as_deref())?;
     let confident_blocks = retain_usable_ocr_with_context(ocr_result.blocks);
     let lines = LineClusterer::cluster_into_lines(confident_blocks, 8.0);
-    let mut merged_blocks: Vec<TextBlock> = lines
+    let merged_blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|line| !line.is_empty())
         .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
+    let mut merged_blocks = WordMerger::merge_prose_rows(merged_blocks);
+    let terminal_scene = should_merge_terminal_rows(&bmp, w, h, &merged_blocks);
+    if terminal_scene {
+        merged_blocks = WordMerger::merge_terminal_row_fragments(merged_blocks);
+    }
 
     if merged_blocks.is_empty() {
         return Ok(crate::models::ImageTranslateResponse {
@@ -1001,12 +1041,15 @@ pub async fn cmd_image_ocr_translate(
             .filter(|(j, _)| *j != i)
             .map(|(_, b)| b.box_rect)
             .collect();
+        let erase_phys = if terminal_scene {
+            crate::inpaint::extend_terminal_tail_bbox(&bmp, w, h, abs_phys, &neighbors)
+        } else { abs_phys };
 
         let (patch_png, patch_rect) =
-            match crate::inpaint::build_erased_patch_png(&bmp, w, h, abs_phys, &neighbors) {
+            match crate::inpaint::build_erased_patch_png(&bmp, w, h, erase_phys, &neighbors) {
                 Some((b64, pw, ph)) => {
                     let (x0, y0, _x1, _y1) =
-                        crate::inpaint::erased_patch_rect(abs_phys, w, h, &neighbors, &bmp);
+                        crate::inpaint::erased_patch_rect(erase_phys, w, h, &neighbors, &bmp);
                     (
                         Some(b64),
                         (x0 as f64, y0 as f64, pw as f64, ph as f64),
@@ -1226,6 +1269,10 @@ pub async fn cmd_show_overlay(window: tauri::WebviewWindow) -> Result<(), String
         let _ = window.set_position(tauri::PhysicalPosition::new(vx, vy));
         let _ = window.set_size(tauri::PhysicalSize::new(vw as u32, vh as u32));
         let _ = window.show();
+        // Showing/resizing a window can recreate its DWM backdrop. Clear it
+        // again after the full-screen overlay is visible so the desktop around
+        // an in-place translation stays sharp instead of turning acrylic-blurry.
+        crate::set_windows_dwm_blur(&window, false, true);
         let _ = window.set_focus();
     }
 
@@ -1457,14 +1504,14 @@ pub async fn cmd_capture_and_ocr(
         let ocr_res = crate::ocr::execute_native_ocr(&cropped)?;
         let confident_blocks = ocr_res.blocks.into_iter().filter(usable_ocr_block);
         let lines = LineClusterer::cluster_into_lines(confident_blocks.collect(), 8.0);
-        let merged_blocks = lines
+        let merged_blocks: Vec<TextBlock> = lines
             .into_iter()
             .filter(|line| !line.is_empty())
             .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
             .filter(|b| !b.text.trim().is_empty())
             .collect();
         Ok(OcrResult {
-            blocks: merged_blocks,
+            blocks: WordMerger::merge_prose_rows(merged_blocks),
         })
     })
     .await
@@ -1525,12 +1572,13 @@ pub fn ocr_line_at(
     }
 
     let lines = LineClusterer::cluster_into_lines(ocr_result.blocks, 8.0);
-    let mut blocks: Vec<TextBlock> = lines
+    let blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|l| !l.is_empty())
         .flat_map(|l| WordMerger::merge_line_segments(l, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
+    let mut blocks = WordMerger::merge_prose_rows(blocks);
     if blocks.is_empty() {
         return None;
     }
@@ -1663,12 +1711,13 @@ pub async fn cmd_snap_region(
     }
 
     let lines = LineClusterer::cluster_into_lines(ocr_result.blocks, 8.0);
-    let mut blocks: Vec<TextBlock> = lines
+    let blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|l| !l.is_empty())
         .flat_map(|l| WordMerger::merge_line_segments(l, 20.0))
         .filter(|b| !b.text.trim().is_empty())
         .collect();
+    let mut blocks = WordMerger::merge_prose_rows(blocks);
     if blocks.is_empty() {
         return Ok(None);
     }
@@ -2091,6 +2140,17 @@ mod ocr_filter_tests {
         assert_eq!(accepted.len(), 1);
         assert_eq!(accepted[0].text, "文件");
     }
+
+    #[test]
+    fn low_confidence_compact_close_icon_is_not_translated_as_text() {
+        let block = |text: &str, confidence| TextBlock {
+            text: text.into(), confidence,
+            box_rect: BoundingBox { x: 224, y: 14, width: 17, height: 14 },
+        };
+        assert!(retain_usable_ocr_with_context(vec![block("×一", 0.65)]).is_empty());
+        assert_eq!(retain_usable_ocr_with_context(vec![block("12", 0.65)]).len(), 1);
+        assert_eq!(retain_usable_ocr_with_context(vec![block("×一", 0.95)]).len(), 1);
+    }
 }
 
 #[cfg(test)]
@@ -2126,6 +2186,7 @@ mod watch_cache_tests {
             logical_h: 14.0,
             bg_css: "rgb(0,0,0)".into(),
             fg_css: "rgb(255,255,255)".into(),
+            preserve_leading_bullet: false,
             patch_png: None,
             patch_x: 0.0,
             patch_y: 0.0,
@@ -2140,5 +2201,119 @@ mod watch_cache_tests {
         if let Ok(mut cache) = WATCH_OCR_CACHE.lock() {
             *cache = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod visual_fixture_tests {
+    use super::{retain_usable_ocr_with_context, should_merge_terminal_rows};
+    use crate::models::{BoundingBox, OverlayBlock};
+    use crate::reconstruction::{LineClusterer, WordMerger};
+    use crate::sampler::ColorSampler;
+
+    /// Export a 1:1 visual fixture with the *production* OCR row grouping and
+    /// actual interpolation patches. The handwritten browser demo rectangles
+    /// cannot establish whether a leftover glyph came from OCR or erasure.
+    #[test]
+    #[ignore = "requires installed PP-OCRv6 Tiny model; writes a generated visual fixture"]
+    fn export_real_terminal_overlay_fixture() {
+        export_real_overlay_fixture("windows_terminal_dense.png", "terminal_real_ocr.json", 20);
+    }
+
+    #[test]
+    #[ignore = "requires installed PP-OCRv6 Tiny model; writes generated visual fixtures"]
+    fn export_real_mixed_overlay_fixtures() {
+        for (source, output) in [
+            ("password_heading_crop.png", "heading_real_ocr.json"),
+            ("password_dialog_dense.png", "dialog_real_ocr.json"),
+            ("green_chat_bubble.png", "bubble_real_ocr.json"),
+            ("dense_chinese_prose_source.png", "dense_real_ocr.json"),
+            ("blender_toolbar.png", "blender_real_ocr.json"),
+        ] {
+            export_real_overlay_fixture(source, output, 1);
+        }
+    }
+
+    fn export_real_overlay_fixture(source_name: &str, output_name: &str, min_blocks: usize) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = root.join("tests/fixtures").join(source_name);
+        let rgba = image::open(&source).unwrap().to_rgba8();
+        let (width, height) = rgba.dimensions();
+        let pixel_len = (width * height * 4) as usize;
+        let mut bmp = vec![0u8; 54 + pixel_len];
+        bmp[0..2].copy_from_slice(b"BM");
+        bmp[2..6].copy_from_slice(&((54 + pixel_len) as u32).to_le_bytes());
+        bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+        bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&(width as i32).to_le_bytes());
+        bmp[22..26].copy_from_slice(&(-(height as i32)).to_le_bytes());
+        bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&32u16.to_le_bytes());
+        bmp[34..38].copy_from_slice(&(pixel_len as u32).to_le_bytes());
+        for (dst, px) in bmp[54..].chunks_mut(4).zip(rgba.pixels()) {
+            dst.copy_from_slice(&[px[2], px[1], px[0], 255]);
+        }
+
+        crate::onnx_ocr::set_active_version("v6t");
+        let ocr = crate::ocr::execute_native_ocr_with_engine(&bmp, Some("onnx")).unwrap();
+        let usable = retain_usable_ocr_with_context(ocr.blocks);
+        let lines = LineClusterer::cluster_into_lines(usable, 8.0);
+        let merged: Vec<_> = lines.into_iter()
+            .flat_map(|line| WordMerger::merge_line_segments(line, 20.0)).collect();
+        let mut merged = WordMerger::merge_prose_rows(merged);
+        let terminal_scene = should_merge_terminal_rows(&bmp, width, height, &merged);
+        if terminal_scene { merged = WordMerger::merge_terminal_row_fragments(merged); }
+        let rects: Vec<BoundingBox> = merged.iter().map(|block| block.box_rect).collect();
+        let mut overlay = Vec::with_capacity(merged.len());
+        for (index, block) in merged.iter().enumerate() {
+            let rect = block.box_rect;
+            let neighbours: Vec<_> = rects.iter().enumerate()
+                .filter_map(|(i, other)| (i != index).then_some(*other)).collect();
+            let erase_rect = if terminal_scene {
+                crate::inpaint::extend_terminal_tail_bbox(&bmp, width, height, rect, &neighbours)
+            } else { rect };
+            let bg = ColorSampler::sample_from_full_bmp(&bmp, width, height, rect, 4);
+            let fg = crate::inpaint::sample_text_color(&bmp, width, height, rect);
+            let (patch_png, patch_x, patch_y, patch_w, patch_h) =
+                match crate::inpaint::build_erased_patch_png(&bmp, width, height, erase_rect, &neighbours) {
+                    Some((png, pw, ph)) => {
+                        let (x, y, _, _) = crate::inpaint::erased_patch_rect(
+                            erase_rect, width, height, &neighbours, &bmp);
+                        (Some(png), x as f64, y as f64, pw as f64, ph as f64)
+                    }
+                    None => (None, 0.0, 0.0, 0.0, 0.0),
+                };
+            overlay.push(OverlayBlock {
+                original: block.text.clone(), translated: String::new(),
+                source_tier: "PP-OCRv6 Tiny · 实际输出".into(),
+                logical_x: rect.x as f64, logical_y: rect.y as f64,
+                logical_w: rect.width as f64, logical_h: rect.height as f64,
+                bg_css: format!("rgb({},{},{})", bg[0], bg[1], bg[2]),
+                fg_css: format!("rgb({},{},{})", fg[0], fg[1], fg[2]),
+                preserve_leading_bullet: crate::inpaint::has_unerased_leading_bullet(
+                    &bmp, width, height, rect, &block.text),
+                patch_png, patch_x, patch_y, patch_w, patch_h,
+            });
+        }
+        assert!(overlay.len() >= min_blocks, "{source_name} unexpectedly lost text rows");
+        assert!(overlay.iter().all(|block| block.patch_png.is_some()),
+            "the visual fixture must use real erasure patches");
+        if source_name == "password_dialog_dense.png" {
+            let first_bullet = overlay.iter().find(|block| block.original.starts_with('•')).unwrap();
+            let second_bullet = overlay.iter().find(|block| block.original.starts_with('·')).unwrap();
+            assert!(first_bullet.preserve_leading_bullet);
+            assert!(!second_bullet.preserve_leading_bullet);
+        }
+        if source_name == "windows_terminal_dense.png" {
+            let joined = overlay.iter().map(|block| block.original.as_str())
+                .collect::<Vec<_>>().join("\n");
+            assert!(joined.contains("1420 端口与历史进程")
+                && joined.contains("正在启动热重载开发调试服务"),
+                "adjacent Chinese OCR fragments must not acquire false word spaces: {joined}");
+        }
+        let out = root.join("../src/visual/generated").join(output_name);
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        std::fs::write(&out, serde_json::to_vec(&overlay).unwrap()).unwrap();
+        println!("exported {} real OCR layout blocks to {}", overlay.len(), out.display());
     }
 }

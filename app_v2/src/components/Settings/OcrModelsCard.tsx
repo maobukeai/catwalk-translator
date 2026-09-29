@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Download,
   CheckCircle2,
@@ -30,7 +30,7 @@ interface ProgressInfo {
   done?: boolean;
 }
 
-type OcrVersion = 'v3' | 'v4' | 'v5' | 'v6' | 'v6t';
+type OcrVersion = 'v6' | 'v6t' | 'v6m';
 
 interface VersionTabConfig {
   id: OcrVersion;
@@ -43,109 +43,95 @@ interface VersionTabConfig {
 
 const VERSION_CONFIGS: VersionTabConfig[] = [
   {
-    id: 'v4',
-    label: 'PP-OCRv4',
-    badge: '推荐 · 平衡',
-    badgeColor: 'bg-emerald-500/15 text-emerald-500 border-emerald-400/30',
-    desc: '高精平衡版 · 兼顾识别准确率与推理速度，推荐日常主力使用',
-    recommendNote: '推荐主力',
-  },
-  {
-    id: 'v3',
-    label: 'PP-OCRv3',
-    badge: '轻量 · 极速',
-    badgeColor: 'bg-blue-500/15 text-blue-500 border-blue-400/30',
-    desc: '经典极速版 · 体积小巧 (~16MB)，超低延迟，适合低配硬件',
-    recommendNote: '极速轻量',
-  },
-  {
-    id: 'v5',
-    label: 'PP-OCRv5',
-    badge: '生僻字增强',
-    badgeColor: 'bg-violet-500/15 text-violet-500 border-violet-400/30',
-    desc: '增强版 · 长句与低对比度小字更准；速度与 v4 相近，体积 21MB',
-    recommendNote: '长句更准',
-  },
-  {
     id: 'v6',
-    label: 'PP-OCRv6',
-    badge: '最新 · 精度优先',
+    label: 'PP-OCRv6 Small',
+    badge: '均衡 · 精度优先',
     badgeColor: 'bg-amber-500/15 text-amber-500 border-amber-400/30',
-    desc: '最新版 Small · 实测识别质量最优：模型名、副标题、长句与低对比度小字全部正确；速度约为 v4 的 1.3 倍耗时，体积 31MB',
-    recommendNote: '最新精度',
+    desc: '精度优先 · 约 31MB；复杂界面仍可能漏字，必要时与 Tiny / 系统 OCR 局部互补',
+    recommendNote: '精度优先',
   },
   {
     id: 'v6t',
     label: 'PP-OCRv6 Tiny',
     badge: '最快 · 6MB',
     badgeColor: 'bg-cyan-500/15 text-cyan-500 border-cyan-400/30',
-    desc: '最新版 Tiny · 实测同图耗时约为 v4 的 45%，体积仅 6MB；密排小字的漏读比 Small 更多',
-    recommendNote: '极速首选',
+    desc: '速度优先 · 约 6MB；密排小字可能漏读，必要时由 Small / 系统 OCR 局部复查',
+    recommendNote: '速度优先',
+  },
+  {
+    id: 'v6m',
+    label: 'PP-OCRv6 Medium',
+    badge: '可选 · 密集文字',
+    badgeColor: 'bg-violet-500/15 text-violet-500 border-violet-400/30',
+    desc: '约 139MB；终端密集文字可能更准，但 CPU 速度明显慢，其他截图不一定优于 Small。仅建议按需启用。',
+    recommendNote: '高精度试用',
   },
 ];
 
-const getModelVersion = (m: OfflineModelStatus): OcrVersion => {
+const getModelVersion = (m: OfflineModelStatus): OcrVersion | null => {
   if (
-    m.version === 'v3' ||
-    m.version === 'v4' ||
-    m.version === 'v5' ||
     m.version === 'v6' ||
-    m.version === 'v6t'
+    m.version === 'v6t' ||
+    m.version === 'v6m'
   ) {
     return m.version;
   }
-  // 后备匹配按「长前缀优先」：v6t 与 v6 前缀相同，顺序反了会把 Tiny 归到 Small。
+  // 后备匹配按长前缀优先，避免 Medium/Tiny 被归到 Small。
+  if (m.id.includes('v6m') || m.fileName.includes('v6_medium')) return 'v6m';
   if (m.id.includes('v6t') || m.fileName.includes('v6_tiny')) return 'v6t';
   if (m.id.includes('v6') || m.fileName.includes('v6')) return 'v6';
-  if (m.id.includes('v4') || m.fileName.includes('v4')) return 'v4';
-  if (m.id.includes('v5') || m.fileName.includes('v5')) return 'v5';
-  return 'v3';
+  return null;
 };
 
 /**
- * Local OCR model manager: supports PP-OCRv3 / v4 / v5 / v6 / v6-Tiny
+ * Local OCR model manager: supports PP-OCRv6 Tiny / Small / Medium
  * multi-version switching, streaming progress download, Windows lock-safe deletion,
  * and hot reloading without client restart.
  */
 export const OcrModelsCard: React.FC = () => {
   const { isLight } = useAppTheme();
-  const setOcrVersion = useSettingsStore((s) => s.setOcrVersion);
+  const setOcrDefaultModel = useSettingsStore((s) => s.setOcrDefaultModel);
+  const ocrEngine = useSettingsStore((s) => s.settings.ocrEngine);
   const [models, setModels] = useState<OfflineModelStatus[]>([]);
-  const [activeVersion, setActiveVersion] = useState<OcrVersion>('v6t');
-  const [selectedTab, setSelectedTab] = useState<OcrVersion>('v6t');
+  const [activeVersion, setActiveVersion] = useState<OcrVersion>('v6');
+  const [selectedTab, setSelectedTab] = useState<OcrVersion>('v6');
   const [progress, setProgress] = useState<Record<string, ProgressInfo>>({});
   const [isBatchDownloading, setIsBatchDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const initializedSelection = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
       const fetchedModels = await cmdOfflineModelsStatus();
-      let activeVer: string = 'v4';
+      let activeVer: string = 'v6';
       try {
         const rawVer = await cmdGetActiveOcrVersion();
         if (typeof rawVer === 'string' && rawVer.trim().length > 0) {
           activeVer = rawVer.trim();
         }
       } catch {
-        activeVer = 'v4';
+        activeVer = 'v6';
       }
 
       setModels(fetchedModels || []);
 
-      let cleanActive: OcrVersion = 'v4';
+      let cleanActive: OcrVersion = 'v6';
       const lower = activeVer.toLowerCase();
-      // v6t 先判定：与 v6 前缀相同，顺序反了极速档会被显示成 Small 档。
-      if (lower.includes('v6t')) cleanActive = 'v6t';
+      // Longer variant names must be checked before plain v6.
+      if (lower.includes('v6m')) cleanActive = 'v6m';
+      else if (lower.includes('v6t')) cleanActive = 'v6t';
       else if (lower.includes('v6')) cleanActive = 'v6';
-      else if (lower.includes('v3')) cleanActive = 'v3';
-      else if (lower.includes('v5')) cleanActive = 'v5';
-      else cleanActive = 'v4';
+      else cleanActive = 'v6';
+      if (!initializedSelection.current) {
+        setSelectedTab(cleanActive);
+        initializedSelection.current = true;
+      }
 
-      // If all fetched models belong to a single version (e.g. legacy test mocks with only v3 models),
+      // If only one supported version is returned, show that version immediately.
       // align activeVersion and selectedTab to that version so they are instantly visible.
       if (fetchedModels && fetchedModels.length > 0) {
         const versionsPresent = Array.from(
-          new Set(fetchedModels.map((m) => getModelVersion(m)))
+          new Set(fetchedModels.map((m) => getModelVersion(m)).filter((v): v is OcrVersion => v !== null))
         );
         if (versionsPresent.length === 1) {
           cleanActive = versionsPresent[0];
@@ -231,7 +217,7 @@ export const OcrModelsCard: React.FC = () => {
         return;
       }
       setActiveVersion(version);
-      setOcrVersion(version);
+      setOcrDefaultModel(version);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message.slice(0, 120) : String(err));
@@ -259,9 +245,6 @@ export const OcrModelsCard: React.FC = () => {
         }
       }
       await refresh();
-      await cmdSwitchOcrVersion(version);
-      setActiveVersion(version);
-      setOcrVersion(version);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -273,7 +256,7 @@ export const OcrModelsCard: React.FC = () => {
   const activeTabInstalledCount = activeTabModels.filter((m) => m.installed).length;
   const isActiveTabFullyInstalled =
     activeTabModels.length > 0 && activeTabInstalledCount === activeTabModels.length;
-  const isCurrentTabActive = activeVersion === selectedTab;
+  const isCurrentTabActive = activeVersion === selectedTab && ocrEngine !== 'winrt';
 
   const currentTabConfig =
     VERSION_CONFIGS.find((c) => c.id === selectedTab) || VERSION_CONFIGS[0];
@@ -305,7 +288,7 @@ export const OcrModelsCard: React.FC = () => {
                   'bg-blue-500/15 text-blue-500 border-blue-400/30'
                 }`}
               >
-                当前使用:{' '}
+              当前默认:{' '}
                 {VERSION_CONFIGS.find((c) => c.id === activeVersion)?.label ??
                   activeVersion.toUpperCase()}
               </span>
@@ -327,7 +310,7 @@ export const OcrModelsCard: React.FC = () => {
       </div>
 
       {/* ── Version Tabs ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
         {VERSION_CONFIGS.map((cfg) => {
           const tabModels = models.filter((m) => getModelVersion(m) === cfg.id);
           const installedCount = tabModels.filter((m) => m.installed).length;
@@ -335,18 +318,14 @@ export const OcrModelsCard: React.FC = () => {
           const isSelected = selectedTab === cfg.id;
           const isThisActive = activeVersion === cfg.id;
 
-          const handleCardClick = async () => {
-            setSelectedTab(cfg.id);
-            if (isFullyInstalled && activeVersion !== cfg.id) {
-              await handleSwitchVersion(cfg.id);
-            }
-          };
-
           return (
             <button
               key={cfg.id}
               type="button"
-              onClick={() => void handleCardClick()}
+              onClick={() => {
+                initializedSelection.current = true;
+                setSelectedTab(cfg.id);
+              }}
               className={`flex flex-col p-3 rounded-xl border text-left transition-all duration-200 cursor-pointer relative overflow-hidden ${
                 isThisActive
                   ? (isLight
@@ -376,11 +355,11 @@ export const OcrModelsCard: React.FC = () => {
                 {isThisActive ? (
                   <span className="text-[9.5px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/40 flex items-center gap-1 shadow-2xs">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    当前生效
+                    当前默认
                   </span>
                 ) : isFullyInstalled ? (
                   <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/10 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-white/10">
-                    点击启用
+                    可设默认
                   </span>
                 ) : (
                   <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
@@ -436,14 +415,14 @@ export const OcrModelsCard: React.FC = () => {
               title={`将 ${currentTabConfig.label} 设为当前 OCR 推理版本`}
             >
               <Zap className="h-3.5 w-3.5" />
-              <span>启用此版本</span>
+              <span>设为默认并启用</span>
             </button>
           )}
 
           {isCurrentTabActive && (
             <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-500 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
               <CheckCircle2 className="h-3.5 w-3.5" />
-              正在使用
+              当前默认并使用
             </span>
           )}
 
@@ -454,7 +433,7 @@ export const OcrModelsCard: React.FC = () => {
               disabled={isBatchDownloading}
               onClick={() => void handleDownloadAll(selectedTab)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-600 hover:bg-violet-500 text-white transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-              title="一键下载整套 det + rec + cls 模型文件"
+              title="仅下载 det + rec + cls；下载完成后可手动设为默认"
             >
               <Download className="h-3.5 w-3.5" />
               <span>{isBatchDownloading ? '下载中...' : '一键下载整套'}</span>

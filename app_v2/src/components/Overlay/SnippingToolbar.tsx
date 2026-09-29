@@ -67,6 +67,7 @@ export interface SnippingToolbarProps {
 }
 
 const TARGET_LANG_OPTIONS: { code: LanguageCode; label: string }[] = [
+  { code: 'auto', label: '自动' },
   { code: 'zh-CN', label: '中' },
   { code: 'en', label: '英' },
   { code: 'ja', label: '日' },
@@ -118,7 +119,7 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
   onCancel,
   onConfirm,
   isProcessing = false,
-  targetLang = 'zh-CN',
+  targetLang = 'auto',
   onSelectLanguage,
   selectedEngine = 'auto',
   onSelectEngine,

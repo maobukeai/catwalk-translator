@@ -1,6 +1,6 @@
 [package]
 name = "MaobuTranslator"
-version = "0.3.15"
+version = "0.3.38"
 description = "鐚缈昏瘧"
 authors = ["maobukeai"]
 edition = "2021"
@@ -84,5 +84,3 @@ codegen-units = 1
 panic = "abort"
 strip = true
 overflow-checks = false
-
-

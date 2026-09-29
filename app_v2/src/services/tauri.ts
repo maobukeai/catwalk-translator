@@ -458,36 +458,30 @@ export interface OfflineModelStatus {
   approxBytes: number;
 }
 
-/// Installed state + sizes of local PP-OCRv3 / v4 / v5 / v6 / v6-Tiny OCR models.
+/// Installed state + sizes of local PP-OCRv6 Tiny / Small / Medium OCR models.
 export async function cmdOfflineModelsStatus(): Promise<OfflineModelStatus[]> {
   if (isTauri()) {
     return await invoke<OfflineModelStatus[]>('cmd_offline_models_status');
   }
   return [
-    { id: 'ppocrv3-det', version: 'v3', name: 'PP-OCRv3 文本检测', fileName: 'ch_PP-OCRv3_det_infer.onnx', installed: true, sizeBytes: 4_700_000, approxBytes: 4_700_000 },
-    { id: 'ppocrv3-rec', version: 'v3', name: 'PP-OCRv3 文本识别', fileName: 'ch_PP-OCRv3_rec_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 10_800_000 },
-    { id: 'ppocrv3-cls', version: 'v3', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_400_000 },
-    { id: 'ppocrv4-det', version: 'v4', name: 'PP-OCRv4 文本检测', fileName: 'ch_PP-OCRv4_det_infer.onnx', installed: true, sizeBytes: 4_700_000, approxBytes: 4_700_000 },
-    { id: 'ppocrv4-rec', version: 'v4', name: 'PP-OCRv4 文本识别', fileName: 'ch_PP-OCRv4_rec_infer.onnx', installed: true, sizeBytes: 10_800_000, approxBytes: 10_800_000 },
-    { id: 'ppocrv4-cls', version: 'v4', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: true, sizeBytes: 1_400_000, approxBytes: 1_400_000 },
-    { id: 'ppocrv5-det', version: 'v5', name: 'PP-OCRv5 文本检测', fileName: 'ch_PP-OCRv5_det_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 4_819_576 },
-    { id: 'ppocrv5-rec', version: 'v5', name: 'PP-OCRv5 文本识别', fileName: 'ch_PP-OCRv5_rec_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 16_631_306 },
-    { id: 'ppocrv5-cls', version: 'v5', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_400_000 },
     { id: 'ppocrv6-det', version: 'v6', name: 'PP-OCRv6 文本检测 (Small)', fileName: 'ch_PP-OCRv6_det_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 9_929_594 },
     { id: 'ppocrv6-rec', version: 'v6', name: 'PP-OCRv6 文本识别 (Small)', fileName: 'ch_PP-OCRv6_rec_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 21_234_383 },
     { id: 'ppocrv6-cls', version: 'v6', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_400_000 },
     { id: 'ppocrv6t-det', version: 'v6t', name: 'PP-OCRv6 文本检测 (Tiny)', fileName: 'ch_PP-OCRv6_tiny_det_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_829_618 },
     { id: 'ppocrv6t-rec', version: 'v6t', name: 'PP-OCRv6 文本识别 (Tiny)', fileName: 'ch_PP-OCRv6_tiny_rec_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 4_489_813 },
     { id: 'ppocrv6t-cls', version: 'v6t', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_400_000 },
+    { id: 'ppocrv6m-det', version: 'v6m', name: 'PP-OCRv6 文本检测 (Medium)', fileName: 'ch_PP-OCRv6_medium_det_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 62_119_454 },
+    { id: 'ppocrv6m-rec', version: 'v6m', name: 'PP-OCRv6 文本识别 (Medium)', fileName: 'ch_PP-OCRv6_medium_rec_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 76_629_984 },
+    { id: 'ppocrv6m-cls', version: 'v6m', name: 'PP-OCR 方向分类 (180°)', fileName: 'ch_ppocr_mobile_v2.0_cls_infer.onnx', installed: false, sizeBytes: 0, approxBytes: 1_400_000 },
   ];
 }
 
-/// Get current active ONNX OCR engine version ("v3" | "v4" | "v5" | "v6" | "v6t").
+/// Get current active ONNX OCR engine version ("v6" | "v6t" | "v6m").
 export async function cmdGetActiveOcrVersion(): Promise<string> {
   if (isTauri()) {
     return await invoke<string>('cmd_get_active_ocr_version');
   }
-  return 'v4';
+  return 'v6t';
 }
 
 /// Hot-switch active ONNX OCR model version.

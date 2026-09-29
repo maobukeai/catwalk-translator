@@ -1,13 +1,13 @@
-// Pure-Rust ONNX Runtime OCR engine (PP-OCRv3: det -> cls -> rec + CTC).
+// Pure-Rust ONNX Runtime OCR engine (PP-OCRv6: det -> cls -> rec + CTC).
 //
-// Implements the PaddleOCR v3 pipeline natively in Rust via `ort` - no
+// Implements the PaddleOCR pipeline natively in Rust via `ort` - no
 // Python daemon needed. Pre/post-processing parameters mirror the reference
 // `rapidocr_onnxruntime` implementation (which the legacy Python daemon
 // uses), so outputs are comparable:
 //
-// - det: ch_PP-OCRv3_det_infer.onnx - DB [thresh 0.3 / box_thresh 0.5 / unclip 1.6]
+// - det: PP-OCRv6 Tiny, Small or Medium - DB post-processing
 // - cls: ch_ppocr_mobile_v2.0_cls_infer.onnx - 180-degree angle, thresh 0.9
-// - rec: ch_PP-OCRv3_rec_infer.onnx - CRNN + CTC, chars from model metadata
+// - rec: PP-OCRv6 Tiny, Small or Medium - CTC, chars from model metadata
 
 use crate::models::{BoundingBox, OcrResult, TextBlock};
 use ort::session::Session;
@@ -23,29 +23,14 @@ pub const DET_LIMIT_SIDE_LEN: f32 = 736.0;
 pub const DET_MAX_SIDE_LEN: f32 = 1600.0;
 pub const DET_THRESH: f32 = 0.25;
 pub const DET_BOX_THRESH: f32 = 0.5;
-/// unclip 1.6（PP-OCR 参考值）。不要再往上调：2.0 会把 26px 文本框纵向膨胀到
-/// ~33px，超过卡片内 ~30px 的行距，于是相邻行的框在 x 和 y 上同时相交——
-/// 抹除补丁的邻居钳制随之失效，补丁把下一行文字整条盖住（用户可见的「文字被
-/// 遮挡」）。行首/行尾被裁掉的笔画改由 union_boxes_into_rows 的**水平**内边距
-/// 补齐，横向外扩不会造成跨行遮挡。
-pub const DET_UNCLIP_RATIO: f32 = 1.6;
-
-/// 当前激活模型版本对应的 unclip 外扩系数。
-///
-/// PP-OCRv6 的 det 连通区域本身就比 v3~v5 大：同一张图上，卡片的标题行与副
-/// 标题行会被扩成一个 ~55px 高的框，沿用 1.6 会把两行并成一行，识别出
-/// `x1xai/grok46deel`、`wan vdvieratomdel` 这类叠字乱码。v6 系列（Small 与
-/// Tiny 共用同一代 det）需要更小的外扩才能把相邻行分开。
+/// v6 detection boxes already cover large regions. A 1.0 unclip avoids
+/// joining adjacent UI rows while horizontal crop padding preserves strokes.
 pub fn active_unclip_ratio() -> f32 {
-    unclip_ratio_for_version(&get_active_version())
+    1.0
 }
 
-fn unclip_ratio_for_version(version: &str) -> f32 {
-    if version.to_ascii_lowercase().starts_with("v6") {
-        1.0
-    } else {
-        DET_UNCLIP_RATIO
-    }
+fn unclip_ratio_for_version(_version: &str) -> f32 {
+    1.0
 }
 pub const DET_MIN_SIZE: u32 = 3;
 pub const CLS_IMG_H: usize = 48;
@@ -67,35 +52,33 @@ static MODELS_DIR_OVERRIDE: OnceLock<std::path::PathBuf> = OnceLock::new();
 static ACTIVE_VERSION: OnceLock<Mutex<String>> = OnceLock::new();
 
 fn active_version_lock() -> &'static Mutex<String> {
-    ACTIVE_VERSION.get_or_init(|| Mutex::new("v4".to_string()))
+    ACTIVE_VERSION.get_or_init(|| Mutex::new("v6".to_string()))
 }
 
-/// Get the currently active OCR model version ("v3" | "v4" | "v5" | "v6" | "v6t").
+/// Get the currently active OCR model version ("v6" | "v6t" | "v6m").
 pub fn get_active_version() -> String {
     active_version_lock()
         .lock()
         .map(|g| {
             if g.is_empty() {
-                "v6t".to_string()
+                "v6".to_string()
             } else {
                 g.clone()
             }
         })
-        .unwrap_or_else(|_| "v6t".to_string())
+        .unwrap_or_else(|_| "v6".to_string())
 }
 
 fn normalize_version(ver: &str) -> &'static str {
     match ver.to_ascii_lowercase().as_str() {
-        "v3" | "ppocrv3" | "pp-ocrv3" => "v3",
-        "v4" | "ppocrv4" | "pp-ocrv4" => "v4",
-        "v5" | "ppocrv5" | "pp-ocrv5" => "v5",
+        "v6m" | "ppocrv6m" | "pp-ocrv6-medium" => "v6m",
         "v6t" | "ppocrv6t" | "pp-ocrv6-tiny" => "v6t",
         "v6" | "ppocrv6" | "pp-ocrv6" => "v6",
         _ => "v6t",
     }
 }
 
-/// Set the active OCR model version ("v3" | "v4" | "v5" | "v6" | "v6t").
+/// Set the active OCR model version ("v6" | "v6t" | "v6m").
 pub fn set_active_version(ver: &str) {
     let clean_ver = normalize_version(ver);
     if let Ok(mut g) = active_version_lock().lock() {
@@ -106,14 +89,9 @@ pub fn set_active_version(ver: &str) {
 /// Returns the model file triple `(det, rec, cls)` for the requested OCR version.
 pub fn get_model_filenames_for_version(ver: &str) -> (&'static str, &'static str, &'static str) {
     match ver.to_ascii_lowercase().as_str() {
-        "v3" | "ppocrv3" | "pp-ocrv3" => (
-            "ch_PP-OCRv3_det_infer.onnx",
-            "ch_PP-OCRv3_rec_infer.onnx",
-            "ch_ppocr_mobile_v2.0_cls_infer.onnx",
-        ),
-        "v5" | "ppocrv5" | "pp-ocrv5" => (
-            "ch_PP-OCRv5_det_infer.onnx",
-            "ch_PP-OCRv5_rec_infer.onnx",
+        "v6m" | "ppocrv6m" | "pp-ocrv6-medium" => (
+            "ch_PP-OCRv6_medium_det_infer.onnx",
+            "ch_PP-OCRv6_medium_rec_infer.onnx",
             "ch_ppocr_mobile_v2.0_cls_infer.onnx",
         ),
         "v6" | "ppocrv6" | "pp-ocrv6" => (
@@ -122,17 +100,13 @@ pub fn get_model_filenames_for_version(ver: &str) -> (&'static str, &'static str
             "ch_ppocr_mobile_v2.0_cls_infer.onnx",
         ),
         // v6t = PP-OCRv6 Tiny：det 1.8MB + rec 4.5MB，实测最快的一档
-        //（同图 165ms，v4 为 373ms）。文件名与 v6 Small 区分，两档可共存。
+        // Tiny and Small use distinct files so both can be installed.
         "v6t" | "ppocrv6t" | "pp-ocrv6-tiny" => (
             "ch_PP-OCRv6_tiny_det_infer.onnx",
             "ch_PP-OCRv6_tiny_rec_infer.onnx",
             "ch_ppocr_mobile_v2.0_cls_infer.onnx",
         ),
-        _ => (
-            "ch_PP-OCRv4_det_infer.onnx",
-            "ch_PP-OCRv4_rec_infer.onnx",
-            "ch_ppocr_mobile_v2.0_cls_infer.onnx",
-        ),
+        _ => get_model_filenames_for_version("v6t"),
     }
 }
 
@@ -216,7 +190,7 @@ fn resolve_models_dir() -> Option<std::path::PathBuf> {
         return Some(p);
     }
     // Fallback: check if other versions are installed
-    for fallback_ver in ["v4", "v3", "v5", "v6", "v6t"] {
+    for fallback_ver in ["v6", "v6t", "v6m"] {
         if fallback_ver != active {
             if let Some(p) = resolve_models_dir_for_version(fallback_ver) {
                 return Some(p);
@@ -240,20 +214,17 @@ pub fn model_files_present_for_version(ver: &str) -> bool {
 /// one model while inference silently uses another one.
 pub fn best_available_version(preferred: &str) -> Option<String> {
     let normalized = match preferred.to_ascii_lowercase().as_str() {
-        "v3" | "ppocrv3" | "pp-ocrv3" => "v3",
-        "v4" | "ppocrv4" | "pp-ocrv4" => "v4",
-        "v5" | "ppocrv5" | "pp-ocrv5" => "v5",
+        "v6m" | "ppocrv6m" | "pp-ocrv6-medium" => "v6m",
         "v6" | "ppocrv6" | "pp-ocrv6" => "v6",
         "v6t" | "ppocrv6t" | "pp-ocrv6-tiny" => "v6t",
+        "v3" | "v4" | "v5" => "v6",
         _ => "v6t",
     };
     if model_files_present_for_version(normalized) {
         return Some(normalized.to_string());
     }
-    // When a requested model is unavailable, prefer accuracy-oriented models
-    // before Tiny. The real desktop fixtures show Tiny is faster but can split
-    // terminal and dialog text more severely than v4.
-    ["v6", "v5", "v4", "v3", "v6t"]
+    // Legacy v3/v4/v5 selections migrate to an installed v6 model.
+    ["v6", "v6t", "v6m"]
         .into_iter()
         .find(|v| model_files_present_for_version(v))
         .map(str::to_string)
@@ -337,7 +308,7 @@ pub fn accel_status_text() -> String {
 }
 
 static ONNX_ENGINE: OnceLock<Mutex<OnnxOcrEngine>> = OnceLock::new();
-static ENSEMBLE_V3_ENGINE: OnceLock<OnnxOcrEngine> = OnceLock::new();
+static ENSEMBLE_V6_ENGINE: OnceLock<OnnxOcrEngine> = OnceLock::new();
 static ENSEMBLE_V6T_ENGINE: OnceLock<OnnxOcrEngine> = OnceLock::new();
 
 /// Global singleton accessor for the ONNX OCR engine.
@@ -369,19 +340,27 @@ pub fn recognize_bmp(bmp: &[u8]) -> Result<OcrResult, String> {
 
 fn ensemble_engine(version: &str) -> Option<&'static OnnxOcrEngine> {
     match normalize_version(version) {
-        "v3" => Some(ENSEMBLE_V3_ENGINE.get_or_init(|| OnnxOcrEngine::new_for_version("v3"))),
+        "v6" => Some(ENSEMBLE_V6_ENGINE.get_or_init(|| OnnxOcrEngine::new_for_version("v6"))),
         "v6t" => Some(ENSEMBLE_V6T_ENGINE.get_or_init(|| OnnxOcrEngine::new_for_version("v6t"))),
         _ => None,
     }
 }
 
-fn secondary_version_for(primary: &str) -> Option<&'static str> {
-    let candidate = if normalize_version(primary) == "v6t" {
-        "v3"
+fn complementary_version_for(primary: &str) -> &'static str {
+    if normalize_version(primary) == "v6t" {
+        "v6"
     } else {
         "v6t"
-    };
-    model_files_present_for_version(candidate).then_some(candidate)
+    }
+}
+
+fn secondary_version_for(primary: &str) -> Option<&'static str> {
+    let preferred = complementary_version_for(primary);
+    [preferred, "v6", "v6t"]
+        .into_iter()
+        .find(|candidate| *candidate != normalize_version(primary)
+            && ensemble_engine(candidate).is_some()
+            && model_files_present_for_version(candidate))
 }
 
 /// Thread-safe ONNX OCR engine (sessions require `&mut` to run, so the engine
@@ -450,7 +429,7 @@ impl OnnxOcrEngine {
         self.inner.lock().map(|g| g.is_some()).unwrap_or(false)
     }
 
-    /// Hot-switch to a new model version (e.g. "v3", "v4", "v5").
+    /// Hot-switch between PP-OCRv6 Tiny, Small and Medium.
     pub fn switch_version(&self, ver: &str) -> Result<(), String> {
         if !model_files_present_for_version(ver) {
             return Err(format!(
@@ -507,7 +486,7 @@ impl OnnxOcrEngine {
         } else {
             // Check fallbacks if active version is not present
             let mut found = None;
-            for fallback_ver in ["v4", "v3", "v5", "v6", "v6t"] {
+            for fallback_ver in ["v6", "v6t", "v6m"] {
                 if let Some(d) = resolve_models_dir_for_version(fallback_ver) {
                     found = Some((fallback_ver.to_string(), d));
                     break;
@@ -762,6 +741,34 @@ impl OnnxOcrEngine {
 
     /// Run the full pipeline over a crop passed as 32bpp (BGRA) BMP bytes.
     pub fn recognize_bmp(&self, bmp: &[u8]) -> Result<OcrResult, String> {
+        let first = self.recognize_bmp_once(bmp);
+        let should_retry_cpu = matches!(self.accel_info().map(|info| info.ep), Some(Accelerator::DirectML))
+            && first.as_ref().err().is_some_and(|error| {
+                error.contains("inference failed") || error.contains("output extract failed")
+            });
+        if !should_retry_cpu {
+            return first;
+        }
+
+        // A synthetic startup benchmark cannot cover every real REC width.
+        // Some DirectML drivers accept the benchmark but fail AveragePool for
+        // a narrow toolbar crop. Retry the same image on CPU and keep that
+        // session for subsequent captures instead of degrading to WinRT.
+        eprintln!("[OCR] DirectML 实图推理失败，切换 CPU 并重试当前截图");
+        let (cpu_sessions, mut info) = Self::load_sessions(self.fixed_version.as_deref(), true)?;
+        info.forced = false;
+        info.note = Some("DirectML 实图推理失败，已自动切换 CPU".to_string());
+        {
+            let mut guard = self.inner.lock().map_err(|_| "ONNX OCR lock poisoned".to_string())?;
+            *guard = Some(cpu_sessions);
+        }
+        if let Ok(mut status) = self.accel.lock() {
+            *status = Some(info);
+        }
+        self.recognize_bmp_once(bmp)
+    }
+
+    fn recognize_bmp_once(&self, bmp: &[u8]) -> Result<OcrResult, String> {
         self.ensure_loaded()?;
         let (w, h) = decode_bmp_size(bmp)?;
         if w == 0 || h == 0 {
@@ -932,8 +939,8 @@ impl OnnxOcrEngine {
         // important: a window title such as "Blender 5.2.1 LTS" is also wide
         // and shallow, but must remain intact; a dense CJK menu string such as
         // "文件编辑渲染窗口帮助" should be re-cut at real visual gutters.
-        let dense_toolbar = blocks.iter().any(should_refine_dense_toolbar);
         blocks = refine_dense_toolbar_blocks(sessions, &bgr, img_w, img_h, blocks)?;
+        let dense_toolbar = is_dense_toolbar_scene(&blocks);
         if self.fixed_version.is_none() {
             if dense_toolbar {
                 blocks = ensemble_dense_ui_blocks(bmp, &sessions.version, blocks);
@@ -1132,20 +1139,68 @@ fn split_wide_box_at_ink_valleys(
     }
 }
 
-fn should_refine_dense_toolbar(block: &TextBlock) -> bool {
+fn should_refine_dense_toolbar(block: &TextBlock, _version: &str) -> bool {
     let text = block.text.trim();
     let cjk_count = text
         .chars()
         .filter(|c| matches!(*c as u32, 0x3400..=0x9fff | 0xf900..=0xfaff))
         .count();
     let words: Vec<&str> = text.split_whitespace().collect();
+    // A Chinese sentence is not a toolbar merely because it is wide and has
+    // more than four Han characters. The former test split normal paragraphs
+    // at punctuation/word gaps and re-recognized fragments, turning “了” into
+    // “7” on the user's dense-prose fixture. The same symptom was reproduced
+    // with Tiny, so protect prose in both versions while retaining compact UI.
+    let prose_like = cjk_count > 24
+        || text.chars().any(|c| "，。；：！？《》、,;:!?".contains(c));
+    if prose_like {
+        return false;
+    }
     let short_word_row = words.len() >= 3
         && words.iter().all(|w| w.chars().count() <= 12)
         && !text
             .chars()
             .any(|c| c.is_ascii_digit() || "()（）.-".contains(c));
-    block.box_rect.width >= block.box_rect.height.saturating_mul(6)
+    // A full-size sentence may also consist of short words. Splitting it at
+    // ink valleys destroys context and clips glyphs; this pass is for compact
+    // UI toolbars only, not paragraphs or headings, regardless of model tier.
+    block.box_rect.height <= 32
+        && block.box_rect.width >= block.box_rect.height.saturating_mul(6)
         && (cjk_count >= 4 || short_word_row)
+}
+
+/// A single short or misdetected box cannot justify a full-frame second-model
+/// pass. Require a scene dominated by compact labels on one horizontal menu
+/// row; otherwise terminal logs and document paragraphs acquire duplicate OCR
+/// boxes from the complementary model.
+fn is_dense_toolbar_scene(blocks: &[TextBlock]) -> bool {
+    let short_label = |block: &TextBlock| {
+        let rect = block.box_rect;
+        let count = block.text.chars().filter(|c| !c.is_whitespace()).count();
+        (2..=12).contains(&count)
+            && (10..=120).contains(&rect.width)
+            && (10..=32).contains(&rect.height)
+            && block.text.chars().any(char::is_alphabetic)
+    };
+    let total = blocks.iter().filter(|block| !block.text.trim().is_empty()).count();
+    let labels: Vec<&TextBlock> = blocks.iter().filter(|block| short_label(block)).collect();
+    if labels.len() < 10 || labels.len() * 5 < total * 3 {
+        return false;
+    }
+    labels.iter().any(|anchor| {
+        let center = anchor.box_rect.y + anchor.box_rect.height as i32 / 2;
+        let same_row: Vec<&TextBlock> = labels.iter().copied().filter(|block| {
+            let other = block.box_rect.y + block.box_rect.height as i32 / 2;
+            (other - center).abs() <= 7
+        }).collect();
+        if same_row.len() < 8 {
+            return false;
+        }
+        let left = same_row.iter().map(|block| block.box_rect.x).min().unwrap();
+        let right = same_row.iter().map(|block|
+            block.box_rect.x + block.box_rect.width as i32).max().unwrap();
+        right - left >= 350
+    })
 }
 
 fn refine_dense_toolbar_blocks(
@@ -1157,7 +1212,7 @@ fn refine_dense_toolbar_blocks(
 ) -> Result<Vec<TextBlock>, String> {
     let mut refined = Vec::with_capacity(blocks.len());
     for block in blocks {
-        if !should_refine_dense_toolbar(&block) {
+        if !should_refine_dense_toolbar(&block, &sessions.version) {
             refined.push(block);
             continue;
         }
@@ -2309,39 +2364,43 @@ mod tests {
     }
 
     #[test]
-    fn v6_family_uses_a_smaller_unclip_than_v3_to_v5() {
+    fn v6_family_uses_the_small_unclip_ratio() {
         // v6 的 det 连通区域天生更大，沿用 1.6 会把「模型名 + 副标题」并框，
         // 输出 `x1xai/grok46deel` 这类叠字乱码。Small 与 Tiny 共用同一代 det，
         // 两档都必须走 v6 专用系数。
-        for ver in ["v6", "v6t", "PP-OCRv6", "pp-ocrv6-tiny"] {
+        for ver in ["v6", "v6t", "v6m", "PP-OCRv6", "pp-ocrv6-tiny", "pp-ocrv6-medium"] {
             set_active_version(ver);
             assert_eq!(active_unclip_ratio(), 1.0, "{} 应使用 v6 专用 unclip", ver);
         }
-        for ver in ["v3", "v4", "v5"] {
-            set_active_version(ver);
-            assert_eq!(
-                active_unclip_ratio(),
-                DET_UNCLIP_RATIO,
-                "{} 应使用 PP-OCR 参考值 1.6",
-                ver
-            );
-        }
-        set_active_version("v4");
+        set_active_version("v6t");
     }
 
     #[test]
-    fn v6_small_and_tiny_map_to_distinct_model_files() {
-        // 两档必须能共存于同一目录：文件名相同会让切换档位读到上一档的权重。
+    fn v6_variants_map_to_distinct_model_files() {
+        // All three variants must coexist without overwriting each other's weights.
         let (small_det, small_rec, _) = get_model_filenames_for_version("v6");
         let (tiny_det, tiny_rec, _) = get_model_filenames_for_version("v6t");
+        let (medium_det, medium_rec, _) = get_model_filenames_for_version("v6m");
         assert_ne!(small_det, tiny_det);
         assert_ne!(small_rec, tiny_rec);
+        assert_ne!(small_det, medium_det);
+        assert_ne!(small_rec, medium_rec);
+        assert_ne!(tiny_det, medium_det);
+        assert_ne!(tiny_rec, medium_rec);
         // 版本归一化：Tiny 的别名不得落回 Small
         set_active_version("v6t");
         assert_eq!(get_active_version(), "v6t");
         set_active_version("v6");
         assert_eq!(get_active_version(), "v6");
-        set_active_version("v4");
+        set_active_version("v6m");
+        assert_eq!(get_active_version(), "v6m");
+        set_active_version("v6t");
+    }
+
+    #[test]
+    fn only_v6_variants_are_complementary_ocr_models() {
+        assert_eq!(complementary_version_for("v6t"), "v6");
+        assert_eq!(complementary_version_for("v6"), "v6t");
     }
 
     #[test]
@@ -2471,11 +2530,41 @@ mod tests {
                 height: 18,
             },
         };
-        assert!(should_refine_dense_toolbar(&make("文件编辑渲染窗口帮助")));
+        assert!(should_refine_dense_toolbar(&make("文件编辑渲染窗口帮助"), "v6"));
         assert!(should_refine_dense_toolbar(&make(
             "File Edit Render Window Help"
-        )));
-        assert!(!should_refine_dense_toolbar(&make("Blender 5.2.1 LTS")));
+        ), "v6"));
+        assert!(!should_refine_dense_toolbar(&make("Blender 5.2.1 LTS"), "v6"));
+        let mut prose = make("原位翻译修复了短译文覆盖长原文时的残字，并加入真实截图视觉验收页；");
+        prose.box_rect.width = 720;
+        prose.box_rect.height = 20;
+        assert!(!should_refine_dense_toolbar(&prose, "v6"));
+        assert!(!should_refine_dense_toolbar(&prose, "v6t"));
+        let mut chat = make("我们将 Gemini Omni 1.1 Flash 和一套全新的创意控制工");
+        chat.box_rect.width = 360;
+        assert!(should_refine_dense_toolbar(&chat, "v6"), "compact mixed-script bubble keeps its validated split path");
+        let mut heading = make("You'll stay signed in on these devices after");
+        heading.box_rect.width = 900;
+        heading.box_rect.height = 50;
+        assert!(!should_refine_dense_toolbar(&heading, "v6"));
+        assert!(!should_refine_dense_toolbar(&heading, "v6t"));
+    }
+
+    #[test]
+    fn full_frame_ensemble_requires_a_real_toolbar_layout() {
+        let label = |text: &str, x: i32, y: i32, width: u32| TextBlock {
+            text: text.into(), confidence: 0.98,
+            box_rect: BoundingBox { x, y, width, height: 18 },
+        };
+        let mut toolbar = (0..12).map(|index|
+            label("编辑", 30 + index * 45, 28, 34)).collect::<Vec<_>>();
+        toolbar.push(label("(未保存) - Blender 5.2.1 LTS", 20, 5, 150));
+        assert!(is_dense_toolbar_scene(&toolbar));
+
+        let mut document = toolbar[..5].to_vec();
+        document.extend((0..8).map(|index|
+            label("正在编译 Rust 代码并输出一行较长的诊断文字", 20, 60 + index * 25, 480)));
+        assert!(!is_dense_toolbar_scene(&document));
     }
 
     #[test]
@@ -2652,7 +2741,7 @@ mod tests {
     #[test]
     fn test_postprocess_db_empty_map() {
         let map = vec![0.1f32; 64 * 64];
-        let boxes = postprocess_db(&map, 64, 64, 640, 640);
+        let boxes = postprocess_db_for_version(&map, 64, 64, 640, 640, "v6t");
         assert!(boxes.is_empty());
     }
 
@@ -2664,14 +2753,14 @@ mod tests {
                 map[y * 64 + x] = 1.0;
             }
         }
-        let boxes = postprocess_db(&map, 64, 64, 640, 640);
+        let boxes = postprocess_db_for_version(&map, 64, 64, 640, 640, "v6t");
         assert_eq!(boxes.len(), 1);
         let (bx, by, bw, bh) = boxes[0];
-        // After dilation + 1.6x unclip the bbox expands beyond the 20..44 square.
-        assert!(bx >= 60 && bx <= 120, "bx={}", bx);
-        assert!(by >= 60 && by <= 120, "by={}", by);
-        assert!(bw > 300 && bw < 560, "bw={}", bw);
-        assert!(bh > 300 && bh < 560, "bh={}", bh);
+        // v6 uses a smaller unclip than legacy models to avoid joining rows.
+        assert!(bx >= 100 && bx <= 160, "bx={}", bx);
+        assert!(by >= 100 && by <= 160, "by={}", by);
+        assert!(bw > 250 && bw < 450, "bw={}", bw);
+        assert!(bh > 250 && bh < 450, "bh={}", bh);
     }
 
     #[test]
@@ -2806,21 +2895,6 @@ mod tests {
 
     #[test]
     fn test_model_filenames_for_versions() {
-        let (v3_det, v3_rec, v3_cls) = get_model_filenames_for_version("v3");
-        assert_eq!(v3_det, "ch_PP-OCRv3_det_infer.onnx");
-        assert_eq!(v3_rec, "ch_PP-OCRv3_rec_infer.onnx");
-        assert_eq!(v3_cls, "ch_ppocr_mobile_v2.0_cls_infer.onnx");
-
-        let (v4_det, v4_rec, v4_cls) = get_model_filenames_for_version("v4");
-        assert_eq!(v4_det, "ch_PP-OCRv4_det_infer.onnx");
-        assert_eq!(v4_rec, "ch_PP-OCRv4_rec_infer.onnx");
-        assert_eq!(v4_cls, "ch_ppocr_mobile_v2.0_cls_infer.onnx");
-
-        let (v5_det, v5_rec, v5_cls) = get_model_filenames_for_version("v5");
-        assert_eq!(v5_det, "ch_PP-OCRv5_det_infer.onnx");
-        assert_eq!(v5_rec, "ch_PP-OCRv5_rec_infer.onnx");
-        assert_eq!(v5_cls, "ch_ppocr_mobile_v2.0_cls_infer.onnx");
-
         let (v6_det, v6_rec, _) = get_model_filenames_for_version("v6");
         assert_eq!(v6_det, "ch_PP-OCRv6_det_infer.onnx");
         assert_eq!(v6_rec, "ch_PP-OCRv6_rec_infer.onnx");
@@ -2832,36 +2906,11 @@ mod tests {
         assert_eq!(v6t_rec, "ch_PP-OCRv6_tiny_rec_infer.onnx");
         assert_ne!(v6_det, v6t_det);
         assert_ne!(v6_rec, v6t_rec);
-    }
-
-    #[test]
-    fn stale_v5_files_cannot_masquerade_as_an_installed_model() {
-        let dir = std::env::temp_dir().join(format!(
-            "catwalk-ocr-model-check-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&dir).unwrap();
-        let stale_det = dir.join("ch_PP-OCRv5_det_infer.onnx");
-        let stale_rec = dir.join("ch_PP-OCRv5_rec_infer.onnx");
-        std::fs::File::create(&stale_det).unwrap().set_len(4_745_517).unwrap();
-        std::fs::File::create(&stale_rec).unwrap().set_len(10_857_958).unwrap();
-        assert!(!model_file_is_usable(&dir, "v5", "ch_PP-OCRv5_det_infer.onnx"));
-        assert!(!model_file_is_usable(&dir, "v5", "ch_PP-OCRv5_rec_infer.onnx"));
-
-        // Correct model sizes are accepted, but an incomplete three-model set
-        // still cannot be selected because the shared orientation model is absent.
-        std::fs::File::create(&stale_det).unwrap().set_len(4_819_576).unwrap();
-        std::fs::File::create(&stale_rec).unwrap().set_len(16_631_306).unwrap();
-        assert!(model_file_is_usable(&dir, "v5", "ch_PP-OCRv5_det_infer.onnx"));
-        assert!(model_file_is_usable(&dir, "v5", "ch_PP-OCRv5_rec_infer.onnx"));
-        assert!(!model_file_is_usable(&dir, "v5", "ch_ppocr_mobile_v2.0_cls_infer.onnx"));
-        std::fs::remove_file(&stale_det).unwrap();
-        std::fs::remove_file(&stale_rec).unwrap();
-        std::fs::remove_dir(&dir).unwrap();
+        let (v6m_det, v6m_rec, _) = get_model_filenames_for_version("v6m");
+        assert_eq!(v6m_det, "ch_PP-OCRv6_medium_det_infer.onnx");
+        assert_eq!(v6m_rec, "ch_PP-OCRv6_medium_rec_infer.onnx");
+        assert_ne!(v6_det, v6m_det);
+        assert_ne!(v6t_rec, v6m_rec);
     }
 
     #[test]
@@ -2870,12 +2919,17 @@ mod tests {
         assert_eq!(get_active_version(), "v6");
         set_active_version("pp-ocrv6-tiny");
         assert_eq!(get_active_version(), "v6t");
+        set_active_version("pp-ocrv6-medium");
+        assert_eq!(get_active_version(), "v6m");
         set_active_version("v6t");
         assert_eq!(get_active_version(), "v6t");
         // 未知值回落到默认档 v6Tiny（与 AppSettings 默认一致）
         set_active_version("nonsense");
         assert_eq!(get_active_version(), "v6t");
-        set_active_version("v4");
+        for legacy in ["v3", "v4", "v5"] {
+            set_active_version(legacy);
+            assert_eq!(get_active_version(), "v6t");
+        }
     }
 
     #[test]
@@ -2886,12 +2940,10 @@ mod tests {
         assert!(!engine.is_loaded());
         assert!(engine.last_error().is_none());
 
-        set_active_version("v3");
-        assert_eq!(get_active_version(), "v3");
-        set_active_version("v5");
-        assert_eq!(get_active_version(), "v5");
-        set_active_version("v4");
-        assert_eq!(get_active_version(), "v4");
+        set_active_version("v6");
+        assert_eq!(get_active_version(), "v6");
+        set_active_version("v6t");
+        assert_eq!(get_active_version(), "v6t");
 
         unload_engine();
     }

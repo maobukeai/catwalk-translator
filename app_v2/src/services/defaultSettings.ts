@@ -416,8 +416,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   watchIntervalMs: 3000,
   clipboardWatchEnabled: false,
   ocrEngine: 'auto',
-  // 默认档 v6Tiny：划词/小图实测最快且 100% 全对（7.3ms vs v4 14.3ms/张）
-  ocrVersion: 'v6t' as 'v3' | 'v4' | 'v5' | 'v6' | 'v6t',
+  // 默认使用 v6 Tiny 速度档；复杂文字可切换到 v6 Small 精度档。
+  ocrVersion: 'v6' as 'v6' | 'v6t' | 'v6m',
   // 保守默认：不能让纯数字或短标签在用户不知情时消失。
   ocrFilterEnabled: false,
   ocrFilterRules: [],

@@ -13,17 +13,19 @@ export const FALLBACK_FONT_FAMILY =
  * 相比按字符数×平均字宽估算，实测宽度让字号收缩一步到位，排版更贴近原位。
  */
 let measureCtxState: { ctx: CanvasRenderingContext2D | null; family: string } | undefined;
+const measuredWidths = new Map<string, number>();
+const MAX_MEASURED_WIDTHS = 512;
 
-function measureTextWidth(text: string, fontSize: number): number {
+export function measureTextWidth(text: string, fontSize: number): number {
   try {
+    let family = FALLBACK_FONT_FAMILY;
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      const configured = getComputedStyle(document.documentElement)
+        .getPropertyValue('--app-font-family')
+        .trim();
+      if (configured) family = configured;
+    }
     if (!measureCtxState) {
-      let family = FALLBACK_FONT_FAMILY;
-      if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-        const v = getComputedStyle(document.documentElement)
-          .getPropertyValue('--app-font-family')
-          .trim();
-        if (v) family = v;
-      }
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext && canvas.getContext('2d');
       measureCtxState = {
@@ -31,12 +33,24 @@ function measureTextWidth(text: string, fontSize: number): number {
         family,
       };
     }
-    const { ctx, family } = measureCtxState;
+    const { ctx } = measureCtxState;
     if (!ctx || !text) return 0;
-    ctx.font = `100px ${family}`;
-    const w = ctx.measureText(text).width;
-    if (!Number.isFinite(w) || w <= 0) return 0;
-    return (w * fontSize) / 100;
+    if (measureCtxState.family !== family) {
+      measureCtxState.family = family;
+      measuredWidths.clear();
+    }
+    const key = `${family}\u0000${text}`;
+    let baseWidth = measuredWidths.get(key);
+    if (baseWidth === undefined) {
+      ctx.font = `100px ${family}`;
+      baseWidth = ctx.measureText(text).width;
+      if (!Number.isFinite(baseWidth) || baseWidth <= 0) return 0;
+      if (measuredWidths.size >= MAX_MEASURED_WIDTHS) {
+        measuredWidths.delete(measuredWidths.keys().next().value!);
+      }
+      measuredWidths.set(key, baseWidth);
+    }
+    return (baseWidth * fontSize) / 100;
   } catch {
     return 0;
   }
@@ -60,6 +74,12 @@ interface OverlayBlockCardProps {
   scale?: number;
   /** Row-normalized OCR line height used for stable source-matched font sizing. */
   fontLineHeight?: number;
+  /** Shared fitted font size for physical lines of the same paragraph. */
+  proseFontSize?: number;
+  /** Development visual fixtures can emulate the captured desktop width. */
+  viewportWidth?: number;
+  /** Parent paints all source erasures below all translated cards. */
+  externalErase?: boolean;
   onScaleChange?: (scale: number) => void;
   onViewCycle?: () => void;
   /** Hover marks this card as the active keyboard target (Space / Ctrl+D / ↑↓). */
@@ -181,6 +201,33 @@ function cssLuminance(color?: string): number | null {
   return null;
 }
 
+/** Shared source layer: every erase plate sits below every translated card. */
+export const OverlayErasePlate: React.FC<{ block: OverlayBlock }> = ({ block }) => {
+  const hasPatch = !!block.patchPng && (block.patchW ?? 0) > 0;
+  const padding = block.erasePadding ?? { left: 5, right: 5, top: 8, bottom: 8 };
+  const left = hasPatch ? (block.patchX ?? block.sourceX ?? block.logicalX)
+    : (block.sourceX ?? block.logicalX) - padding.left;
+  const top = hasPatch ? (block.patchY ?? block.sourceY ?? block.logicalY)
+    : (block.sourceY ?? block.logicalY) - padding.top;
+  const width = hasPatch ? (block.patchW ?? block.logicalW)
+    : (block.sourceW ?? block.logicalW) + padding.left + padding.right;
+  const height = hasPatch ? (block.patchH ?? block.logicalH)
+    : (block.sourceH ?? block.logicalH) + padding.top + padding.bottom;
+  return <div
+    aria-hidden
+    data-overlay-erase-plate
+    className="pointer-events-none absolute"
+    style={{
+      left, top, width, height, zIndex: 190,
+      backgroundColor: toSolidBg(block.bgCss, block.fgCss),
+      backgroundImage: hasPatch ? `url(data:image/png;base64,${block.patchPng})` : undefined,
+      backgroundSize: '100% 100%',
+      backgroundRepeat: 'no-repeat',
+      borderRadius: hasPatch ? 0 : 3,
+    }}
+  />;
+};
+
 /** The sampled background is authoritative; an erroneous dark ink sample
  * must not turn an actually dark image into a falsely light card. */
 export function isLightBg(bgCss?: string, fgCss?: string): boolean {
@@ -220,6 +267,9 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   viewMode = 'translated',
   scale = 1,
   fontLineHeight,
+  proseFontSize,
+  viewportWidth,
+  externalErase = false,
   onScaleChange,
   onViewCycle,
   onActive,
@@ -248,24 +298,42 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
 
   // Real rendered size feeds the parent's AABB collision avoidance so wrapped
   // (multi-line/taller) cards push neighbours down instead of covering them.
-  // Width uses scrollWidth: fit-content caps at maxWidth, but a single-line-
-  // locked card whose text still overflows reports its true ink width.
+  // Measure text spans, not the card's scrollWidth: absolute-positioned erase
+  // plates may reach back to the source box after a collision shift and must
+  // never be mistaken for translated ink width (which causes feedback drift).
   const lastReportedSizeRef = useRef({ w: 0, h: 0 });
+  const reportRenderedSize = React.useCallback((fallback?: { width?: number; height?: number }) => {
+    const el = cardRef.current;
+    if (!el || !onRenderedSize) return;
+    const mainText = el.querySelector<HTMLElement>('[data-overlay-main-text]');
+    const secondaryText = el.querySelector<HTMLElement>('[data-overlay-secondary-text]');
+    const h = fallback?.height || el.clientHeight || 0;
+    const w = Math.max(
+      el.clientWidth,
+      mainText?.scrollWidth ?? 0,
+      secondaryText?.scrollWidth ?? 0,
+      fallback?.width ?? 0,
+    );
+    const last = lastReportedSizeRef.current;
+    if (h > 0 && (Math.abs(h - last.h) > 2 || Math.abs(w - last.w) > 2)) {
+      lastReportedSizeRef.current = { w, h };
+      onRenderedSize(blockIndex, { width: w, height: h });
+    }
+  }, [blockIndex, onRenderedSize]);
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined' || !cardRef.current || !onRenderedSize) return;
     const el = cardRef.current;
     const ro = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect.height ?? 0;
-      const w = el.scrollWidth || entries[0]?.contentRect.width || 0;
-      const last = lastReportedSizeRef.current;
-      if (h > 0 && (Math.abs(h - last.h) > 2 || Math.abs(w - last.w) > 2)) {
-        lastReportedSizeRef.current = { w, h };
-        onRenderedSize(blockIndex, { width: w, height: h });
-      }
+      reportRenderedSize(entries[0]?.contentRect);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [blockIndex, onRenderedSize]);
+  }, [onRenderedSize, reportRenderedSize]);
+  // A nowrap line can change its ink width without changing the card's own
+  // max-width, so also measure once when text/mode/zoom changes.
+  useEffect(() => {
+    reportRenderedSize();
+  }, [block.original, block.translated, viewMode, scale, reportRenderedSize]);
 
   // Ctrl+wheel zooms this card's font (native listener: wheel must be
   // non-passive to preventDefault the browser page zoom).
@@ -286,22 +354,37 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   // 动态字号与排版计算：
   // 1. 根据原文与译文长度/字符集，计算理想贴合字号，使得译文在原文位置区域内自然缩放对齐；
   // 2. 避免译文较长时产生巨大字号导致多行膨胀与错位。
-  const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+  const vw = viewportWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1920);
   const isPending = !block.translated;
   const displayText = block.translated || block.original;
   const primaryText = viewMode === 'original' ? block.original : displayText;
+  // A source bullet can remain visibly outside the OCR erasure patch even
+  // though the recognizer prepended it to the text box. Preserve the physical
+  // bullet and suppress only its duplicate in the cover card; copied OCR text
+  // and translation input stay unchanged.
+  const coverText = block.preserveLeadingBullet
+    ? primaryText.replace(/^\s*[•·●◦]\s*/, '') : primaryText;
   const rawLines = (block.original || '').split('\n').filter(Boolean);
   const lineCount = Math.max(1, rawLines.length);
   // 原文单行时,显示文本里的换行(LLM 偶尔在译文中返回换行符)合并为空格,
   // 否则译文会被直接渲染成两行
   const renderText =
-    lineCount === 1 ? primaryText.replace(/\s*\n+\s*/g, ' ').trim() : primaryText;
+    lineCount === 1 ? coverText.replace(/\s*\n+\s*/g, ' ').trim() : coverText;
   const singleLineH = Math.max(10, fontLineHeight ?? block.logicalH / lineCount);
   const nonSpaceLen = Math.max(1, block.original.replace(/\s/g, '').length);
   const cjkCount = (block.original.match(/[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
+  const isProse = proseFontSize !== undefined
+    || (block.logicalW >= 280 && block.original.replace(/\s/g, '').length >= 26);
+  const isCompactControl = block.logicalH <= 20 && block.logicalW <= 140
+    && block.original.replace(/\s/g, '').length <= 16;
   // OCR 检测框天然包含行距与 DBNet unclip 安全扩展，真实印刷字高约占框高的 68%~72%。
   // 采用 0.72 (CJK) 与 0.66 (西文) 使渲染字号与原图真实字号 1:1 贴合，彻底消除字体臃肿、冲出边框与上下挤压。
-  const emFactor = cjkCount / nonSpaceLen > 0.3 ? 0.72 : 0.66;
+  // Large proportional Latin headings have a substantially taller visible
+  // glyph than body copy relative to the OCR box. Reusing the body ratio made
+  // a 43px source title render as roughly 35px in the real password dialog.
+  // Keep compact controls, paragraphs and terminal rows on their old path.
+  const emFactor = cjkCount / nonSpaceLen > 0.3 ? 0.72
+    : lineCount === 1 && singleLineH >= 40 && block.logicalW >= 280 ? 0.79 : 0.66;
   const baseFontSize = singleLineH * emFactor;
 
   // 自适应字号缩放计算 (Auto Font-Fit Calculation)
@@ -361,11 +444,21 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
       }
     }
   }
+  if (proseFontSize !== undefined) {
+    targetFontSize = proseFontSize;
+    // A common size must never clip a longer physical line. Let that card
+    // wrap and report its actual height to the AABB resolver instead.
+    const widthAtCommonSize = baseFontSize > 0
+      ? estimatedWidth * (proseFontSize / baseFontSize) : estimatedWidth;
+    if (widthAtCommonSize > Math.min(Math.max(block.logicalW * 1.05, 60), Math.max(cardMaxWidth - 4, 40))) {
+      singleLineLock = false;
+    }
+  }
 
   // 所有模式统一保持 9px 可读下限；放不下时改为换行。
-  const fontSize = Math.round(
+  const fontSize = Math.max(9, Math.round(
     Math.min(64, Math.max(9, targetFontSize)) * scale
-  );
+  ));
   // 使用前面计算出的视口安全宽度。
   const maxWidth = cardMaxWidth;
   const isLight = isLightBg(block.bgCss, block.fgCss);
@@ -378,8 +471,20 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   const renderedTextW = baseFontSize > 0 ? estimatedWidth * (fontSize / baseFontSize) : estimatedWidth;
   const patchW = block.patchW ?? block.logicalW;
   const patchH = block.patchH ?? block.logicalH;
-  const isOverflowingPatch = hasPatch && (patchW < Math.min(maxWidth, renderedTextW) || patchH < block.logicalH);
-  const cardBg = isMoved || !hasPatch || isOverflowingPatch ? solidBg : undefined;
+  const isOverflowingPatch = hasPatch && (
+    patchW < Math.min(maxWidth, renderedTextW)
+    || patchH < Math.max(block.logicalH, block.aabbH ?? 0)
+  );
+  const movedFromSource = Math.abs(pos.x - (block.sourceX ?? pos.x)) > 1
+    || Math.abs(pos.y - (block.sourceY ?? pos.y)) > 1;
+  const isOverflowingSource = !hasPatch && (
+    renderedTextW > (block.sourceW ?? block.logicalW)
+    || (block.aabbH ?? 0) > (block.sourceH ?? block.logicalH)
+  );
+  const cardBg = isMoved || isOverflowingPatch
+    || (externalErase ? (movedFromSource || isOverflowingSource) : !hasPatch)
+    ? solidBg : undefined;
+  const erasePadding = block.erasePadding ?? { left: 5, right: 5, top: 8, bottom: 8 };
 
   const onDragStart = (e: React.MouseEvent | React.PointerEvent<HTMLDivElement>) => {
     if (e.button === 2) {
@@ -438,7 +543,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   return (
     <div
       ref={cardRef}
-      className="overlay-block group absolute flex flex-col justify-center transition-all duration-150"
+      className="overlay-block group absolute flex flex-col justify-center transition-shadow duration-150"
       style={{
         boxSizing: 'border-box',
         left: pos.x,
@@ -451,18 +556,18 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         color: getCardTextColor(block.bgCss, block.fgCss),
         fontSize: `${fontSize}px`,
         fontFamily: 'var(--app-font-family, "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif)',
-        fontWeight: fontSize <= 20 ? 600 : 500,
+        fontWeight: isCompactControl ? 500 : 400,
         WebkitFontSmoothing: 'antialiased',
         MozOsxFontSmoothing: 'grayscale',
         textRendering: 'optimizeLegibility',
-        letterSpacing: '0.015em',
-        lineHeight: 1.2,
+        letterSpacing: '0',
+        lineHeight: isProse ? 1.1 : 1.2,
         cursor: dragging ? 'grabbing' : 'move',
         zIndex: isPinned ? 210 : 200,
         borderRadius: isMoved ? 6 : 2,
         border: 'none',
         boxShadow: cardBoxShadow,
-        textShadow: isLight
+        textShadow: isProse ? 'none' : isLight
           ? '0 0 1px rgba(0, 0, 0, 0.15)'
           : '0 0 1.5px rgba(0, 0, 0, 0.85), 0 1px 2px rgba(0, 0, 0, 0.6)',
         // pre-wrap：合并块 original 里的 \n 必须真实换行（normal 会折叠成空格
@@ -498,7 +603,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
     >
       {/* 保底实色抹除底板：与插值 patch 边界完全重合（作为 PNG 加载失败的兜底）。
           任何外扩都会在渐变/纹理背景上露出中位数色边——即用户看到的「不干净」色边 */}
-      <div
+      {!externalErase && <div
         aria-hidden
         className="pointer-events-none absolute"
         style={
@@ -516,20 +621,26 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
                 zIndex: 0,
               }
             : {
-                top: -3,
-                left: -4,
-                right: -4,
-                bottom: -3,
+                // When background reconstruction is unavailable, erase the
+                // entire OCR source rectangle, not merely the translated
+                // card's intrinsic width. Otherwise the English tail remains
+                // visible behind a shorter Chinese translation.
+                // Preserve the OCR source position after card re-layout, and
+                // never extend into an adjacent line, label or icon.
+                top: (block.sourceY ?? pos.y) - pos.y - erasePadding.top,
+                left: (block.sourceX ?? pos.x) - pos.x - erasePadding.left,
+                width: (block.sourceW ?? block.logicalW) + erasePadding.left + erasePadding.right,
+                height: (block.sourceH ?? block.logicalH) + erasePadding.top + erasePadding.bottom,
                 background: toSolidBg(block.bgCss, block.fgCss),
                 borderRadius: 3,
                 zIndex: 0,
               }
         }
-      />
+      />}
 
       {/* 抹除补丁：OCR 框外扩区域经背景插值抹掉字形后的 PNG。边缘像素与
           屏幕真实背景逐像素衔接，实现"原文被抹除、译文嵌入背景"的效果。 */}
-      {hasPatch && (
+      {hasPatch && !externalErase && (
         <div
           aria-hidden
           className="pointer-events-none absolute"
@@ -558,6 +669,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
       {/* 双语对照：原文小字灰字在上，译文主体在下 */}
       {viewMode === 'bilingual' && (
         <span
+          data-overlay-secondary-text
           className="relative z-[2] leading-snug"
           style={{ fontSize: '0.72em', opacity: 0.72, userSelect: 'text' }}
           onMouseDown={(e) => e.stopPropagation()}
@@ -566,6 +678,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         </span>
       )}
       <span
+        data-overlay-main-text
         key={displayText}
         className={`relative z-[2] transition-opacity duration-200 ${isPending ? 'opacity-80' : 'tooltip-pop'}`}
         style={{ userSelect: 'text', lineHeight: 'inherit' }}
@@ -573,6 +686,20 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
       >
         {renderText}
       </span>
+
+      {block.translationFailed && onRetry && (
+        <button
+          type="button"
+          aria-label="重试此段翻译"
+          title="翻译失败，点击只重试这一段"
+          onMouseDown={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => { event.stopPropagation(); onRetry(); }}
+          className="absolute right-0 top-0 z-30 -translate-y-1/2 rounded-full border border-rose-300 bg-rose-700 px-2 py-0.5 text-[10px] font-semibold text-white shadow-md cursor-pointer"
+        >
+          重试
+        </button>
+      )}
 
 
       {/* 📌 Pin indicator on card top-right when pinned */}

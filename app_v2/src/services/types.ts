@@ -50,6 +50,8 @@ export interface OverlayBlock {
   bgCss: string;
   /** Real sampled ink colour (rgb() string) or high-contrast fallback */
   fgCss: string;
+  /** Original list bullet remains visible just outside the erased OCR box. */
+  preserveLeadingBullet?: boolean;
   /** Base64 PNG: the padded OCR box with glyphs erased (background
    *  continuation). Used as the card background so the original text is
    *  "removed" and the card blends into the real screen pixels. */
@@ -59,6 +61,13 @@ export interface OverlayBlock {
   patchY?: number;
   patchW?: number;
   patchH?: number;
+  /** Frontend-only OCR source rectangle, preserved when collision layout moves the card. */
+  sourceX?: number;
+  sourceY?: number;
+  sourceW?: number;
+  sourceH?: number;
+  /** Safe opaque erase expansion around the OCR source when no patch exists. */
+  erasePadding?: { left: number; right: number; top: number; bottom: number };
   /** Frontend-only: stage-2 translation failed for this block (shows retry). */
   translationFailed?: boolean;
 }
@@ -354,7 +363,7 @@ export interface AppSettings {
   /** OCR engine preference: 'auto' | 'onnx' | 'winrt' */
   ocrEngine?: 'auto' | 'onnx' | 'winrt';
   /** Selected ONNX OCR model version */
-  ocrVersion?: 'v3' | 'v4' | 'v5' | 'v6' | 'v6t';
+  ocrVersion?: 'v6' | 'v6t' | 'v6m';
   /** Primary translation engine: 'auto' | 'dict' | 'llm' | 'online' */
   primaryTranslationEngine?: 'auto' | 'dict' | 'llm' | 'online';
   /** 百度翻译开放平台 AppID（免费注册，每月 100 万字符）*/

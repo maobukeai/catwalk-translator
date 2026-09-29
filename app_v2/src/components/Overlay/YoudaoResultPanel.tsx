@@ -1,5 +1,6 @@
 import React from 'react';
 import type { OverlayBlock } from '../../services/types';
+import { isDenseProseLayout } from '../../services/overlayDisplayPolicy';
 
 interface YoudaoResultPanelProps {
   blocks: import('../../services/types').OverlayBlock[];
@@ -46,12 +47,15 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
   // Web-Youdao-style dual-column panel needs room; fall back to stacked
   // (source above, translation below) when the viewport is narrow.
   const maxAvailW = vw - 16;
-  const dualColumn = maxAvailW >= 560;
-  const panelW = Math.max(
+  const denseProse = isDenseProseLayout(blocks);
+  const dualColumn = maxAvailW >= 560 && !denseProse;
+  const panelW = denseProse ? Math.min(760, maxAvailW) : Math.max(
     dualColumn ? 520 : 320,
     Math.min(dualColumn ? 720 : 480, Math.max(selectionW, dualColumn ? 520 : 320), maxAvailW)
   );
-  const estH = Math.min(Math.max(180 + blocks.length * 46, 240), Math.floor(vh * 0.7));
+  const estH = denseProse
+    ? Math.min(Math.max(420, blocks.length * 92), Math.floor(vh * 0.75))
+    : Math.min(Math.max(180 + blocks.length * 46, 240), Math.floor(vh * 0.7));
   let top = selectionY + selectionH + 12;
   if (top + estH > vh - 8) {
     const flipped = selectionY - estH - 12;
@@ -65,6 +69,7 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
   // Auto source-language label for the header pill (Youdao shows the pair)
   const srcHasCJK = blocks.some((b) => /[\u4e00-\u9fff]/.test(b.original));
   const srcLabel = srcHasCJK ? '中文' : 'English';
+  const targetLabel = targetLang === 'auto' ? (srcHasCJK ? 'English' : '中文') : targetLang;
   const isAiRefined = blocks.some(
     (b) => b.sourceTier && (b.sourceTier.includes('✨') || b.sourceTier.includes('AI 精翻') || b.sourceTier.includes('LLM'))
   );
@@ -90,7 +95,7 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
           <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${
             isLight ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-blue-500/15 border-blue-400/30 text-sky-300'
           }`}>
-            {srcLabel} ⇄ {targetLang}
+            {srcLabel} → {targetLabel}
           </span>
           {isAiRefined && (
             <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500/15 to-indigo-500/15 border border-amber-500/30 text-amber-500 dark:text-amber-400 shrink-0 select-none shadow-xs">
@@ -150,7 +155,7 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
                   onMouseEnter={() => onHover(i)}
                   onMouseLeave={() => onHover(null)}
                 >
-                  <p className={`text-[11.5px] font-mono leading-relaxed break-all ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                  <p className={`${denseProse ? 'text-[13px] font-normal break-words' : 'text-[11.5px] font-mono break-all'} leading-relaxed ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
                     {b.original}
                   </p>
                 </div>
@@ -175,7 +180,7 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
                   onMouseEnter={() => onHover(i)}
                   onMouseLeave={() => onHover(null)}
                 >
-                  <p className={`text-[15px] font-semibold leading-relaxed break-words ${
+                  <p className={`${denseProse ? 'text-[14px] font-normal' : 'text-[15px] font-semibold'} leading-relaxed break-words ${
                     b.translated
                       ? (isLight ? 'text-slate-900' : 'text-white')
                       : (isLight ? 'text-slate-400 italic' : 'text-zinc-500 italic')

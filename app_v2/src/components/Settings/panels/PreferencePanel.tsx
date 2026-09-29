@@ -336,12 +336,14 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                       {
                         value: 'auto',
                         label: '自动选择',
-                        desc: `智能探测：PP-OCR${(settings.ocrVersion || 'v4').toUpperCase()} 优先，自动降级`,
+                        desc: `智能探测：PP-OCR${(settings.ocrVersion || 'v6t').toUpperCase()} 优先，自动降级`,
                       },
                       {
                         value: 'onnx',
-                        label: `PP-OCR${(settings.ocrVersion || 'v4').toUpperCase()} (推荐)`,
-                        desc: 'Rust 原生离线推理，中英排版最佳，无网络依赖',
+                        label: `PP-OCR${(settings.ocrVersion || 'v6t').toUpperCase()} (离线)`,
+                        desc: settings.ocrVersion === 'v6m'
+                          ? 'Medium 按需启用：密集文字可改善，但 CPU 推理可能明显变慢'
+                          : 'Rust 原生离线推理，无网络依赖',
                       },
                       {
                         value: 'winrt',

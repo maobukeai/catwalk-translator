@@ -42,7 +42,7 @@ describe('OcrModelGuideModal', () => {
 
     expect(await screen.findByTestId('ocr-model-guide')).toBeInTheDocument();
     expect(screen.getByText(/尚未安装本地 OCR 识别模型/i)).toBeInTheDocument();
-    expect(screen.getByText(/PP-OCRv6 Tiny/i)).toBeInTheDocument();
+    expect(screen.getByText(/PP-OCRv6 Small/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('ocr-guide-dismiss'));
     expect(screen.queryByTestId('ocr-model-guide')).not.toBeInTheDocument();
@@ -62,6 +62,14 @@ describe('OcrModelGuideModal', () => {
     render(<OcrModelGuideModal onGoDownload={() => {}} />);
     await new Promise((r) => setTimeout(r, 60));
     expect(screen.queryByTestId('ocr-model-guide')).not.toBeInTheDocument();
+  });
+
+  it('counts a complete Medium installation as available OCR', () => {
+    expect(hasAnyCompleteModelSet([
+      stub('ppocrv6m-det', 'v6m', true),
+      stub('ppocrv6m-rec', 'v6m', true),
+      stub('ppocrv6m-cls', 'v6m', true),
+    ])).toBe(true);
   });
 
   it('remains closed for a partially installed set (missing cls)', async () => {
@@ -110,6 +118,13 @@ describe('OcrModelGuideModal', () => {
         stub('ppocrv4-det', 'v4', true),
         stub('ppocrv4-rec', 'v4', true),
         stub('ppocrv4-cls', 'v4', true),
+      ])
+    ).toBe(false);
+    expect(
+      hasAnyCompleteModelSet([
+        stub('ppocrv6-det', 'v6', true),
+        stub('ppocrv6-rec', 'v6', true),
+        stub('ppocrv6-cls', 'v6', true),
       ])
     ).toBe(true);
   });

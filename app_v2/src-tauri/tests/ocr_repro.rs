@@ -97,10 +97,11 @@ fn merge_for_diagnostics(mut blocks: Vec<TextBlock>) -> Vec<TextBlock> {
         b.confidence >= min_conf && b.box_rect.height >= 6
     });
     let lines = LineClusterer::cluster_into_lines(blocks, 8.0);
-    lines
+    let segments: Vec<TextBlock> = lines
         .into_iter()
         .flat_map(|line| WordMerger::merge_line_segments(line, 20.0))
-        .collect()
+        .collect();
+    WordMerger::merge_prose_rows(segments)
 }
 
 fn dump_merged(label: &str, blocks: Vec<TextBlock>) {
@@ -149,7 +150,7 @@ fn char_edit_distance(expected: &[char], actual: &[char]) -> usize {
 /// A few real fixtures now have manually checked line text and broad physical
 /// regions. This reports character error by row, so one correct keyword cannot
 /// hide a broken sentence, and reports OCR blocks outside all annotated rows.
-fn print_fixture_quality(path: &std::path::Path, blocks: &[TextBlock]) -> Option<(usize, usize, usize)> {
+fn print_fixture_quality(path: &std::path::Path, blocks: &[TextBlock], label: &str) -> Option<(usize, usize, usize)> {
     if std::env::var_os("CATWALK_REPRO_CROP").is_some()
         || std::env::var_os("CATWALK_REPRO_PERCENT").is_some() {
         println!("[quality] skipped: diagnostic crop coordinates differ from full-image annotations");
@@ -195,12 +196,12 @@ fn print_fixture_quality(path: &std::path::Path, blocks: &[TextBlock]) -> Option
         let distance = char_edit_distance(&expected_chars, &actual_chars);
         total += expected_chars.len();
         errors += distance;
-        println!("[quality] row {}: edit={}/{} actual={:?}", line_index + 1, distance, expected_chars.len(), actual);
+        println!("[quality:{label}] row {}: edit={}/{} actual={:?}", line_index + 1, distance, expected_chars.len(), actual);
     }
     let extras: Vec<_> = blocks.iter().zip(matched.iter())
         .filter_map(|(block, &is_matched)| (!is_matched).then_some(block.text.as_str()))
         .collect();
-    println!("[quality] CER={:.1}% ({errors}/{total}), unmatched blocks={:?}",
+    println!("[quality:{label}] CER={:.1}% ({errors}/{total}), unmatched blocks={:?}",
         errors as f64 * 100.0 / total.max(1) as f64, extras);
     Some((errors, total, extras.len()))
 }
@@ -354,6 +355,8 @@ fn dump_ocr_pipeline_for_image() {
     let is_password_fixture = path == fixtures.join("password_dialog_dense.png");
     let is_password_heading_fixture = path == fixtures.join("password_heading_crop.png");
     let is_chat_fixture = path == fixtures.join("green_chat_bubble.png");
+    let is_chinese_prose_fixture = path == fixtures.join("chinese_prose_spacing.png");
+    let is_dense_chinese_prose_fixture = path == fixtures.join("dense_chinese_prose_source.png");
     let enforce_quality_gate = std::env::var_os("CATWALK_REPRO_CROP").is_none()
         && std::env::var_os("CATWALK_REPRO_PERCENT").is_none() && !matches!(
         std::env::var("CATWALK_REPRO_ENGINE").as_deref(),
@@ -362,7 +365,7 @@ fn dump_ocr_pipeline_for_image() {
     let bmp = png_to_ocr_bmp(&path).expect("png → bmp");
 
     // Optional model-version override so the same image can be compared across
-    // PP-OCRv3 / v4 / v5 in one place.
+    // PP-OCRv6 Small / Tiny in one place.
     configure_requested_model_version();
 
     // Warm up (model load / first-run allocation) so timings measure steady state.
@@ -389,19 +392,50 @@ fn dump_ocr_pipeline_for_image() {
     match last.unwrap() {
         Ok(res) => {
             println!("[repro] rec units: {}", res.blocks.len());
-            let quality = print_fixture_quality(&path, &res.blocks);
+            let quality = print_fixture_quality(&path, &res.blocks, "raw");
+            let production_quality = if is_terminal_fixture {
+                let usable = app_v2_lib::commands_capture::retain_usable_ocr_with_context(res.blocks.clone());
+                let lines = LineClusterer::cluster_into_lines(usable, 8.0);
+                let merged: Vec<_> = lines.into_iter()
+                    .flat_map(|line| WordMerger::merge_line_segments(line, 20.0)).collect();
+                let merged = WordMerger::merge_prose_rows(merged);
+                let merged = WordMerger::merge_terminal_row_fragments(merged);
+                print_fixture_quality(&path, &merged, "production")
+            } else { None };
+            if enforce_quality_gate && is_terminal_fixture
+                && std::env::var("CATWALK_OCR_VERSION").as_deref() == Ok("v6t")
+            {
+                let (errors, total, _) = production_quality
+                    .expect("terminal must have production-layout annotations");
+                assert_eq!(total, 356);
+                assert!(errors <= 19,
+                    "terminal production grouping regressed: {errors}/{total} errors");
+            }
             let non_text_hits = print_non_text_quality(&path, &res.blocks);
+            if enforce_quality_gate && is_dense_chinese_prose_fixture
+                && std::env::var("CATWALK_OCR_VERSION").as_deref() == Ok("v6")
+            {
+                let (errors, total, extras) = quality.expect("dense prose must have line annotations");
+                assert_eq!(total, 225);
+                assert!(errors <= 8 && extras == 0,
+                    "v6 dense Chinese prose regressed: {errors}/{total} errors, {extras} extra boxes");
+                assert_eq!(res.blocks.len(), 5, "dense prose must remain five physical rows");
+            }
             // The real v6t fixtures are our current regression floor. Keep
             // checking full annotated rows, not only a few easy keywords.
             if enforce_quality_gate && std::env::var("CATWALK_OCR_VERSION").as_deref() == Ok("v6t") {
-                if let Some(hits) = non_text_hits {
+                // The inline link icon on this new fixture occupies the same
+                // detector box as legitimate text. Box overlap is not proof
+                // that the icon itself was transcribed; keep it diagnostic.
+                if let Some(hits) = non_text_hits.filter(|_| !is_dense_chinese_prose_fixture) {
                     assert_eq!(hits, 0, "v6t detected text inside annotated non-text regions");
                 }
                 if let Some((errors, total, extras)) = quality {
                     let limit = if is_password_fixture { Some((2, 228)) }
                         else if is_password_heading_fixture { Some((0, 67)) }
                         else if is_chat_fixture { Some((0, 52)) }
-                        else if is_terminal_fixture { Some((19, 356)) }
+                        else if is_terminal_fixture { Some((17, 356)) }
+                        else if is_dense_chinese_prose_fixture { Some((8, 225)) }
                         else { None };
                     if let Some((max_errors, expected_total)) = limit {
                         assert_eq!(total, expected_total, "fixture annotations changed; revisit the quality gate");
@@ -416,6 +450,16 @@ fn dump_ocr_pipeline_for_image() {
                 .map(|b| b.text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
+            if is_terminal_fixture && enforce_quality_gate
+                && std::env::var("CATWALK_OCR_VERSION").as_deref() == Ok("v6t")
+            {
+                assert!(res.blocks.iter().any(|block|
+                    (95..115).contains(&block.box_rect.y) && block.text.contains("端口")),
+                    "terminal full-row review must retain the recovered 口 glyph");
+                assert!(recognized.contains("VITE V7.3.6")
+                    && recognized.contains("Running BeforeDevCommand"),
+                    "terminal word gaps must survive the real OCR path: {recognized}");
+            }
             if is_password_heading_fixture
                 && std::env::var("CATWALK_REPRO_PERCENT").as_deref() == Ok("75")
                 && !matches!(std::env::var("CATWALK_REPRO_ENGINE").as_deref(), Ok("raw-onnx" | "winrt"))
@@ -510,12 +554,20 @@ fn dump_ocr_pipeline_for_image() {
                     expected.len()
                 );
                 if enforce_quality_gate {
+                    assert!(!recognized.contains("[Cargo Watch]:鑫"),
+                        "a low-confidence punctuation-tail artifact must be confirmed by the full-row crop");
                     for expected in ["后端热重载", "Cargo", "VITE", "localhost:1420", "ONNX"] {
                         assert!(
                             recognized.contains(expected),
                             "terminal fixture should retain {expected:?}; output:\n{recognized}"
                         );
                     }
+                    let merged = merge_for_diagnostics(res.blocks.clone());
+                    assert!(merged.iter().any(|block| {
+                        block.box_rect.y >= 40 && block.box_rect.y < 60
+                            && block.text.contains("后端热重载")
+                            && block.text.contains("代码自动重新编译并重载")
+                    }), "terminal status sentence must render as one physical OCR row: {merged:?}");
                 }
             }
             if is_password_fixture && enforce_quality_gate {
@@ -537,9 +589,12 @@ fn dump_ocr_pipeline_for_image() {
                 assert_eq!(res.blocks[1].text, "changing your password:");
             }
             if is_chat_fixture && enforce_quality_gate {
-                assert_eq!(res.blocks.len(), 2, "chat bubble should remain two physical lines");
-                assert_eq!(res.blocks[0].text, "我们将 Gemini Omni 1.1 Flash 和一套全新的创意控制工");
-                assert_eq!(res.blocks[1].text, "具集成到 vids.new 中");
+                let rows = LineClusterer::cluster_into_lines(res.blocks.clone(), 8.0);
+                assert_eq!(rows.len(), 2, "chat bubble should remain two physical lines");
+                assert_eq!(rows[0].iter().map(|block| block.text.as_str()).collect::<Vec<_>>().join(" "),
+                    "我们将 Gemini Omni 1.1 Flash 和一套全新的创意控制工");
+                assert_eq!(rows[1].iter().map(|block| block.text.as_str()).collect::<Vec<_>>().join(" "),
+                    "具集成到 vids.new 中");
                 let compact_alphanumeric: String = recognized
                     .chars()
                     .filter(|character| character.is_alphanumeric())
@@ -554,6 +609,19 @@ fn dump_ocr_pipeline_for_image() {
                     compact_alphanumeric.contains("11"),
                     "chat-bubble fixture should retain the 1.1 version number; output:\n{recognized}"
                 );
+            }
+            if is_chinese_prose_fixture && enforce_quality_gate
+                && std::env::var("CATWALK_OCR_VERSION").as_deref() == Ok("v6")
+                && app_v2_lib::onnx_ocr::model_files_present_for_version("v6")
+            {
+                let merged = merge_for_diagnostics(res.blocks.clone());
+                assert!(merged.len() <= 12,
+                    "Chinese prose must not remain dozens of independently translated OCR fragments: {merged:?}");
+                assert!(merged.iter().any(|block| block.text.starts_with("翻译结果的原位显示：")
+                    && block.text.contains("背景擦除和滚动后的对齐")),
+                    "the first paragraph line should be reconstructed as one block: {merged:?}");
+                assert!(merged.iter().any(|block| block.text.contains("写进文档。目前README仍是Tauri模板内容。")),
+                    "wrapped prose tail should not have isolated fragments: {merged:?}");
             }
             let mut raw = res.blocks.clone();
             dump_stage("OCR RAW", &mut raw);

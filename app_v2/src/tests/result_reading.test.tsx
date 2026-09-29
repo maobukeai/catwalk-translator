@@ -88,6 +88,17 @@ describe('result reading experience (view cycle / selectable / zoom / active car
     };
   });
 
+  it('paints source erasure below every card rather than inside each card', async () => {
+    await openWithResult();
+    const plates = document.querySelectorAll('[data-overlay-erase-plate]');
+    const cards = document.querySelectorAll('.overlay-block');
+    expect(plates).toHaveLength(2);
+    expect(cards).toHaveLength(2);
+    expect(cards[0].querySelector(':scope > div[aria-hidden]')).toBeNull();
+    expect((plates[0] as HTMLElement).style.zIndex).toBe('190');
+    expect((cards[0] as HTMLElement).style.zIndex).toBe('200');
+  });
+
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();

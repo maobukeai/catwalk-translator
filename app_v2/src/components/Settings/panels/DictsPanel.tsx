@@ -349,7 +349,7 @@ export const DictsPanel: React.FC = () => {
   return (
     <>
         <div className="space-y-6 animate-in fade-in duration-150">
-          {/* 本地 OCR 识别模型：真实下载（PP-OCRv3 三件套，进度为真实字节流） */}
+          {/* 本地 PP-OCRv6 Tiny / Small / Medium 模型：按真实下载字节显示进度。 */}
           <OcrModelsCard />
 
           {/* 0. 离线词库引擎 (真实文件系统状态，无模拟下载) */}

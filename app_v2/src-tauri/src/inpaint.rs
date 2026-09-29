@@ -119,6 +119,94 @@ pub fn pad_bbox(bbox: BoundingBox, full_w: u32, full_h: u32) -> (i32, i32, i32, 
     (x0, y0, x1, y1)
 }
 
+/// The recognizer occasionally prepends a list bullet to a text box that
+/// starts at the letters, while the actual bullet sits outside the erasure
+/// patch. Keep that source bullet visible and let the overlay omit only its
+/// duplicated visual prefix. We require a small isolated dark dot on a light
+/// background strictly left of the patch; neither the OCR text nor its source
+/// rectangle is changed.
+pub fn has_unerased_leading_bullet(
+    bmp: &[u8], full_w: u32, full_h: u32, bbox: BoundingBox, text: &str,
+) -> bool {
+    if !matches!(text.trim_start().chars().next(), Some('•' | '·' | '●' | '◦'))
+        || bbox.x < 45 || bbox.height < 12 || bbox.height > 52
+        || bbox.y < 0 || bbox.y + bbox.height as i32 >= full_h as i32
+    { return false; }
+    let patch_left = pad_bbox(bbox, full_w, full_h).0;
+    let end_x = patch_left - 3;
+    let start_x = (bbox.x - 40).max(0);
+    if end_x - start_x < 4 { return false; }
+    let center_y = bbox.y + bbox.height as i32 / 2;
+    let bg = get_px(bmp, full_w, end_x, center_y)
+        .map(px).unwrap_or([0, 0, 0]);
+    if bg.iter().copied().min().unwrap_or(0) < 180 { return false; }
+    let y0 = (center_y - 9).max(bbox.y);
+    let y1 = (center_y + 9).min(bbox.y + bbox.height as i32 - 1);
+    let mut run_start: Option<i32> = None;
+    let mut run_ink = 0;
+    for x in start_x..=end_x + 1 {
+        let mut dark = 0;
+        if x <= end_x {
+            for y in y0..=y1 {
+                if let Some(pixel) = get_px(bmp, full_w, x, y) {
+                    let color = px(pixel);
+                    if color.iter().all(|c| (*c as i16) < bg[0].min(bg[1]).min(bg[2]) as i16 - 65) {
+                        dark += 1;
+                    }
+                }
+            }
+        }
+        if dark >= 2 && dark <= 11 {
+            if run_start.is_none() { run_start = Some(x); }
+            run_ink += dark;
+        } else if let Some(first) = run_start.take() {
+            let width = x - first;
+            if (3..=11).contains(&width) && (12..=90).contains(&run_ink)
+                && bbox.x - x <= 30
+            { return true; }
+            run_ink = 0;
+        }
+    }
+    false
+}
+
+/// A terminal OCR box may stop just before a thin closing quote/bracket.
+/// Extend only its erasure source (never its translation layout) when a short,
+/// immediately adjacent ink component is visible on the same dark row. Long
+/// words, distant icons and another recognized control are left untouched.
+pub fn extend_terminal_tail_bbox(
+    bmp: &[u8], full_w: u32, full_h: u32, bbox: BoundingBox, avoid: &[BoundingBox],
+) -> BoundingBox {
+    let right = bbox.x + bbox.width as i32;
+    if !(8..=28).contains(&bbox.height) || right < 0 || right + 13 >= full_w as i32
+        || bbox.y < 0 || bbox.y + bbox.height as i32 > full_h as i32
+    { return bbox; }
+    let same_row_neighbour = avoid.iter().any(|other| {
+        let overlap = (bbox.y + bbox.height as i32).min(other.y + other.height as i32)
+            - bbox.y.max(other.y);
+        overlap > bbox.height.min(other.height) as i32 / 3
+            && other.x >= right && other.x <= right + 14
+    });
+    if same_row_neighbour { return bbox; }
+
+    let mut columns = Vec::new();
+    for x in right..=right + 12 {
+        let mut bright = 0;
+        for y in bbox.y + 2..bbox.y + bbox.height as i32 - 2 {
+            if let Some(pixel) = get_px(bmp, full_w, x, y) {
+                let [r, g, b] = px(pixel);
+                if r.max(g).max(b) >= 95 { bright += 1; }
+            }
+        }
+        if bright >= 2 { columns.push(x); }
+    }
+    let (Some(&first), Some(&last)) = (columns.first(), columns.last()) else { return bbox };
+    if first > right + 6 || last - first + 1 > 9 || last >= right + 12 {
+        return bbox;
+    }
+    BoundingBox { width: (last + 1 - bbox.x) as u32, ..bbox }
+}
+
 /// Final erased-patch rect: the padded bbox clamped so it never crosses into a
 /// neighbouring text block (`avoid` = the other blocks' boxes). Without this
 /// clamp the padding erases a band out of an adjacent line, which reads on
@@ -303,6 +391,9 @@ pub fn build_erased_patch_png(
             .max((c[2] as i32 - reference[2] as i32).abs());
         lum_diff < 45.0 && col_diff < 50
     };
+    let color_gap = |a: [u8; 3], b: [u8; 3]| -> u8 {
+        (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap_or(0)
+    };
 
     const STRIP: i32 = 4; // pixels sampled outside each edge per row
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
@@ -338,7 +429,7 @@ pub fn build_erased_patch_png(
 
         // If a row's immediate edge hits dark ink (e.g. a bullet point '•' or colon),
         // fallback to the clean column background instead of smearing ink horizontally.
-        let l = if let Some(n) = std::num::NonZeroU32::new(left_n) {
+        let mut l = if let Some(n) = std::num::NonZeroU32::new(left_n) {
             let n = n.get();
             [
                 (left[0] / n) as u8,
@@ -349,7 +440,7 @@ pub fn build_erased_patch_png(
             left_background
         };
 
-        let r = if let Some(n) = std::num::NonZeroU32::new(right_n) {
+        let mut r = if let Some(n) = std::num::NonZeroU32::new(right_n) {
             let n = n.get();
             [
                 (right[0] / n) as u8,
@@ -359,6 +450,21 @@ pub fn build_erased_patch_png(
         } else {
             right_background
         };
+
+        // An adjacent button/icon can occupy the sampling strip just outside
+        // one edge even when the actual pixels *inside* the patch are plain
+        // background. Interpolating that foreign colour across the OCR row
+        // creates the long gray scratch seen beside Android's back button.
+        // A real horizontal gradient changes smoothly: its interior-side
+        // median remains near the outer side, so the correction stays off.
+        let inner_left = local_side(x0, 1, y, r);
+        if color_gap(l, inner_left) >= 10 && color_gap(inner_left, r) <= 12 {
+            l = inner_left;
+        }
+        let inner_right = local_side(x1, -1, y, l);
+        if color_gap(r, inner_right) >= 10 && color_gap(inner_right, l) <= 12 {
+            r = inner_right;
+        }
 
         for x in x0..=x1 {
             let t = (x - x0) as f32 / (x1 - x0).max(1) as f32;
@@ -414,6 +520,52 @@ mod tests {
             }
         }
         (bmp, w, h)
+    }
+
+    #[test]
+    fn terminal_tail_erase_extends_only_for_short_adjacent_ink() {
+        let bbox = BoundingBox { x: 20, y: 16, width: 80, height: 20 };
+        let (short, w, h) = make_bmp(200, 60, |x, y| {
+            if (104..109).contains(&x) && (20..30).contains(&y) { [210, 210, 210] }
+            else { [12, 12, 12] }
+        });
+        let grown = extend_terminal_tail_bbox(&short, w, h, bbox, &[]);
+        assert_eq!(grown.width, 89);
+        assert_eq!(grown.x, bbox.x);
+
+        let neighbour = BoundingBox { x: 110, y: 16, width: 24, height: 20 };
+        assert_eq!(extend_terminal_tail_bbox(&short, w, h, bbox, &[neighbour]), bbox);
+        let (far, _, _) = make_bmp(200, 60, |x, y| {
+            if (108..113).contains(&x) && (20..30).contains(&y) { [210, 210, 210] }
+            else { [12, 12, 12] }
+        });
+        assert_eq!(extend_terminal_tail_bbox(&far, w, h, bbox, &[]), bbox);
+        let (wide, _, _) = make_bmp(200, 60, |x, y| {
+            if (103..119).contains(&x) && (20..30).contains(&y) { [210, 210, 210] }
+            else { [12, 12, 12] }
+        });
+        assert_eq!(extend_terminal_tail_bbox(&wide, w, h, bbox, &[]), bbox);
+    }
+
+    #[test]
+    fn detects_only_a_small_bullet_outside_the_erased_text_box() {
+        let bbox = BoundingBox { x: 65, y: 20, width: 120, height: 30 };
+        let (outside, w, h) = make_bmp(230, 80, |x, y| {
+            if (42..49).contains(&x) && (33..40).contains(&y) { [80, 80, 80] }
+            else { [232, 237, 245] }
+        });
+        assert!(has_unerased_leading_bullet(&outside, w, h, bbox, "• The device"));
+        assert!(!has_unerased_leading_bullet(&outside, w, h, bbox, "The device"));
+        let (inside, _, _) = make_bmp(230, 80, |x, y| {
+            if (63..70).contains(&x) && (33..40).contains(&y) { [80, 80, 80] }
+            else { [232, 237, 245] }
+        });
+        assert!(!has_unerased_leading_bullet(&inside, w, h, bbox, "• The device"));
+        let (wide_icon, _, _) = make_bmp(230, 80, |x, y| {
+            if (32..51).contains(&x) && (32..41).contains(&y) { [80, 80, 80] }
+            else { [232, 237, 245] }
+        });
+        assert!(!has_unerased_leading_bullet(&wide_icon, w, h, bbox, "• The device"));
     }
 
     #[test]
@@ -499,6 +651,51 @@ mod tests {
         let mid = img.get_pixel(pw / 2, 5)[0] as i32;
         let expect = (left + right) / 2;
         assert!((mid - expect).abs() <= 6, "mid {} should ≈ {}", mid, expect);
+    }
+
+    #[test]
+    fn test_password_dialog_back_button_does_not_gray_smear_android_row() {
+        let source = image::load_from_memory(include_bytes!("../tests/fixtures/password_dialog_dense.png"))
+            .unwrap().to_rgba8();
+        let (bmp, w, h) = make_bmp(source.width(), source.height(), |x, y| {
+            let p = source.get_pixel(x as u32, y as u32);
+            [p[0], p[1], p[2]]
+        });
+        let bbox = BoundingBox { x: 33, y: 270, width: 150, height: 37 };
+        let (x0, y0, _, _) = erased_patch_rect(bbox, w, h, &[], &bmp);
+        let (b64, _, _) = build_erased_patch_png(&bmp, w, h, bbox, &[]).unwrap();
+        let img = image::load_from_memory_with_format(
+            &base64::engine::general_purpose::STANDARD.decode(b64).unwrap(),
+            image::ImageFormat::Png,
+        ).unwrap().to_rgba8();
+        for x in [30, 40, 70, 110] {
+            let p = img.get_pixel((x - x0) as u32, (283 - y0) as u32);
+            assert!(p[0] > 220 && p[1] > 225 && p[2] > 230,
+                "adjacent back button bled into erased row at x={x}: {p:?}");
+        }
+    }
+
+    #[test]
+    fn test_password_dialog_link_icon_does_not_tint_text_patch() {
+        let source = image::load_from_memory(include_bytes!("../tests/fixtures/password_dialog_dense.png"))
+            .unwrap().to_rgba8();
+        let (bmp, w, h) = make_bmp(source.width(), source.height(), |x, y| {
+            let p = source.get_pixel(x as u32, y as u32);
+            [p[0], p[1], p[2]]
+        });
+        let bbox = BoundingBox { x: 36, y: 391, width: 305, height: 34 };
+        let (x0, y0, _, _) = erased_patch_rect(bbox, w, h, &[], &bmp);
+        let (b64, _, _) = build_erased_patch_png(&bmp, w, h, bbox, &[]).unwrap();
+        let img = image::load_from_memory_with_format(
+            &base64::engine::general_purpose::STANDARD.decode(b64).unwrap(),
+            image::ImageFormat::Png,
+        ).unwrap().to_rgba8();
+        let source_bg = source.get_pixel(340, 407);
+        let patch_bg = img.get_pixel((340 - x0) as u32, (407 - y0) as u32);
+        for channel in 0..3 {
+            assert!(source_bg[channel].abs_diff(patch_bg[channel]) <= 4,
+                "link-icon fringe bled into text patch: source={source_bg:?}, patch={patch_bg:?}");
+        }
     }
 
     #[test]

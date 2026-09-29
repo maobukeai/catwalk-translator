@@ -34,16 +34,18 @@ import {
 } from '../../services/tauri';
 import { matchesHotkey } from '../../services/hotkeys';
 import { speakText, stopSpeech } from "../../services/tts";
-import { estimateDenseRowFontHeights, resolveAABBCollisions } from '../../services/overlayLayout';
+import { estimateDenseProseFontSizes, estimateDenseRowFontHeights, estimateSafeErasePadding, resolveAABBCollisions } from '../../services/overlayLayout';
 import { detectSpeechLang } from '../../services/langDetect';
 import { buildCaptureEngineChoices, flattenCaptureEngineChoices } from '../../services/engineOptions';
 import type { OverlayBlock, OverlayResult, LanguageCode, TranslationResult } from '../../services/types';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { CheatSheetModal } from './CheatSheetModal';
-import { OverlayBlockCard, toSolidBg, getCardTextColor } from './OverlayBlockCard';
+import { OverlayBlockCard, OverlayErasePlate, measureTextWidth, toSolidBg, getCardTextColor } from './OverlayBlockCard';
 import { SnippingToolbar, type AnnotationTool } from './SnippingToolbar';
 import { memoKey, memoGet, memoPut } from './translationMemo';
 import { YoudaoResultPanel } from './YoudaoResultPanel';
+import { PipelineDiagnostics } from './PipelineDiagnostics';
+import { classifyTranslationFailure, hasUsableTranslation, isSuccessfulLlmTier, type PipelineDiagnosticsData } from '../../services/pipelineDiagnostics';
 
 export interface AnnotationItem {
   id: string;
@@ -220,7 +222,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   const [phase, setPhase] = useState<Phase>('idle');
   const [scaleFactor, setScaleFactor] = useState(() => (typeof window !== 'undefined' ? window.devicePixelRatio || 1.0 : 1.0));
   const [selectedEngine, setSelectedEngine] = useState<string>(settings.captureEngine || 'auto');
-  const [targetLang, setTargetLang] = useState<LanguageCode>('zh-CN');
+  const [targetLang, setTargetLang] = useState<LanguageCode>('auto');
 
   // 速赢 5: Pin 锁定状态
   const [isPinned, setIsPinned] = useState(false);
@@ -304,6 +306,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
   // Progressive stage-2 state: translations streaming into already-rendered cards
   const [translatingProgress, setTranslatingProgress] = useState<{ done: number; total: number } | null>(null);
+  const [pipelineDiagnostics, setPipelineDiagnostics] = useState<PipelineDiagnosticsData>({});
+  const lastCaptureMsRef = useRef<number | undefined>(undefined);
 
   // ── Region watch mode: pin the last selection and auto re-OCR + re-translate
   // every few seconds (game HP bars, live chat, streaming logs...). ──────────
@@ -333,9 +337,14 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   // sort so per-card actions (context menu / retry) address the right block.
   const displayBlocks = React.useMemo(() => {
     if (!overlayResult || overlayResult.blocks.length === 0) {
-      return [] as (OverlayBlock & { __i: number; fontLineHeight: number })[];
+      return [] as (OverlayBlock & { __i: number; fontLineHeight: number; proseFontSize?: number })[];
     }
     const fontLineHeights = estimateDenseRowFontHeights(overlayResult.blocks);
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+    const proseFontSizes = estimateDenseProseFontSizes(
+      overlayResult.blocks, fontLineHeights, vw, measureTextWidth, cardViewMode === 'original',
+    );
+    const erasePaddings = estimateSafeErasePadding(overlayResult.blocks);
     const kept = overlayResult.blocks
       .map((block, i) => {
         // Rendered cards are typically taller than the OCR box (font fit × 1.2
@@ -346,14 +355,21 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         const real = renderedSizes[i];
         const aabbH = real?.height && real.height > block.logicalH ? real.height : block.logicalH;
         const aabbW = real?.width && real.width > block.logicalW ? real.width : block.logicalW;
-        return { ...block, aabbH, aabbW, fontLineHeight: fontLineHeights[i], __i: i };
+        return {
+          ...block, aabbH, aabbW, fontLineHeight: fontLineHeights[i], proseFontSize: proseFontSizes[i], __i: i,
+          sourceX: block.sourceX ?? block.logicalX,
+          sourceY: block.sourceY ?? block.logicalY,
+          sourceW: block.sourceW ?? block.logicalW,
+          sourceH: block.sourceH ?? block.logicalH,
+          erasePadding: erasePaddings[i],
+        };
       })
       .filter((b) => !dismissedBlockIndexes.includes(b.__i));
     if (!enableAabb) return kept;
     const w = typeof window !== 'undefined' ? window.innerWidth : 1920;
     const h = typeof window !== 'undefined' ? window.innerHeight : 1080;
     return resolveAABBCollisions(kept, w, h);
-  }, [overlayResult, enableAabb, dismissedBlockIndexes, renderedSizes]);
+  }, [overlayResult, enableAabb, dismissedBlockIndexes, renderedSizes, cardViewMode]);
 
   // 定时器持有引用：连续 showFeedback 时先清旧 timer，
   // 防止新 toast 被上一个 toast 的定时器提前清除
@@ -520,8 +536,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     const init = async () => {
       try {
         if (isTauri()) {
+          const captureStartedAt = performance.now();
           const payload = await cmdBeginCapture();   // hides main window (0ms image transfer!)
           if (!mountedRef.current) return;
+          lastCaptureMsRef.current = performance.now() - captureStartedAt;
           setScaleFactor(payload.scaleFactor || window.devicePixelRatio || 1.0);
           const detected = payload.detectedApp ?? null;
           if (detected && useSettingsStore.getState().settings.autoDetectPreset !== false) {
@@ -532,6 +550,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           }
           await cmdShowOverlay();                    // expand translucent window to full screen
         } else {
+          lastCaptureMsRef.current = undefined;
           setScaleFactor(window.devicePixelRatio || 1.0);
         }
         if (mountedRef.current) {
@@ -602,6 +621,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   const retranslateBlocks = useCallback(
     async (newTargetLang: LanguageCode, engine: string) => {
       if (!overlayResult || overlayResult.blocks.length === 0) return;
+      const translationStartedAt = performance.now();
       const total = overlayResult.blocks.length;
       retranslateEpochRef.current += 1;
       const currentEpoch = retranslateEpochRef.current;
@@ -620,9 +640,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         const misses: number[] = [];
         phrases.forEach((p, i) => {
           const hit = memoGet(memoKey(p, newTargetLang, preset, style, glossaryFp));
-          if (hit) memoHits.set(i, hit);
+          if (hasUsableTranslation(hit)) memoHits.set(i, hit!);
           else misses.push(i);
         });
+        if (!stale()) setPipelineDiagnostics((prev) => ({ ...prev, translationMs: undefined, aiRefineMs: undefined, memoHits: memoHits.size, total, failure: undefined }));
 
         // 2. 当用户显式指定了第三方在线通道（如 DeepL/Baidu 等）
         if (forcedEngine && !forcedEngine.startsWith('llm') && !settings.presetDicts?.[forcedEngine as keyof typeof settings.presetDicts]) {
@@ -634,7 +655,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               ...updatedBlocks[idx],
               translated: hit.translated || updatedBlocks[idx].translated,
               sourceTier: hit.sourceTier || updatedBlocks[idx].sourceTier,
-              translationFailed: !hit.translated,
+              translationFailed: !hasUsableTranslation(hit),
             };
           });
           if (mountedRef.current) setTranslatingProgress({ done, total });
@@ -668,20 +689,21 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                   translated: res.mainTranslation || block.translated,
                   sourceTier: res.engines[0]?.sourceTier || block.sourceTier,
                 };
-                if (trResult.translated && trResult.translated.trim()) {
+                if (hasUsableTranslation(trResult)) {
                   memoPut(memoKey(block.original, newTargetLang, preset, style, glossaryFp), trResult);
                 }
                 updatedBlocks[idx] = {
                   ...block,
                   translated: trResult.translated,
                   sourceTier: trResult.sourceTier,
-                  translationFailed: !res.mainTranslation,
+                  translationFailed: !res.mainTranslation || !hasUsableTranslation(trResult),
                 };
               })
             );
           }
           if (stale()) return;
           setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : null));
+          setPipelineDiagnostics((prev) => ({ ...prev, translationMs: performance.now() - translationStartedAt }));
           showFeedback(`已切换至 ${engine} 重新翻译全部卡片`);
         } else {
           // 3. auto 模式或 LLM / 词典模式
@@ -710,7 +732,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               const tr = fetched[k];
               if (tr) {
                 byIdx.set(pi, tr);
-                if (tr.translated && tr.translated.trim()) {
+                if (hasUsableTranslation(tr)) {
                   memoPut(memoKey(phrases[pi], newTargetLang, preset, style, glossaryFp), tr);
                 }
               }
@@ -726,12 +748,13 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               ...block,
               translated: res?.translated || block.translated,
               sourceTier: res?.sourceTier || block.sourceTier,
-              translationFailed: !res?.translated,
+              translationFailed: !hasUsableTranslation(res),
             };
           });
 
           if (stale()) return;
           setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : null));
+          setPipelineDiagnostics((prev) => ({ ...prev, translationMs: performance.now() - translationStartedAt }));
           showFeedback(`已切换至 ${engine === 'auto' ? '智能回退' : engine} (${newTargetLang})`);
 
           // 4. 后台异步精翻（Stage-3）：快通道卡片已 150ms 秒级上屏，若有大模型在后台异步进行润色
@@ -780,6 +803,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               (async () => {
                 try {
                   setIsAiRefining(true);
+                  const aiStartedAt = performance.now();
                   const phrasesToRefine = refineCandidates.map((c) => c.phrase);
                   let resultMap: Record<string, string> = {};
                   let usedLlm: (typeof candidateLlms)[0] | null = null;
@@ -799,6 +823,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                   if (stale()) return;
 
                   if (usedLlm && Object.keys(resultMap).length > 0) {
+                    setPipelineDiagnostics((prev) => ({ ...prev, aiRefineMs: performance.now() - aiStartedAt }));
                     const tierLabel = `AI 精翻 ✨ (${usedLlm.provider || usedLlm.model})`;
                     setOverlayResult((prev) => {
                       if (!prev) return prev;
@@ -839,6 +864,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         }
       } catch (err) {
         console.warn('[CaptureOverlay] Retranslate error:', err);
+        if (!stale()) setPipelineDiagnostics((prev) => ({ ...prev, translationMs: performance.now() - translationStartedAt, failure: classifyTranslationFailure(err) }));
         showFeedback('⚠️ 重译失败，可按 Tab 切换引擎后重试');
       } finally {
         if (mountedRef.current) setTranslatingProgress(null);
@@ -1342,6 +1368,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     // 后续写入作废，防止旧译文按 index 错位覆盖新选区的卡片。
     const epoch = processEpochRef.current;
     const stale = () => !mountedRef.current || epoch !== processEpochRef.current;
+    const translationStartedAt = performance.now();
 
     if (layout.blocks.length === 0) {
       if (isWatch) {
@@ -1370,7 +1397,16 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       onSendToMainWindow(combinedText);
     }
 
-    // Cards visible NOW with original text + shimmer placeholders
+    // Respect the user's chosen display mode. Dense text must not silently
+    // change the default in-place overlay into a reading panel.
+    const preferredMode = settings.overlayViewMode === 'panel' || settings.overlayViewMode === 'tooltip'
+      ? 'panel' : 'cover';
+    const nextMode = preferredMode;
+    displayModeRef.current = nextMode;
+    setDisplayMode(nextMode);
+
+    // Cards/panel visible now with original text + translation placeholders
+    const paintStartedAt = performance.now();
     setCardLayoutGeneration((generation) => generation + 1);
     setOverlayResult(layout);
     setPhase('overlay');
@@ -1384,6 +1420,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     setRenderedSizes({});
     setActiveBlockIdx(null);
     setTranslatingProgress({ done: 0, total: layout.blocks.length });
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!stale()) setPipelineDiagnostics((prev) => ({ ...prev, firstPaintMs: performance.now() - paintStartedAt }));
+    }));
 
     // ── Stage 2 (background): batched translation via the Rust pipeline
     // (dict cache → batched LLM → parallel online fallback), then swap each
@@ -1400,9 +1439,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       const misses: number[] = [];
       phrases.forEach((p, i) => {
         const hit = memoGet(memoKey(p, targetLang, preset, style, glossaryFp));
-        if (hit) memoHits.set(i, hit);
+        if (hasUsableTranslation(hit)) memoHits.set(i, hit!);
         else misses.push(i);
       });
+      if (!stale()) setPipelineDiagnostics((prev) => ({ ...prev, memoHits: memoHits.size, total: phrases.length, failure: undefined }));
 
       let translations: TranslationResult[];
       if (misses.length === 0) {
@@ -1427,7 +1467,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           const tr = fetched[k];
           if (tr) {
             byIdx.set(pi, tr);
-            if (tr.translated && tr.translated.trim()) {
+            if (hasUsableTranslation(tr)) {
               memoPut(memoKey(phrases[pi], targetLang, preset, style, glossaryFp), tr);
             }
           }
@@ -1440,7 +1480,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       let translatedCount = 0;
       const updatedBlocks = layout.blocks.map((block, i) => {
         const tr = translations[i];
-        if (tr && tr.translated && tr.translated.trim()) {
+        if (hasUsableTranslation(tr)) {
           translatedCount += 1;
           return { ...block, translated: tr.translated, sourceTier: tr.sourceTier, translationFailed: false };
         }
@@ -1448,6 +1488,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       });
       if (stale()) return;
       setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : prev));
+      setPipelineDiagnostics((prev) => ({ ...prev, translationMs: performance.now() - translationStartedAt }));
       setTranslatingProgress({ done: translatedCount, total: layout.blocks.length });
 
       // 截图整场划词会话通过 cmdSaveCaptureSession 归档至「截图划词回放」，
@@ -1510,6 +1551,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
         if (refineCandidates.length > 0) {
           (async () => {
+            const aiStartedAt = performance.now();
             try {
               setIsAiRefining(true);
               const phrasesToRefine = refineCandidates.map((c) => c.phrase);
@@ -1566,6 +1608,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               });
 
               if (refinedAny && !stale()) {
+                setPipelineDiagnostics((prev) => ({ ...prev, aiRefineMs: performance.now() - aiStartedAt }));
                 showFeedback(`✨ ${usedLlm.model || usedLlm.provider || 'AI'} 深度精翻已就绪`);
                 // 异步更新回放会话，不污染历史与生词本列表
                 cmdSaveCaptureSession({
@@ -1587,6 +1630,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     } catch (err) {
       console.warn('[CaptureOverlay] Stage-2 translation failed, keeping OCR text:', err);
       if (!stale() && !isWatch) {
+        setPipelineDiagnostics((prev) => ({ ...prev, translationMs: performance.now() - translationStartedAt, failure: classifyTranslationFailure(err) }));
         // Mark every card as failed so each shows its own inline retry button
         setOverlayResult((prev) => prev
           ? { ...prev, blocks: prev.blocks.map((b) => ({ ...b, translated: b.original, translationFailed: true })) }
@@ -1608,7 +1652,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     try {
       const [tr] = await cmdTranslatePhrasesStyled([block.original], preset, llmConfig, settings.translationStyle, targetLang);
       if (!mountedRef.current) return;
-      if (tr && tr.translated && tr.translated.trim()) {
+      if (hasUsableTranslation(tr)) {
         setOverlayResult((prev) => prev ? {
           ...prev,
           blocks: prev.blocks.map((b, j) => (j === blockIndex
@@ -1616,6 +1660,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             : b)),
         } : prev);
         showFeedback('✅ 该卡片重试成功');
+        setPipelineDiagnostics((prev) => ({ ...prev, failure: undefined }));
       } else {
         showFeedback('⚠️ 仍失败 — 可按 Tab 换引擎后再试');
       }
@@ -1922,6 +1967,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     setPhase('processing');
     setBannerDismissed(false);
     setCardMenu(null);
+    setPipelineDiagnostics({ captureMs: lastCaptureMsRef.current });
 
     try {
       // ── Stage 1 (fast, ~100-300ms): OCR + layout + background colors only.
@@ -1929,6 +1975,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       // capture landed exactly where they drew it, no dead spinner time.
       const viewportW = typeof window !== 'undefined' ? window.innerWidth : undefined;
       const viewportH = typeof window !== 'undefined' ? window.innerHeight : undefined;
+      const ocrStartedAt = performance.now();
       const layout = await cmdRegionOcrLayout(
         selection,
         scaleFactor,
@@ -1939,6 +1986,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
       if (!mountedRef.current) return;
       if (epoch !== processEpochRef.current) return; // cancelled while awaiting
+      setPipelineDiagnostics({ captureMs: lastCaptureMsRef.current, ocrLayoutMs: performance.now() - ocrStartedAt });
 
       await applyLayoutAndTranslate(layout);
     } catch (err) {
@@ -1972,14 +2020,17 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     setPhase('processing');
     setBannerDismissed(false);
     const epoch = ++processEpochRef.current;
+    setPipelineDiagnostics({ captureMs: lastCaptureMsRef.current });
 
     try {
       const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
       const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
+      const ocrStartedAt = performance.now();
       const layouts = await Promise.all(
         rects.map((sel) => cmdRegionOcrLayout(sel, scaleFactor, vw, vh, detectedOcrPreset())),
       );
       if (!mountedRef.current || epoch !== processEpochRef.current) return;
+      setPipelineDiagnostics({ captureMs: lastCaptureMsRef.current, ocrLayoutMs: performance.now() - ocrStartedAt });
 
       const blocks = layouts.flatMap((l) => l.blocks);
       const unionX = Math.min(...rects.map((s) => s.x));
@@ -2044,6 +2095,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     // 与手动划词共用 epoch：新的一次 tick 使上一次在途结果作废，
     // 反之用户手动划新区域时，本次 tick 的结果也不再写入。
     const epoch = ++processEpochRef.current;
+    const ocrStartedAt = performance.now();
     try {
       const vw = typeof window !== 'undefined' ? window.innerWidth : undefined;
       const vh = typeof window !== 'undefined' ? window.innerHeight : undefined;
@@ -2091,6 +2143,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       ]));
       if (fingerprint === lastWatchTextRef.current) return;
       lastWatchTextRef.current = fingerprint;
+      setPipelineDiagnostics({ ocrLayoutMs: performance.now() - ocrStartedAt });
       await applyLayoutAndTranslate(layout, true);
     } catch (e) {
       console.warn('[Watch] tick failed:', e);
@@ -2331,6 +2384,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     setBannerDismissed(false);
     setFeedbackToast(null);
     setTranslatingProgress(null);
+    setPipelineDiagnostics({});
     setAdjustRect(null);
     setAdjustHandle(null);
     adjustStartRef.current = null;
@@ -2434,9 +2488,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   if (phase === 'overlay' && overlayResult && overlayResult.blocks.length > 0) {
     // Aggregate across ALL blocks (the old first-block-only check misreported
     // mixed-tier results): downgraded = not a single block came back via LLM.
-    const isLlmTier = (t: string) =>
-      t.includes('LLM') || t.includes('DeepSeek') || t.includes('OpenAI') || t.includes('Ollama');
-    const anyLlmSuccess = overlayResult.blocks.some((b) => isLlmTier(b.sourceTier || ''));
+    const anyLlmSuccess = overlayResult.blocks.some((b) => !b.translationFailed && isSuccessfulLlmTier(b.sourceTier || ''));
     const primaryTier =
       overlayResult.blocks.map((b) => b.sourceTier || '').find((t) => t && t !== 'OCR')
       || overlayResult.blocks[0].sourceTier
@@ -3132,6 +3184,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         </div>
       )}
 
+      {phase === 'overlay' && overlayResult && overlayResult.blocks.length > 0 && (
+        <PipelineDiagnostics data={pipelineDiagnostics} blocks={overlayResult.blocks} isLight={isLight} />
+      )}
+
       {/* ── Feedback Toast (Copy / Pin / Voice actions) ────────────────────────── */}
       {feedbackToast && (
         <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[250] pointer-events-none animate-fade-in">
@@ -3259,6 +3315,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
       {/* ── In-place translated text blocks (cover mode) ─────────────────────── */}
       {phase === 'overlay' && displayMode === 'cover' && displayBlocks.map((block) => (
+        <OverlayErasePlate key={`erase:${block.__i}`} block={block} />
+      ))}
+      {phase === 'overlay' && displayMode === 'cover' && displayBlocks.map((block) => (
         <OverlayBlockCard
           key={`${cardLayoutGeneration}:${block.__i}`}
           block={block}
@@ -3287,6 +3346,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           viewMode={cardViewMode}
           scale={(cardScales[block.__i] ?? 1.0) * globalFontScale}
           fontLineHeight={block.fontLineHeight}
+          proseFontSize={block.proseFontSize}
+          externalErase
           onScaleChange={(s) => setCardScales((prev) => ({ ...prev, [block.__i]: s }))}
           onViewCycle={cycleCardView}
           onActive={() => setActiveBlockIdx(block.__i)}
@@ -3334,7 +3395,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               void copyTextSafely(text, '📋 已复制到剪贴板');
             }}
             onSpeech={(text) => {
-              speakText(text, { lang: targetLang === 'zh-CN' ? 'zh-CN' : 'en-US' });
+              speakText(text, { lang: detectSpeechLang(text) });
               showFeedback('🔊 正在朗读...');
             }}
             onRetranslate={() => retranslateBlocks(targetLang, selectedEngine)}
@@ -3362,5 +3423,3 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     </div>
   );
 };
-
-

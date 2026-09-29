@@ -76,5 +76,21 @@
       {"text": "具集成到 vids.new 中", "boxRect": {"x": 30, "y": 40, "width": 165, "height": 25}}
     ],
     "scenario": "small mixed Chinese and Latin text on a colored bubble with a pointed edge"
+  },
+  {
+    "image": "dense_chinese_prose_source.png",
+    "application": "browser-document",
+    "expectedText": ["这轮优化已完成", "原位翻译修复了短译文", "真实截图视觉验收页", "验证结果", "本次目标累计用时"],
+    "nonTextRegions": [
+      {"label": "installer link icon", "boxRect": {"x": 265, "y": 17, "width": 18, "height": 21}}
+    ],
+    "expectedLines": [
+      {"text": "这轮优化已完成，并重新生成了（0.3.15安装包）；我没有替你安装。", "boxRect": {"x": 43, "y": 14, "width": 738, "height": 29}},
+      {"text": "原位翻译修复了短译文覆盖长原文时的残字，并加入《真实截图视觉验收页》；翻译失败现在会明确显示并支持单段重", "boxRect": {"x": 43, "y": 53, "width": 741, "height": 25}},
+      {"text": "试。另增加了分阶段耗时与翻译来源诊断、文字测量缓存，以及常用设置快捷入口。", "boxRect": {"x": 43, "y": 77, "width": 741, "height": 24}},
+      {"text": "验证结果：前端398/398项测试、Rust 200项测试通过，桌面安装包构建成功。视觉样本不能证明所有软件、字体和缩", "boxRect": {"x": 43, "y": 112, "width": 741, "height": 24}},
+      {"text": "放比例都完美；你常用的复杂场景仍值得用新安装包实测。本次目标累计用时约1小时29分钟。", "boxRect": {"x": 43, "y": 135, "width": 741, "height": 24}}
+    ],
+    "scenario": "dense Chinese prose with inline link icon, wrapped lines, mixed digits and Latin text"
   }
 ]

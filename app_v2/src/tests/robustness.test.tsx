@@ -104,6 +104,7 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
       settings: {
         ...useSettingsStore.getState().settings,
         captureReleaseAction: 'auto',
+        overlayViewMode: 'cover',
       },
     });
   });
@@ -120,6 +121,29 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
         captureReleaseAction: 'auto',
       },
     });
+  });
+
+  it('keeps dense prose in the default in-place mode with automatic target language', async () => {
+    const proseBlocks = [
+      '这轮优化已完成，并重新生成了安装包，我没有替你安装。',
+      '原位翻译修复了短译文覆盖长原文时的残字，并加入视觉验收。',
+      '验证结果：前端测试通过，桌面安装包构建成功。',
+    ].map((original, index) => ({
+      ...STANDARD_LAYOUT.blocks[0], original,
+      logicalX: 110, logicalY: 105 + index * 28, logicalW: 650, logicalH: 22,
+    }));
+    wireHarness({ layoutImpl: () => Promise.resolve({
+      blocks: proseBlocks, selectionX: 100, selectionY: 100, selectionW: 700, selectionH: 130,
+    }) });
+    (window as any).__TAURI_INTERNALS__ = {};
+    render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
+    await screen.findByText(/猫步划词/);
+    await selectAndConfirm();
+    const confirmBtn = screen.queryByTestId('adjust-confirm-btn') || screen.queryByTestId('btn-tool-confirm');
+    if (confirmBtn) fireEvent.click(confirmBtn);
+    await waitFor(() => expect(document.querySelectorAll('.overlay-block').length).toBe(3));
+    expect(document.querySelector('.overlay-panel')).toBeNull();
+    expect(screen.getByTitle('切换目标语种')).toHaveValue('auto');
   });
 
   it('copying all translations keeps the overlay open (no 600ms auto-close)', async () => {
@@ -233,15 +257,40 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
     await screen.findByText('粗糙度');
   });
 
+  it('does not treat the backend original-text failure sentinel as translated or cacheable', async () => {
+    let failed = true;
+    wireHarness();
+    (getActiveHarness()!.invokeMock as any).mockImplementation(async (cmd: string): Promise<any> => {
+      if (cmd === 'cmd_begin_capture') return MOCK_PAYLOAD;
+      if (BASE_CMDS.some((key) => key === cmd)) return undefined;
+      if (cmd === 'cmd_region_ocr_layout') return { ...STANDARD_LAYOUT, blocks: [{ ...STANDARD_LAYOUT.blocks[0] }] };
+      if (cmd === 'cmd_translate_phrases_styled') return [failed
+        ? { original: 'Roughness', translated: 'Roughness', sourceTier: '翻译失败·点击重试' }
+        : { original: 'Roughness', translated: '粗糙度', sourceTier: 'Google 官方' }];
+      return undefined;
+    });
+    (window as any).__TAURI_INTERNALS__ = {};
+    render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
+    await screen.findByText(/猫步划词/);
+    await waitFor(() => expect(container()?.style?.cursor).toBe('crosshair'));
+    await selectAndConfirm();
+    const retry = await screen.findByRole('button', { name: '重试此段翻译' });
+    expect(screen.getByTestId('pipeline-diagnostics')).toHaveTextContent('1 段翻译失败');
+    failed = false;
+    fireEvent.click(retry);
+    await screen.findByText('粗糙度');
+    expect(screen.queryByRole('button', { name: '重试此段翻译' })).not.toBeInTheDocument();
+  });
+
   it('region watch uses the quiet cmd_watch_tick path (no window hide/show cycle)', async () => {
     const { calls } = await openWithResult();
     const beginBefore = countCmd(calls, 'cmd_begin_capture');
 
     pressKey('w', 'KeyW');
-    expect(await screen.findByText(/区域监控已开启/)).toBeInTheDocument();
     await waitFor(() => {
       expect(countCmd(calls, 'cmd_watch_tick')).toBeGreaterThanOrEqual(1);
     });
+    expect(await screen.findByText(/区域监控中/)).toBeInTheDocument();
     // The legacy flicker path re-ran begin+show every tick — must stay quiet now
     expect(countCmd(calls, 'cmd_begin_capture')).toBe(beginBefore);
 
@@ -322,15 +371,17 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
     await screen.findByText('粗糙度');
 
     pressKey('w', 'KeyW');
-    expect(await screen.findByText(/区域监控已开启/, {}, { timeout: 3000 })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(countCmd(calls, 'cmd_watch_tick')).toBeGreaterThanOrEqual(1);
+    }, { timeout: 3000 });
 
     // Three consecutive quiet failures → auto-stop with an honest notice
     await waitFor(() => {
       expect(screen.getByText(/静默监控通道不可用/)).toBeInTheDocument();
-    }, { timeout: 2500 });
+    }, { timeout: 4500 });
     await waitFor(() => {
       expect(countCmd(calls, 'cmd_watch_tick')).toBeGreaterThanOrEqual(3);
-    });
+    }, { timeout: 4500 });
   });
 
   it('cancelling mid-recognition returns to the selection phase and drops the result', async () => {

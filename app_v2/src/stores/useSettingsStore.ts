@@ -97,7 +97,8 @@ interface SettingsState {
   setWatchIntervalMs: (ms: number) => void;
   setClipboardWatchEnabled: (enabled: boolean) => void;
   setOcrEngine: (engine: 'auto' | 'onnx' | 'winrt') => void;
-  setOcrVersion: (version: 'v3' | 'v4' | 'v5' | 'v6' | 'v6t') => void;
+  setOcrVersion: (version: 'v6' | 'v6t' | 'v6m') => void;
+  setOcrDefaultModel: (version: 'v6' | 'v6t' | 'v6m') => void;
   setPrimaryTranslationEngine: (engine: 'auto' | 'dict' | 'llm' | 'online') => void;
   setBaiduConfig: (appId: string, secret: string, llmApiKey?: string, useSameSecret?: boolean) => void;
   setDeeplConfig: (apiKey: string, customUrl: string) => void;
@@ -238,7 +239,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         watchIntervalMs: fetched.watchIntervalMs ?? 3000,
         clipboardWatchEnabled: fetched.clipboardWatchEnabled ?? false,
         ocrEngine: fetched.ocrEngine || 'auto',
-        ocrVersion: (fetched.ocrVersion as 'v3' | 'v4' | 'v5' | 'v6' | 'v6t') || 'v4',
+        ocrVersion: fetched.ocrVersion === 'v6m' ? 'v6m' : fetched.ocrVersion === 'v6' ? 'v6' : 'v6t',
         ocrFilterEnabled: fetched.ocrFilterEnabled ?? false,
         ocrFilterRules: fetched.ocrFilterRules ?? [],
         selectionLookupEnabled: fetched.selectionLookupEnabled ?? false,
@@ -1113,7 +1114,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
   setOcrEngine: (engine) => applyPatch({ ocrEngine: engine }),
 
-  setOcrVersion: (version) => applyPatch({ ocrVersion: version }, 'debounced'),
+  setOcrVersion: (version) => applyPatch({ ocrVersion: version }),
+
+  setOcrDefaultModel: (version) => applyPatch({ ocrVersion: version, ocrEngine: 'auto' }),
 
   setPrimaryTranslationEngine: (engine) => applyPatch({ primaryTranslationEngine: engine }),
 

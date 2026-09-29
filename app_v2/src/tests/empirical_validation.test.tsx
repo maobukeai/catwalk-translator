@@ -405,6 +405,15 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
   // Section 4: UI Dashboard Component Validation & Provider Switching Stress Test
   // ==========================================================================
   describe('UI Component: SettingsDashboard & Provider Switching', () => {
+    it('opens common settings without searching through every category', async () => {
+      render(<SettingsDashboard />);
+      await screen.findByText(/系统设置|翻译器设置/i);
+      fireEvent.click(screen.getByRole('button', { name: 'OCR 模型' }));
+      expect(await screen.findByTestId('ocr-models-card')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: '翻译通道' }));
+      expect(screen.getByRole('button', { name: /在线引擎/i })).toBeInTheDocument();
+    });
+
     it('EV-4.1: Renders SettingsDashboard with initial values and action controls', async () => {
       render(<SettingsDashboard />);
       await screen.findByText(/系统设置|翻译器设置/i);

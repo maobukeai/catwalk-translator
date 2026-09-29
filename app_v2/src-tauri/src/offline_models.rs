@@ -1,4 +1,4 @@
-//! Downloads and lifecycle management for PP-OCRv3 / PP-OCRv4 / PP-OCRv5 ONNX model files.
+//! Downloads and lifecycle management for PP-OCRv6 Tiny / Small / Medium ONNX models.
 //! Supports mainland high-speed mirrors (hf-mirror first, then ModelScope, then HuggingFace),
 //! progressive download progress streaming, Windows file-lock safe deletion, and hot reloading.
 
@@ -9,15 +9,12 @@ use tauri::Emitter;
 
 pub struct ModelSpec {
     pub id: &'static str,
-    pub version: &'static str, // "v3" | "v4" | "v5"
+    pub version: &'static str, // "v6" | "v6t" | "v6m"
     pub name: &'static str,
     pub file: &'static str,
     pub urls: &'static [&'static str],
     pub approx_bytes: u64,
-    /// 期望的精确字节数（0 = 不校验）。用于识别「文件名对但内容不对」的历史
-    /// 遗留文件：v5 曾错误地从 PP-OCRv4 的 URL 下载并保存成 v5 文件名，磁盘上
-    /// 留下与 v4 字节完全相同的伪 v5 模型。仅凭"文件存在"判定已安装会让这些
-    /// 伪文件永远不被替换，因此对已知精确大小的模型做尺寸校验。
+    /// Expected byte count; detects incomplete or mismatched model downloads.
     pub exact_bytes: u64,
 }
 
@@ -27,129 +24,6 @@ pub fn is_stale_size(spec: &ModelSpec, size: u64) -> bool {
 }
 
 pub const MODELS: &[ModelSpec] = &[
-    // ── PP-OCRv3 (Classic Lightweight) ──
-    ModelSpec {
-        id: "ppocrv3-det",
-        version: "v3",
-        name: "PP-OCRv3 文本检测",
-        file: "ch_PP-OCRv3_det_infer.onnx",
-        urls: &[
-            "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv3/ch_PP-OCRv3_det_infer.onnx",
-            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/PP-OCRv3/ch_PP-OCRv3_det_infer.onnx",
-            "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv3/ch_PP-OCRv3_det_infer.onnx",
-        ],
-        exact_bytes: 0,
-        approx_bytes: 4_700_000,
-    },
-    ModelSpec {
-        id: "ppocrv3-rec",
-        version: "v3",
-        name: "PP-OCRv3 文本识别",
-        file: "ch_PP-OCRv3_rec_infer.onnx",
-        urls: &[
-            "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv3/ch_PP-OCRv3_rec_infer.onnx",
-            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/PP-OCRv3/ch_PP-OCRv3_rec_infer.onnx",
-            "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv3/ch_PP-OCRv3_rec_infer.onnx",
-        ],
-        exact_bytes: 0,
-        approx_bytes: 10_800_000,
-    },
-    ModelSpec {
-        id: "ppocrv3-cls",
-        version: "v3",
-        name: "PP-OCR 方向分类 (180°)",
-        file: "ch_ppocr_mobile_v2.0_cls_infer.onnx",
-        urls: &[
-            "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
-            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
-            "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
-        ],
-        exact_bytes: 0,
-        approx_bytes: 1_400_000,
-    },
-
-    // ── PP-OCRv4 (High-Accuracy Balanced · Recommended) ──
-    ModelSpec {
-        id: "ppocrv4-det",
-        version: "v4",
-        name: "PP-OCRv4 文本检测",
-        file: "ch_PP-OCRv4_det_infer.onnx",
-        urls: &[
-            "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
-            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
-            "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
-        ],
-        exact_bytes: 0,
-        approx_bytes: 4_700_000,
-    },
-    ModelSpec {
-        id: "ppocrv4-rec",
-        version: "v4",
-        name: "PP-OCRv4 文本识别",
-        file: "ch_PP-OCRv4_rec_infer.onnx",
-        urls: &[
-            "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
-            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
-            "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
-        ],
-        exact_bytes: 0,
-        approx_bytes: 10_800_000,
-    },
-    ModelSpec {
-        id: "ppocrv4-cls",
-        version: "v4",
-        name: "PP-OCR 方向分类 (180°)",
-        file: "ch_ppocr_mobile_v2.0_cls_infer.onnx",
-        urls: &[
-            "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
-            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
-            "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
-        ],
-        exact_bytes: 0,
-        approx_bytes: 1_400_000,
-    },
-
-    // ── PP-OCRv5 (真实 v5 模型：ModelScope RapidAI/RapidOCR onnx/PP-OCRv5) ──
-    // SWHL/RapidOCR 只发布到 v4。此前这两个条目从 PP-OCRv4 的 URL 下载再存成
-    // v5 文件名 —— 磁盘上的"v5"与 v4 字节完全相同（SHA-256 一致），界面标着
-    // 「最新增强」实际就是 v4，切过去自然毫无变化。exact_bytes 用于识别并替换
-    // 这批历史遗留的伪 v5 文件。
-    ModelSpec {
-        id: "ppocrv5-det",
-        version: "v5",
-        name: "PP-OCRv5 文本检测",
-        file: "ch_PP-OCRv5_det_infer.onnx",
-        urls: &[
-            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx",
-        ],
-        exact_bytes: 4_819_576,
-        approx_bytes: 4_819_576,
-    },
-    ModelSpec {
-        id: "ppocrv5-rec",
-        version: "v5",
-        name: "PP-OCRv5 文本识别",
-        file: "ch_PP-OCRv5_rec_infer.onnx",
-        urls: &[
-            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile.onnx",
-        ],
-        exact_bytes: 16_631_306,
-        approx_bytes: 16_631_306,
-    },
-    ModelSpec {
-        id: "ppocrv5-cls",
-        version: "v5",
-        name: "PP-OCR 方向分类 (180°)",
-        file: "ch_ppocr_mobile_v2.0_cls_infer.onnx",
-        urls: &[
-            "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
-            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
-            "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
-        ],
-        exact_bytes: 0,
-        approx_bytes: 1_400_000,
-    },
-
     // ── PP-OCRv6 Small（均衡增强：ModelScope RapidAI/RapidOCR onnx/PP-OCRv6）──
     // 实测(同图/同代码/release 取 3 次最优)：~490ms，质量为所有档位最优——唯一
     // 把 "Qwen · reasoning model" 完整读对的一档，模型名、副标题、长句、低对比
@@ -193,7 +67,7 @@ pub const MODELS: &[ModelSpec] = &[
     },
 
     // ── PP-OCRv6 Tiny（极速轻量，共 6.3MB）──
-    // 实测 ~200ms，所有档位里最快(v3 295ms、v4 373ms)，体积也最小。代价是右栏
+    // Tiny 体积和延迟更低；复杂密排文字可能需要 Small 或系统 OCR 补救。
     // 模型名那几行仍会并框/漏读(`XAlirarod` 之类)，追求速度时才选它。
     ModelSpec {
         id: "ppocrv6t-det",
@@ -227,6 +101,35 @@ pub const MODELS: &[ModelSpec] = &[
             "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
             "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
         ],
+        exact_bytes: 0,
+        approx_bytes: 1_400_000,
+    },
+    // Medium is opt-in: CPU latency on dense screenshots is much higher than
+    // Small/Tiny. Pin the verified upstream model revision and file sizes.
+    ModelSpec {
+        id: "ppocrv6m-det",
+        version: "v6m",
+        name: "PP-OCRv6 文本检测 (Medium)",
+        file: "ch_PP-OCRv6_medium_det_infer.onnx",
+        urls: &["https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/det/PP-OCRv6_det_medium.onnx"],
+        exact_bytes: 62_119_454,
+        approx_bytes: 62_119_454,
+    },
+    ModelSpec {
+        id: "ppocrv6m-rec",
+        version: "v6m",
+        name: "PP-OCRv6 文本识别 (Medium)",
+        file: "ch_PP-OCRv6_medium_rec_infer.onnx",
+        urls: &["https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/rec/PP-OCRv6_rec_medium.onnx"],
+        exact_bytes: 76_629_984,
+        approx_bytes: 76_629_984,
+    },
+    ModelSpec {
+        id: "ppocrv6m-cls",
+        version: "v6m",
+        name: "PP-OCR 方向分类 (180°)",
+        file: "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+        urls: &["https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx"],
         exact_bytes: 0,
         approx_bytes: 1_400_000,
     },
@@ -266,7 +169,7 @@ fn status_for_spec(m: &ModelSpec) -> OfflineModelStatus {
         version: m.version.to_string(),
         name: m.name.to_string(),
         file_name: m.file.to_string(),
-        // 尺寸不符 = 历史遗留的伪文件（如从 v4 URL 下来的"v5"）或下载残缺，
+        // Size mismatch or truncated download is not an installed model.
         // 报告为未安装，界面才会提示重新下载真实模型。
         installed: size > 0 && !is_stale_size(m, size),
         size_bytes: size,
@@ -274,13 +177,13 @@ fn status_for_spec(m: &ModelSpec) -> OfflineModelStatus {
     }
 }
 
-/// Installed state + sizes for every local OCR model across v3, v4, v5.
+/// Installed state + sizes for the supported OCR variants.
 #[tauri::command]
 pub async fn cmd_offline_models_status() -> Result<Vec<OfflineModelStatus>, String> {
     Ok(MODELS.iter().map(status_for_spec).collect())
 }
 
-/// Get the currently active OCR model version ("v3", "v4", or "v5").
+/// Get the currently active OCR model version ("v6", "v6t" or "v6m").
 #[tauri::command]
 pub fn cmd_get_active_ocr_version() -> Result<String, String> {
     Ok(crate::onnx_ocr::get_active_version())
@@ -293,8 +196,11 @@ pub fn cmd_switch_ocr_version(
     state: tauri::State<'_, crate::commands::AppState>,
     version: String,
 ) -> Result<bool, String> {
+    if !matches!(version.as_str(), "v6" | "v6t" | "v6m") {
+        return Ok(false);
+    }
     // Do not persist a selection that cannot be loaded. Previously this made
-    // the UI claim "v6" while inference silently ran v4 after the next launch.
+    // the UI claim "v6" while inference silently ran another model after launch.
     if !crate::onnx_ocr::model_files_present_for_version(&version) {
         return Ok(false);
     }
@@ -318,6 +224,9 @@ pub fn cmd_switch_ocr_version(
     }
     if let Ok(mut lock) = state.settings.lock() {
         lock.ocr_version = Some(version);
+        // Selecting a default model must actually route OCR to the ONNX-first
+        // path, even if the user previously forced the WinRT engine.
+        lock.ocr_engine = Some("auto".to_string());
         crate::commands::save_settings_file(&app_handle, &lock);
     }
     crate::ocr::mark_onnx_ready();
@@ -329,7 +238,7 @@ static ACTIVE_DOWNLOADS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 fn find_spec_by_id(id: &str) -> Option<&'static ModelSpec> {
     MODELS
         .iter()
-        .find(|m| m.id == id || (id == "ppocr-cls" && m.id == "ppocrv3-cls"))
+        .find(|m| m.id == id || (id == "ppocr-cls" && m.id == "ppocrv6t-cls"))
 }
 
 /// Stream-download one model with `model-download-progress` events.
@@ -352,8 +261,7 @@ pub async fn cmd_download_offline_model(
         if meta.len() >= 64 * 1024 && !is_stale_size(spec, meta.len()) {
             return Ok(true);
         } else {
-            // 0 字节/残缺下载，或尺寸不符的历史遗留伪文件（v5 曾指向 v4 的
-            // URL）—— 释放文件锁后删除，走下面的重新下载。
+            // Incomplete or mismatched file: release locks, then redownload.
             crate::onnx_ocr::unload_engine();
             let _ = std::fs::remove_file(&final_path);
         }
@@ -536,69 +444,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn v5_specs_point_at_real_v5_models_not_v4() {
-        // 回归：v5 曾从 PP-OCRv4 的 URL 下载再存成 v5 文件名，磁盘上的"v5"
-        // 与 v4 字节完全相同，界面上的「最新增强」形同虚设。
-        for spec in MODELS.iter().filter(|m| m.version == "v5" && m.id != "ppocrv5-cls") {
-            assert!(
-                !spec.urls.is_empty(),
-                "{} 必须有下载源",
-                spec.id
-            );
-            for u in spec.urls {
-                assert!(
-                    !u.contains("PP-OCRv4"),
-                    "{} 不能从 v4 的 URL 下载: {}",
-                    spec.id,
-                    u
-                );
-                assert!(
-                    u.contains("PP-OCRv5"),
-                    "{} 的下载源必须是真实 v5 模型: {}",
-                    spec.id,
-                    u
-                );
-            }
-            assert!(
-                spec.exact_bytes > 0,
-                "{} 需要精确尺寸校验，否则历史遗留的伪 v5 文件永远不会被替换",
-                spec.id
-            );
-        }
-    }
-
-    #[test]
-    fn stale_size_detection_flags_wrong_content_but_not_unversioned_models() {
-        let v5_rec = MODELS
-            .iter()
-            .find(|m| m.id == "ppocrv5-rec")
-            .expect("ppocrv5-rec spec");
-        // 伪 v5（= v4 rec 的字节数）必须被判定为需重新下载
-        assert!(is_stale_size(v5_rec, 10_857_958));
-        // 真实 v5 尺寸通过
-        assert!(!is_stale_size(v5_rec, v5_rec.exact_bytes));
-        // 未安装（0 字节）不算 stale，由 installed 判定处理
-        assert!(!is_stale_size(v5_rec, 0));
-        // 未设精确尺寸的模型不做校验
-        let v3_rec = MODELS
-            .iter()
-            .find(|m| m.id == "ppocrv3-rec")
-            .expect("ppocrv3-rec spec");
-        assert!(!is_stale_size(v3_rec, 12_345));
-    }
-
-    #[test]
-    fn test_models_specs_contain_all_versions() {
-        assert!(MODELS.iter().any(|m| m.version == "v3" && m.id == "ppocrv3-det"));
-        assert!(MODELS.iter().any(|m| m.version == "v3" && m.id == "ppocrv3-rec"));
-        assert!(MODELS.iter().any(|m| m.version == "v4" && m.id == "ppocrv4-det"));
-        assert!(MODELS.iter().any(|m| m.version == "v4" && m.id == "ppocrv4-rec"));
-        assert!(MODELS.iter().any(|m| m.version == "v5" && m.id == "ppocrv5-det"));
-        assert!(MODELS.iter().any(|m| m.version == "v5" && m.id == "ppocrv5-rec"));
+    fn test_models_specs_contain_only_v6_variants() {
+        assert_eq!(MODELS.len(), 9);
+        assert!(MODELS.iter().all(|m| matches!(m.version, "v6" | "v6t" | "v6m")));
         assert!(MODELS.iter().any(|m| m.version == "v6" && m.id == "ppocrv6-det"));
         assert!(MODELS.iter().any(|m| m.version == "v6" && m.id == "ppocrv6-rec"));
         assert!(MODELS.iter().any(|m| m.version == "v6t" && m.id == "ppocrv6t-det"));
         assert!(MODELS.iter().any(|m| m.version == "v6t" && m.id == "ppocrv6t-rec"));
+        assert!(MODELS.iter().any(|m| m.version == "v6m" && m.id == "ppocrv6m-det"));
+        assert!(MODELS.iter().any(|m| m.version == "v6m" && m.id == "ppocrv6m-rec"));
 
         for spec in MODELS {
             assert!(!spec.urls.is_empty());
@@ -609,19 +463,19 @@ mod tests {
 
     #[test]
     fn v6_variants_use_distinct_files_and_real_v6_sources() {
-        // Small 与 Tiny 必须落在不同文件名，否则两档会互相覆盖。
+        // Three variants must use distinct det/rec files so they can coexist.
         let files: Vec<&str> = MODELS
             .iter()
-            .filter(|m| (m.version == "v6" || m.version == "v6t") && !m.id.ends_with("-cls"))
+            .filter(|m| !m.id.ends_with("-cls"))
             .map(|m| m.file)
             .collect();
-        assert_eq!(files.len(), 4, "v6/v6t 各需 det+rec 两个条目");
+        assert_eq!(files.len(), 6, "each v6 variant needs det+rec");
         let unique: std::collections::BTreeSet<&&str> = files.iter().collect();
-        assert_eq!(unique.len(), 4, "v6 与 v6t 的模型文件名不能重复: {:?}", files);
+        assert_eq!(unique.len(), 6, "v6 model files must be unique: {:?}", files);
 
         for spec in MODELS
             .iter()
-            .filter(|m| (m.version == "v6" || m.version == "v6t") && !m.id.ends_with("-cls"))
+            .filter(|m| !m.id.ends_with("-cls"))
         {
             for u in spec.urls {
                 assert!(
@@ -637,10 +491,12 @@ mod tests {
 
     #[test]
     fn test_find_spec_by_id() {
-        assert!(find_spec_by_id("ppocrv3-det").is_some());
+        assert!(find_spec_by_id("ppocrv3-det").is_none());
         assert!(find_spec_by_id("ppocr-cls").is_some());
-        assert!(find_spec_by_id("ppocrv4-det").is_some());
-        assert!(find_spec_by_id("ppocrv5-rec").is_some());
+        assert!(find_spec_by_id("ppocrv4-det").is_none());
+        assert!(find_spec_by_id("ppocrv5-rec").is_none());
+        assert!(find_spec_by_id("ppocrv6-det").is_some());
+        assert!(find_spec_by_id("ppocrv6m-det").is_some());
         assert!(find_spec_by_id("unknown-id").is_none());
     }
 

@@ -72,6 +72,12 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
 
   const { isLight } = useAppTheme();
   const [activeCategory, setActiveCategory] = useState<SettingCategory>(initialCategory ?? 'appearance');
+  const openOcrModels = () => {
+    setActiveCategory('dicts');
+    requestAnimationFrame(() => {
+      document.getElementById('ocr-models-card-anchor')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    });
+  };
 
   // 引导跳转：切到指定分类后滚动到 OCR 模型卡片，用户可直接一键下载
   const initialAppliedRef = useRef(false);
@@ -204,6 +210,15 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
             <span className="whitespace-nowrap">{isSaving ? '保存中...' : '保存更改'}</span>
           </button>
         </div>
+      </div>
+
+      <div className={`flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 ${isLight ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-white/10 bg-white/[0.03] text-zinc-300'}`} aria-label="常用设置入口">
+        <span className="text-[11px] font-semibold mr-1">常用入口</span>
+        <button type="button" onClick={openOcrModels} className="rounded-md px-2 py-1 text-[11px] border border-current/20 hover:bg-blue-500/10 cursor-pointer">OCR 模型</button>
+        <button type="button" onClick={() => setActiveCategory('online')} className="rounded-md px-2 py-1 text-[11px] border border-current/20 hover:bg-blue-500/10 cursor-pointer">翻译通道</button>
+        <button type="button" onClick={() => setActiveCategory('hotkey')} className="rounded-md px-2 py-1 text-[11px] border border-current/20 hover:bg-blue-500/10 cursor-pointer">按键和 AI</button>
+        <button type="button" onClick={() => setActiveCategory('preference')} className="rounded-md px-2 py-1 text-[11px] border border-current/20 hover:bg-blue-500/10 cursor-pointer">显示偏好</button>
+        <span className="ml-auto text-[10px] opacity-60">术语库、专业词库和备份可在下方分类中找到</span>
       </div>
 
       {/* 顶部二级分类分段选择器 */}

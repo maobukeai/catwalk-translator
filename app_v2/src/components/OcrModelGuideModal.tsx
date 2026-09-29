@@ -8,8 +8,8 @@ import type { OfflineModelStatus } from '../services/types';
  * 离线 OCR 模型新手引导弹窗。
  *
  * 触发条件（全部满足才出现，每个会话最多一次）：
- * 1. 没有任何一个版本的 OCR 模型「三件套」（det + rec + cls）完整安装 ——
- *    未装模型时 ONNX 不可用，OCR 会降到 WinRT（实测在这类 UI 文本上 0% 识别率）;
+ * 1. v6 Small / Tiny / Medium 均没有完整的「三件套」（det + rec + cls）——
+ *    未装模型时 ONNX 不可用，OCR 会降到 WinRT；
  * 2. 本地存储中没有「不再提示」标记（勾选"不再提示"后永不再现）。
  *
  * 「去下载」跳到 设置 → 专业词库（该页内嵌 OCR 模型管理卡片）并滚动定位。
@@ -21,7 +21,7 @@ export function hasAnyCompleteModelSet(status: OfflineModelStatus[]): boolean {
   if (!status || status.length === 0) return false;
   const byVersion = new Map<string, { det: boolean; rec: boolean; cls: boolean }>();
   for (const m of status) {
-    if (!m.installed || !m.version) continue;
+    if (!m.installed || (m.version !== 'v6' && m.version !== 'v6t' && m.version !== 'v6m')) continue;
     const parts = byVersion.get(m.version) ?? { det: false, rec: false, cls: false };
     if (m.id.includes('-det')) parts.det = true;
     else if (m.id.includes('-rec')) parts.rec = true;
@@ -111,8 +111,8 @@ export const OcrModelGuideModal: React.FC<{ onGoDownload: () => void }> = ({ onG
             内置识别——实测对 UI 小字几乎无法识别。
           </p>
           <p>
-            推荐下载 <b className={isLight ? 'text-slate-900' : 'text-zinc-100'}>PP-OCRv6 Tiny</b>（约 6.3MB，
-            实测最快：划词场景平均 7.3ms/词且 12/12 全对），也可在设置页对比其他版本。
+            推荐先下载 <b className={isLight ? 'text-slate-900' : 'text-zinc-100'}>PP-OCRv6 Small</b>（约 31MB，默认均衡档）；
+            Tiny 更快但复杂文字可能漏读，Medium 可按需试用。可在设置页下载并明确设置默认模型。
           </p>
         </div>
 

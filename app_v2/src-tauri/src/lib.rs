@@ -567,7 +567,11 @@ pub fn run() {
 
             if let Some(ref ver) = current_settings.ocr_version {
                 let effective = onnx_ocr::best_available_version(ver)
-                    .unwrap_or_else(|| ver.clone());
+                    .unwrap_or_else(|| match ver.as_str() {
+                        "v6" => "v6",
+                        "v6m" => "v6m",
+                        _ => "v6t",
+                    }.to_string());
                 onnx_ocr::set_active_version(&effective);
                 if &effective != ver {
                     eprintln!(

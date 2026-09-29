@@ -464,16 +464,32 @@ pub(crate) fn clean_ocr_text(raw: &str) -> String {
     }
     let chars: Vec<char> = trimmed.chars().collect();
     let mut cleaned = String::with_capacity(trimmed.len());
+    let is_ideograph = |c: char| matches!(c, '\u{3400}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}');
+    let is_cjk_punctuation = |c: char| matches!(c,
+        '\u{3001}'..='\u{303F}' | '\u{FF01}'..='\u{FF60}' | '“' | '”' | '‘' | '’'
+    );
     for i in 0..chars.len() {
-        if chars[i] == ' '
-            && i > 0 && i + 1 < chars.len() {
-                let prev_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&chars[i - 1]);
-                let next_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&chars[i + 1]);
-                if prev_cjk && next_cjk {
+        let current = chars[i];
+        if current == ' ' || current == '\u{3000}' || current == '\t' {
+            let previous = chars[..i].iter().rev().copied().find(|c| !c.is_whitespace());
+            let next = chars[i + 1..].iter().copied().find(|c| !c.is_whitespace());
+            if let (Some(left), Some(right)) = (previous, next) {
+                // WinRT commonly returns "有 ， 而且". Chinese punctuation
+                // and continuous Han text do not need OCR-invented gutters.
+                if (is_ideograph(left) && is_ideograph(right))
+                    || is_cjk_punctuation(left) || is_cjk_punctuation(right)
+                    || (is_ideograph(left) && matches!(right, '"' | '/' | '\''))
+                    || (is_ideograph(right) && matches!(left, '"' | '/' | '\''))
+                {
                     continue;
                 }
             }
-        cleaned.push(chars[i]);
+            if !cleaned.ends_with(' ') {
+                cleaned.push(' ');
+            }
+        } else {
+            cleaned.push(current);
+        }
     }
     // Conservative exact-token repairs for recurrent CJK glyph confusions in
     // desktop UI fonts. These source forms are not normal interface words, so
@@ -539,10 +555,22 @@ mod clean_text_tests {
         );
         assert_eq!(clean_ocr_text("普通文本"), "普通文本");
     }
+
+    #[test]
+    fn removes_spurious_cjk_gutters_without_damaging_latin_word_spaces() {
+        assert_eq!(
+            clean_ocr_text("有 ， 而且我认为下一步不该继续只盯着 OCR 模型 。"),
+            "有，而且我认为下一步不该继续只盯着 OCR 模型。"
+        );
+        assert_eq!(clean_ocr_text("设置 ： 重点验收字号 、 换行"), "设置：重点验收字号、换行");
+        assert_eq!(clean_ocr_text("影响 \" 看起来能不能用 \""), "影响\"看起来能不能用\"");
+        assert_eq!(clean_ocr_text("常用 / 高级"), "常用/高级");
+        assert_eq!(clean_ocr_text("OpenAI API key"), "OpenAI API key");
+    }
 }
 
 /// Run OCR on a cropped BMP byte slice.
-/// Engine priority: Rust-native ONNX (PP-OCRv3, offline) → WinRT → RapidOCR daemon.
+/// Engine priority: Rust-native ONNX (PP-OCRv6, offline) → WinRT → RapidOCR daemon.
 pub fn execute_native_ocr(crop_bmp_bytes: &[u8]) -> Result<OcrResult, String> {
     execute_native_ocr_with_retry(crop_bmp_bytes, 0)
 }
@@ -1211,6 +1239,122 @@ fn rescue_unconfirmed_short_tails(primary: &OcrResult, alternate: &OcrResult) ->
     Some(OcrResult { blocks })
 }
 
+#[cfg(target_os = "windows")]
+fn suspected_icon_tail(text: &str) -> Option<&str> {
+    let (prefix, tail) = text.trim().rsplit_once(' ')?;
+    if prefix.split_whitespace().count() < 3 || !(1..=2).contains(&tail.len())
+        || !tail.bytes().all(|c| c.is_ascii_lowercase())
+        || matches!(tail, "a" | "an" | "as" | "at" | "be" | "by" | "do" | "go"
+            | "he" | "if" | "in" | "is" | "it" | "me" | "my" | "no"
+            | "of" | "on" | "or" | "so" | "to" | "up" | "us" | "we")
+        || prefix.split_whitespace().last()?.len() < 4
+    {
+        return None;
+    }
+    Some(prefix)
+}
+
+/// A link icon may be read as a short word attached to the end of a correct
+/// line. Require WinRT and a fresh ONNX crop of the original pixels to agree
+/// before removing it; a short English word by itself is never enough.
+#[cfg(target_os = "windows")]
+fn rescue_attached_icon_tails(image: &[u8], primary: &OcrResult, alternate: &OcrResult) -> Option<OcrResult> {
+    if image.len() < 54 || &image[..2] != b"BM" { return None; }
+    let width = u32::from_le_bytes(image[18..22].try_into().ok()?);
+    let signed_height = i32::from_le_bytes(image[22..26].try_into().ok()?);
+    if signed_height >= 0 || width == 0 || width > 10000 { return None; }
+    let height = signed_height.unsigned_abs();
+    let mut result = primary.clone();
+    let mut changed = false;
+    for block in &mut result.blocks {
+        let Some(prefix) = suspected_icon_tail(&block.text) else { continue };
+        let rect = block.box_rect;
+        if rect.height < 24 || rect.width < 180 || block.confidence >= 0.98 { continue; }
+        let main_right = rect.x + rect.width as i32;
+        let Some(alt) = alternate.blocks.iter().find(|alt| {
+            let other = alt.box_rect;
+            let other_right = other.x + other.width as i32;
+            let gap = main_right - other_right;
+            let center_delta = ((rect.y + rect.height as i32 / 2)
+                - (other.y + other.height as i32 / 2)).abs();
+            alt.text.trim().eq_ignore_ascii_case(prefix)
+                && (other.x - rect.x).abs() <= (rect.height as i32 / 2).max(8)
+                && center_delta <= (rect.height as i32 / 3).max(8)
+                && (8..=(rect.height as i32 * 5 / 4)).contains(&gap)
+        }) else { continue };
+        let other = alt.box_rect;
+        let x = (other.x - 4).max(0);
+        let y = (rect.y - 4).max(0);
+        let right = (other.x + other.width as i32 + 4).min(width as i32);
+        let bottom = (rect.y + rect.height as i32 + 4).min(height as i32);
+        if right <= x || bottom <= y { continue; }
+        let Some(crop) = crop_bmp(image, width, height, PhysicalRect {
+            x, y, width: (right - x) as u32, height: (bottom - y) as u32,
+        }) else { continue };
+        let Ok(found) = crate::onnx_ocr::recognize_bmp(&crop) else { continue };
+        if found.blocks.len() != 1 || found.blocks[0].confidence < 0.95
+            || !found.blocks[0].text.trim().eq_ignore_ascii_case(prefix)
+        { continue; }
+        block.text = alt.text.clone();
+        block.box_rect.x = other.x;
+        block.box_rect.width = other.width;
+        changed = true;
+    }
+    changed.then_some(result)
+}
+
+/// Large Latin headings occasionally acquire a tiny CJK-looking suffix from
+/// background pixels. Only consult WinRT when that suffix could not possibly
+/// fit in the few pixels beyond WinRT's otherwise agreeing text rectangle.
+#[cfg(target_os = "windows")]
+fn impossible_mixed_suffix_prefix(block: &TextBlock) -> Option<&str> {
+    if block.confidence >= 0.90 || block.box_rect.height < 32 {
+        return None;
+    }
+    let text = block.text.trim();
+    let cut = text.find(is_cjk_char)?;
+    let prefix = &text[..cut];
+    let suffix = &text[cut..];
+    let suffix_chars = suffix.chars().count();
+    if !(2..=6).contains(&suffix_chars)
+        || suffix.chars().filter(|&c| is_cjk_char(c)).count() < 2
+        || !suffix.chars().all(|c| is_cjk_char(c) || c.is_ascii_digit())
+        || prefix.chars().filter(|c| c.is_ascii_alphabetic()).count() < 12
+        || !prefix.trim_start().chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    Some(prefix)
+}
+
+#[cfg(target_os = "windows")]
+fn rescue_impossible_mixed_suffix(mut primary: OcrResult, alternate: &OcrResult) -> OcrResult {
+    for block in &mut primary.blocks {
+        let Some(prefix) = impossible_mixed_suffix_prefix(block) else { continue };
+        let rect = block.box_rect;
+        let main_center = rect.y as f32 + rect.height as f32 * 0.5;
+        let candidate = alternate.blocks.iter().find(|alt| {
+            let other = alt.box_rect;
+            let other_center = other.y as f32 + other.height as f32 * 0.5;
+            let excess_width = rect.x + rect.width as i32 - other.x - other.width as i32;
+            alt.confidence >= 0.95
+                && !alt.text.chars().any(is_cjk_char)
+                && compact_ocr_alnum(prefix) == compact_ocr_alnum(&alt.text)
+                && (main_center - other_center).abs()
+                    <= (rect.height.min(other.height) as f32 * 0.25).max(5.0)
+                && (rect.x - other.x).abs() <= rect.height as i32 / 3
+                && (0..=rect.height as i32 / 2).contains(&excess_width)
+        });
+        if let Some(alt) = candidate {
+            block.text = alt.text.clone();
+            block.confidence = alt.confidence;
+            block.box_rect.x = alt.box_rect.x;
+            block.box_rect.width = alt.box_rect.width;
+        }
+    }
+    primary
+}
+
 fn ocr_texts_nearly_equal(left: &str, right: &str, max_edits: usize) -> bool {
     let normalize = |text: &str| text.split_whitespace().collect::<Vec<_>>()
         .join(" ").to_ascii_lowercase();
@@ -1472,6 +1616,102 @@ fn append_ocr_piece(target: &mut String, piece: &str) {
 fn compact_ocr_alnum(text: &str) -> String {
     text.chars().filter(|c| c.is_alphanumeric())
         .flat_map(char::to_lowercase).collect()
+}
+
+/// A low-confidence detector fragment can append one invented CJK glyph
+/// immediately after ASCII punctuation. Only remove it when a fresh crop of
+/// the *whole physical row* reads every other alphanumeric character the
+/// same way. This is intentionally narrower than replacing the full row:
+/// the crop may normalize spaces and punctuation that the first pass kept.
+fn confirmed_punctuation_tail_artifact(
+    row: &[&TextBlock], suspect: usize, candidate: &TextBlock,
+) -> bool {
+    let Some(block) = row.get(suspect) else { return false };
+    let text = block.text.trim_end();
+    let mut tail = text.chars().rev();
+    let Some(last) = tail.next() else { return false };
+    let Some(before) = tail.next() else { return false };
+    if !is_cjk_char(last) || !before.is_ascii_punctuation()
+        || block.confidence >= 0.92 || candidate.confidence < 0.95
+        || row.len() < 3
+    {
+        return false;
+    }
+    let original = row.iter().map(|part| part.text.as_str()).collect::<String>();
+    let expected = compact_ocr_alnum(&original);
+    let actual = compact_ocr_alnum(&candidate.text);
+    let mut without_tail = String::new();
+    for (index, part) in row.iter().enumerate() {
+        if index == suspect {
+            without_tail.extend(text.chars().take(text.chars().count() - 1));
+        } else {
+            without_tail.push_str(&part.text);
+        }
+    }
+    let cleaned = compact_ocr_alnum(&without_tail);
+    expected.chars().count() >= 24 && cleaned == actual
+        && expected.chars().count() == actual.chars().count() + 1
+}
+
+fn rescue_punctuation_tail_artifacts(image: &[u8], mut primary: OcrResult) -> OcrResult {
+    if image.len() < 54 || &image[..2] != b"BM" { return primary; }
+    let width = u32::from_le_bytes(match image[18..22].try_into() {
+        Ok(bytes) => bytes, Err(_) => return primary,
+    });
+    let signed_height = i32::from_le_bytes(match image[22..26].try_into() {
+        Ok(bytes) => bytes, Err(_) => return primary,
+    });
+    if signed_height >= 0 || width == 0 { return primary; }
+    let height = signed_height.unsigned_abs();
+    let mut reviewed = 0;
+    for index in 0..primary.blocks.len() {
+        let block = &primary.blocks[index];
+        let mut chars = block.text.trim_end().chars().rev();
+        if reviewed >= 2 || block.confidence >= 0.92
+            || !chars.next().is_some_and(is_cjk_char)
+            || !chars.next().is_some_and(|ch| ch.is_ascii_punctuation())
+        { continue; }
+        let center = block.box_rect.y + block.box_rect.height as i32 / 2;
+        let mut row_indices: Vec<usize> = primary.blocks.iter().enumerate()
+            .filter_map(|(i, other)| {
+                let r = other.box_rect;
+                let other_center = r.y + r.height as i32 / 2;
+                ((other_center - center).abs()
+                    <= block.box_rect.height.min(r.height) as i32 / 3)
+                    .then_some(i)
+            }).collect();
+        row_indices.sort_by_key(|&i| primary.blocks[i].box_rect.x);
+        let Some(suspect) = row_indices.iter().position(|&i| i == index) else { continue };
+        if row_indices.len() < 3 { continue; }
+        let left = row_indices.iter().map(|&i| primary.blocks[i].box_rect.x).min().unwrap();
+        let top = row_indices.iter().map(|&i| primary.blocks[i].box_rect.y).min().unwrap();
+        let right = row_indices.iter().map(|&i| {
+            let r = primary.blocks[i].box_rect; r.x + r.width as i32
+        }).max().unwrap();
+        let bottom = row_indices.iter().map(|&i| {
+            let r = primary.blocks[i].box_rect; r.y + r.height as i32
+        }).max().unwrap();
+        let pad_x = (block.box_rect.height as i32 / 3).max(5);
+        let pad_y = (block.box_rect.height as i32 / 2).max(5);
+        let x = (left - pad_x).max(0);
+        let y = (top - pad_y).max(0);
+        let end_x = (right + pad_x).min(width as i32);
+        let end_y = (bottom + pad_y).min(height as i32);
+        if end_x <= x || end_y <= y || end_x - x > 900 || end_y - y > 80 {
+            continue;
+        }
+        reviewed += 1;
+        let Some(crop) = crop_bmp(image, width, height, PhysicalRect {
+            x, y, width: (end_x - x) as u32, height: (end_y - y) as u32,
+        }) else { continue };
+        let Ok(found) = crate::onnx_ocr::recognize_bmp(&crop) else { continue };
+        if found.blocks.len() != 1 { continue; }
+        let row: Vec<&TextBlock> = row_indices.iter().map(|&i| &primary.blocks[i]).collect();
+        if confirmed_punctuation_tail_artifact(&row, suspect, &found.blocks[0]) {
+            primary.blocks[index].text.pop();
+        }
+    }
+    primary
 }
 
 /// OCR sometimes includes an icon at the left of a line's rectangle while
@@ -2083,11 +2323,20 @@ fn rescue_colored_icon_suffix(image: &[u8], mut primary: OcrResult) -> OcrResult
         }
         let source = block.text.trim();
         let Some(last) = source.chars().last() else { continue };
-        if is_cjk_char(last) || source.chars().count() < 5 {
+        if source.chars().count() < 5 || !source.chars().any(is_cjk_char) {
             continue;
         }
-        let prefix = &source[..source.len() - last.len_utf8()];
-        if prefix.chars().count() < 4 || !prefix.chars().any(is_cjk_char) {
+        // A mixed-script label can already read correctly while its detector
+        // box also covers the next coloured icon. Recheck the crop before the
+        // icon and shrink only the geometry in that case. The older branch
+        // additionally removes a hallucinated non-CJK trailing character.
+        let geometry_only = is_cjk_char(last) && source.chars().any(|c| c.is_ascii_alphanumeric());
+        let expected = if geometry_only {
+            source
+        } else {
+            &source[..source.len() - last.len_utf8()]
+        };
+        if !geometry_only && (is_cjk_char(last) || expected.chars().count() < 4) {
             continue;
         }
         let Some(split) = colored_toolbar_icon_split(image, block.box_rect) else { continue };
@@ -2105,12 +2354,12 @@ fn rescue_colored_icon_suffix(image: &[u8], mut primary: OcrResult) -> OcrResult
         let Some(crop) = crop_bmp(image, width, height, crop_rect) else { continue };
         let Ok(found) = crate::onnx_ocr::recognize_bmp(&crop) else { continue };
         if found.blocks.len() != 1 || found.blocks[0].confidence < 0.90
-            || found.blocks[0].confidence <= block.confidence + 0.04
-            || found.blocks[0].text.trim() != prefix.trim()
+            || (!geometry_only && found.blocks[0].confidence <= block.confidence + 0.04)
+            || found.blocks[0].text.trim() != expected
         {
             continue;
         }
-        block.text = prefix.to_owned();
+        block.text = expected.to_owned();
         block.confidence = found.blocks[0].confidence;
         block.box_rect.width = (split - block.box_rect.x).max(1) as u32;
     }
@@ -2122,8 +2371,8 @@ fn rescue_colored_icon_suffix(image: &[u8], mut primary: OcrResult) -> OcrResult
 /// engines agree on every ASCII letter/digit, and never insert beside source
 /// punctuation (so `v7.3.6` stays intact).
 fn agreed_ascii_word_spaces(primary: &str, alternate: &str) -> Option<String> {
-    if primary.chars().any(char::is_whitespace)
-        || !primary.chars().any(|c| c.is_ascii_digit())
+    if (!primary.chars().any(|c| c.is_ascii_digit())
+        && primary.split_whitespace().count() < 3)
         || !primary.chars().any(|c| c.is_ascii_alphabetic())
     {
         return None;
@@ -2157,16 +2406,22 @@ fn agreed_ascii_word_spaces(primary: &str, alternate: &str) -> Option<String> {
         }
     }
     let mut insert_at = Vec::new();
+    let mut agreed_existing = 0usize;
     for boundary in boundaries {
         let previous_end = source[boundary - 1].0 + source[boundary - 1].1.len_utf8();
         let next_start = source[boundary].0;
         if previous_end == next_start {
             insert_at.push(next_start);
+        } else if primary[previous_end..next_start].chars().any(char::is_whitespace) {
+            agreed_existing += 1;
         }
     }
     insert_at.sort_unstable();
     insert_at.dedup();
-    if insert_at.len() < 2 {
+    // Two new gaps were the original conservative threshold. A partially
+    // spaced line can also provide independent alignment evidence: two word
+    // boundaries already agree, so one missing boundary is safe to transfer.
+    if insert_at.len() < 2 && !(insert_at.len() == 1 && agreed_existing >= 2) {
         return None;
     }
     let mut recovered = primary.to_owned();
@@ -2192,15 +2447,27 @@ fn should_review_compact_ascii_spacing(result: &OcrResult) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn should_review_missing_terminal_prompt(result: &OcrResult) -> bool {
+    result.blocks.len() >= 10 && result.blocks.iter().any(|block| {
+        let text = block.text.trim();
+        block.box_rect.x <= 40 && block.box_rect.height <= 24
+            && text.is_ascii() && text.contains('@') && text.contains('.')
+            && text.split_whitespace().count() >= 2 && !text.starts_with('>')
+    })
+}
+
+#[cfg(target_os = "windows")]
 fn restore_agreed_terminal_row_spacing(mut primary: OcrResult, alternate: &OcrResult) -> OcrResult {
     for block in &mut primary.blocks {
-        if block.confidence < 0.80 || block.text.chars().any(char::is_whitespace) {
+        if block.confidence < 0.80 {
             continue;
         }
         let bbox = block.box_rect;
         let center = bbox.y as f32 + bbox.height as f32 * 0.5;
         let left = bbox.x - 6;
-        let right = bbox.x + bbox.width as i32 + 6;
+        // WinRT may include a closing punctuation mark just beyond the ONNX
+        // box; exact alphanumeric agreement below still guards the transfer.
+        let right = bbox.x + bbox.width as i32 + bbox.height.max(6) as i32;
         let mut row: Vec<&TextBlock> = alternate.blocks.iter().filter(|candidate| {
             let rect = candidate.box_rect;
             let other_center = rect.y as f32 + rect.height as f32 * 0.5;
@@ -2217,13 +2484,393 @@ fn restore_agreed_terminal_row_spacing(mut primary: OcrResult, alternate: &OcrRe
             block.text = recovered;
         }
     }
+    // ONNX often detects a compact first token and the remainder as separate
+    // boxes ("VITEV7.3.6" + "ready in 239 ms"). The per-box check cannot
+    // compare either fragment with WinRT's full physical line. Align the
+    // entire row, then transfer only spaces that fall inside its first box;
+    // keep every original box and its geometry intact for in-situ rendering.
+    let lines = crate::reconstruction::LineClusterer::cluster_into_lines(primary.blocks.clone(), 18.0);
+    for line in lines {
+        if line.len() < 2 || line.iter().any(|block| !block.text.is_ascii()) { continue; }
+        let joined = line.iter().map(|block| block.text.as_str()).collect::<Vec<_>>().join(" ");
+        if joined.len() < 20 { continue; }
+        let first = &line[0];
+        if first.text.chars().any(char::is_whitespace) { continue; }
+        let left = first.box_rect.x;
+        let right = line.iter().map(|block| block.box_rect.x + block.box_rect.width as i32)
+            .max().unwrap_or(left);
+        let center = first.box_rect.y + first.box_rect.height as i32 / 2;
+        // WinRT can split the same sentence into boxes with a >8px gap, so
+        // gather the matching physical row by y and bounded x instead of
+        // asking the stricter layout clusterer to join those boxes.
+        let mut other: Vec<&TextBlock> = alternate.blocks.iter().filter(|block| {
+            let rect = block.box_rect;
+            let other_center = rect.y + rect.height as i32 / 2;
+            (other_center - center).abs() <= 6
+                && rect.x >= left - 12
+                && rect.x + rect.width as i32 <= right + first.box_rect.height as i32
+        }).collect();
+        if other.is_empty() { continue; }
+        other.sort_by_key(|block| block.box_rect.x);
+        if (other[0].box_rect.x - left).abs() > 12 { continue; }
+        let other_right = other.iter().map(|block| block.box_rect.x + block.box_rect.width as i32)
+            .max().unwrap_or(left);
+        if (other_right - right).abs() > first.box_rect.height as i32 { continue; }
+        let other_text = other.iter().map(|block| block.text.as_str()).collect::<Vec<_>>().join(" ");
+        let Some(recovered) = agreed_ascii_word_spaces(&joined, &other_text) else { continue; };
+        let target_nonspace = first.text.bytes().filter(|byte| !byte.is_ascii_whitespace()).count();
+        let mut seen = 0usize;
+        let end = recovered.char_indices().find_map(|(index, ch)| {
+            if !ch.is_whitespace() { seen += 1; }
+            (seen == target_nonspace).then_some(index + ch.len_utf8())
+        });
+        let Some(end) = end else { continue; };
+        let new_first = &recovered[..end];
+        if new_first == first.text { continue; }
+        if let Some(block) = primary.blocks.iter_mut().find(|block|
+            block.box_rect == first.box_rect && block.text == first.text)
+        {
+            block.text = new_first.to_owned();
+        }
+    }
+    primary
+}
+
+#[cfg(target_os = "windows")]
+fn restore_agreed_prompt_prefix(mut primary: OcrResult, alternate: &OcrResult) -> OcrResult {
+    for block in &mut primary.blocks {
+        let text = block.text.trim();
+        if text.len() < 8 || text.starts_with('>') || block.confidence < 0.9 {
+            continue;
+        }
+        let rect = block.box_rect;
+        let main_center = rect.y + rect.height as i32 / 2;
+        let main_right = rect.x + rect.width as i32;
+        let Some(alt) = alternate.blocks.iter().find(|candidate| {
+            let Some(rest) = candidate.text.trim().strip_prefix('>') else { return false };
+            let other = candidate.box_rect;
+            let other_center = other.y + other.height as i32 / 2;
+            let other_right = other.x + other.width as i32;
+            let prefix_pixels = rect.x - other.x;
+            (6..=(rect.height as i32 * 3 / 2).max(10)).contains(&prefix_pixels)
+                && (main_center - other_center).abs()
+                    <= (rect.height.min(other.height) as i32 / 2).max(5)
+                && (main_right - other_right).abs() <= rect.height as i32
+                && ocr_texts_nearly_equal(text, rest.trim(), 5)
+        }) else { continue };
+        block.text = format!("> {}", text);
+        block.box_rect.width = (main_right - alt.box_rect.x).max(1) as u32;
+        block.box_rect.x = alt.box_rect.x;
+    }
+    primary
+}
+
+/// A nearly uniform dark capture (terminal / log pane) has strong horizontal
+/// text strokes even when DBNet misses an entire row. This finds *uncovered*
+/// physical rows from pixels only; it never turns pixels into text directly.
+/// Each row still needs a high-confidence ONNX crop before entering the OCR
+/// result. Thin separators, window chrome and ordinary light pages are gated
+/// out so a drawing is not silently promoted to a translatable label.
+fn dark_pixel_text_rows(image: &[u8]) -> Vec<PhysicalRect> {
+    if image.len() < 54 || &image[..2] != b"BM" { return Vec::new(); }
+    let offset = u32::from_le_bytes(match image[10..14].try_into() {
+        Ok(bytes) => bytes, Err(_) => return Vec::new(),
+    }) as usize;
+    let width = u32::from_le_bytes(match image[18..22].try_into() {
+        Ok(bytes) => bytes, Err(_) => return Vec::new(),
+    }) as usize;
+    let signed_height = i32::from_le_bytes(match image[22..26].try_into() {
+        Ok(bytes) => bytes, Err(_) => return Vec::new(),
+    });
+    let bpp = u16::from_le_bytes(match image[28..30].try_into() {
+        Ok(bytes) => bytes, Err(_) => return Vec::new(),
+    });
+    if signed_height >= 0 || bpp != 32 || width < 500 || !(250..=2500).contains(&signed_height.unsigned_abs()) {
+        return Vec::new();
+    }
+    let height = signed_height.unsigned_abs() as usize;
+    let Some(stride) = width.checked_mul(4) else { return Vec::new() };
+    let Some(end) = stride.checked_mul(height).and_then(|bytes| offset.checked_add(bytes)) else {
+        return Vec::new();
+    };
+    if end > image.len() { return Vec::new(); }
+    let pixels = &image[offset..end];
+    let mut dark = 0usize;
+    let mut sampled = 0usize;
+    for y in (36..height).step_by(16) {
+        for x in (0..width).step_by(16) {
+            let p = y * stride + x * 4;
+            if pixels[p].max(pixels[p + 1]).max(pixels[p + 2]) <= 45 { dark += 1; }
+            sampled += 1;
+        }
+    }
+    if sampled == 0 || dark * 100 < sampled * 78 { return Vec::new(); }
+
+    let threshold = (width / 140).max(8);
+    let mut counts = vec![0usize; height];
+    let mut lefts = vec![width; height];
+    let mut rights = vec![0usize; height];
+    for y in 36..height {
+        for x in 0..width {
+            let p = y * stride + x * 4;
+            if pixels[p].max(pixels[p + 1]).max(pixels[p + 2]) >= 95 {
+                counts[y] += 1;
+                lefts[y] = lefts[y].min(x);
+                rights[y] = rights[y].max(x);
+            }
+        }
+    }
+    let mut rows = Vec::new();
+    let mut y = 36usize;
+    while y < height {
+        if counts[y] < threshold { y += 1; continue; }
+        let start = y;
+        let mut left = width;
+        let mut right = 0usize;
+        let mut ink = 0usize;
+        while y < height && counts[y] >= threshold {
+            left = left.min(lefts[y]);
+            right = right.max(rights[y]);
+            ink += counts[y];
+            y += 1;
+        }
+        let row_height = y - start;
+        if !(8..=26).contains(&row_height) || right.saturating_sub(left) < 50 || ink < 60 {
+            continue;
+        }
+        let x0 = left.saturating_sub(7);
+        let y0 = start.saturating_sub(5);
+        let x1 = (right + 8).min(width);
+        let y1 = (y + 5).min(height);
+        rows.push(PhysicalRect {
+            x: x0 as i32, y: y0 as i32,
+            width: (x1 - x0) as u32, height: (y1 - y0) as u32,
+        });
+    }
+    rows
+}
+
+fn dark_uncovered_text_rows(image: &[u8], primary: &OcrResult) -> Vec<PhysicalRect> {
+    // Without several trusted neighboring rows there is no evidence that the
+    // bright strokes belong to a text-dense terminal rather than artwork.
+    if primary.blocks.len() < 3 { return Vec::new(); }
+    dark_pixel_text_rows(image).into_iter().filter(|row| {
+        let ink_top = row.y + 5;
+        let ink_bottom = row.y + row.height as i32 - 5;
+        !primary.blocks.iter().any(|block| {
+            let rect = block.box_rect;
+            let center = rect.y + rect.height as i32 / 2;
+            center >= ink_top - 3 && center <= ink_bottom + 3
+        })
+    }).collect()
+}
+
+fn rescue_dark_uncovered_text_rows(image: &[u8], mut primary: OcrResult) -> OcrResult {
+    let image_width = if image.len() >= 22 {
+        u32::from_le_bytes(image[18..22].try_into().unwrap_or([0; 4]))
+    } else { 0 };
+    let image_height = if image.len() >= 26 {
+        i32::from_le_bytes(image[22..26].try_into().unwrap_or([0; 4])).unsigned_abs()
+    } else { 0 };
+    for row in dark_uncovered_text_rows(image, &primary).into_iter().take(3) {
+        let Some(crop) = crop_bmp(image, image_width, image_height, row) else { continue };
+        let Ok(found) = crate::onnx_ocr::recognize_bmp(&crop) else { continue };
+        for mut block in found.blocks {
+            let center = row.y + block.box_rect.y + block.box_rect.height as i32 / 2;
+            if block.confidence < 0.85 || block.box_rect.height < 6
+                || block.text.chars().filter(|ch| ch.is_alphanumeric()).count() < 4
+                || center < row.y + 2 || center > row.y + row.height as i32 - 2
+            { continue; }
+            block.box_rect.x += row.x;
+            block.box_rect.y += row.y;
+            if primary.blocks.iter().any(|existing| {
+                let a = existing.box_rect;
+                let b = block.box_rect;
+                let overlap_x = (a.x + a.width as i32).min(b.x + b.width as i32) - a.x.max(b.x);
+                let overlap_y = (a.y + a.height as i32).min(b.y + b.height as i32) - a.y.max(b.y);
+                overlap_x.max(0) as u32 * overlap_y.max(0) as u32
+                    > b.width.saturating_mul(b.height) / 3
+            }) { continue; }
+            primary.blocks.push(block);
+        }
+    }
+    primary.blocks.sort_by_key(|block| (block.box_rect.y, block.box_rect.x));
+    primary
+}
+
+/// A detector can read the start of a terminal command but miss its trailing
+/// switches. Only a whole-row crop that preserves all previously recognized
+/// alphanumeric content and extends to the visible ink may replace that row.
+fn rescue_dark_command_tails(image: &[u8], mut primary: OcrResult) -> OcrResult {
+    if primary.blocks.len() < 6 || image.len() < 26 { return primary; }
+    let width = u32::from_le_bytes(image[18..22].try_into().unwrap_or([0; 4]));
+    let height = i32::from_le_bytes(image[22..26].try_into().unwrap_or([0; 4])).unsigned_abs();
+    let compact = |text: &str| -> String {
+        text.chars().filter(|ch| ch.is_alphanumeric())
+            .flat_map(char::to_lowercase).collect()
+    };
+    let mut recovered = 0;
+    for row in dark_pixel_text_rows(image) {
+        if recovered >= 2 { break; }
+        let ink_top = row.y + 5;
+        let ink_bottom = row.y + row.height as i32 - 5;
+        let mut row_blocks: Vec<_> = primary.blocks.iter().filter(|block| {
+            let rect = block.box_rect;
+            let center = rect.y + rect.height as i32 / 2;
+            center >= ink_top - 3 && center <= ink_bottom + 3
+                && rect.x >= row.x - 8
+                && rect.x < row.x + row.width as i32
+        }).cloned().collect();
+        if row_blocks.len() < 2 { continue; }
+        row_blocks.sort_by_key(|block| block.box_rect.x);
+        let original = row_blocks.iter().map(|block| block.text.as_str())
+            .collect::<Vec<_>>().join(" ");
+        if !original.contains("Running") && !original.contains("cargo")
+            && !original.contains("VITE") && !original.contains("DevCommand")
+        { continue; }
+        let old_left = row_blocks.iter().map(|block| block.box_rect.x).min().unwrap_or(0);
+        let old_right = row_blocks.iter().map(|block| block.box_rect.x + block.box_rect.width as i32)
+            .max().unwrap_or(0);
+        let ink_right = row.x + row.width as i32 - 8;
+        if ink_right - old_right < 20 { continue; }
+        let Some(crop) = crop_bmp(image, width, height, row) else { continue };
+        let Ok(result) = crate::onnx_ocr::recognize_bmp(&crop) else { continue };
+        if result.blocks.len() != 1 { continue; }
+        let mut candidate = result.blocks.into_iter().next().unwrap();
+        // Paddle's CTC decoder can use a mathematical minus for a shell dash;
+        // a command crop gives enough context to normalize that glyph safely.
+        candidate.text = candidate.text.replace('−', "-").replace('–', "-");
+        candidate.box_rect.x += row.x;
+        candidate.box_rect.y += row.y;
+        let new_right = candidate.box_rect.x + candidate.box_rect.width as i32;
+        let old_compact = compact(&original);
+        let new_compact = compact(&candidate.text);
+        if candidate.confidence < 0.90 || candidate.text.contains('\n')
+            || candidate.box_rect.height > row.height
+            || (candidate.box_rect.x - old_left).abs() > 12
+            || new_right < old_right + 16 || new_right > ink_right + 12
+            || old_compact.len() < 24 || !new_compact.contains(&old_compact)
+        { continue; }
+        primary.blocks.retain(|block| !row_blocks.iter().any(|old| {
+            old.box_rect == block.box_rect && old.text == block.text
+        }));
+        primary.blocks.push(candidate);
+        recovered += 1;
+    }
+    primary.blocks.sort_by_key(|block| (block.box_rect.y, block.box_rect.x));
+    primary
+}
+
+/// Return the one CJK glyph that a full physical-row crop can prove was
+/// omitted exactly between two neighboring detector fragments. Ignore spaces
+/// and punctuation because crop OCR is less reliable for terminal ellipses.
+fn one_missing_cjk_at_fragment_gap(row: &[TextBlock], candidate: &str) -> Option<(usize, char)> {
+    let compact = |text: &str| -> Vec<char> {
+        text.chars().filter(|ch| ch.is_alphanumeric())
+            .flat_map(char::to_lowercase).collect()
+    };
+    let old: Vec<char> = row.iter().flat_map(|block| compact(&block.text)).collect();
+    let new = compact(candidate);
+    if old.len() < 12 || new.len() != old.len() + 1 { return None; }
+    let mut offset = 0usize;
+    let mut found = None;
+    for index in 1..row.len() {
+        offset += compact(&row[index - 1].text).len();
+        let left = &row[index - 1];
+        let right = &row[index];
+        let gap = right.box_rect.x - left.box_rect.x - left.box_rect.width as i32;
+        if !(4..=22).contains(&gap)
+            || !left.text.chars().last().is_some_and(is_cjk_char)
+            || !right.text.chars().next().is_some_and(is_cjk_char)
+            || !new.get(offset).is_some_and(|ch| is_cjk_char(*ch))
+            || new[..offset] != old[..offset]
+            || new[offset + 1..] != old[offset..]
+        { continue; }
+        if found.is_some() { return None; }
+        found = Some((index - 1, new[offset]));
+    }
+    found
+}
+
+/// A whole-row crop can recover a single glyph lost in a narrow CJK fragment
+/// gap. Keep the original boxes and every other recognized character: the
+/// crop often misreads final punctuation even when its missing glyph is clear.
+fn rescue_dark_cjk_fragment_gaps(image: &[u8], mut primary: OcrResult) -> OcrResult {
+    if primary.blocks.len() < 12 || image.len() < 26 { return primary; }
+    let width = u32::from_le_bytes(image[18..22].try_into().unwrap_or([0; 4]));
+    let height = i32::from_le_bytes(image[22..26].try_into().unwrap_or([0; 4])).unsigned_abs();
+    let mut attempts = 0usize;
+    let mut recovered = 0usize;
+    for row in dark_pixel_text_rows(image) {
+        if attempts >= 4 || recovered >= 2 { break; }
+        let ink_top = row.y + 5;
+        let ink_bottom = row.y + row.height as i32 - 5;
+        let mut row_blocks: Vec<_> = primary.blocks.iter().filter(|block| {
+            let rect = block.box_rect;
+            let center = rect.y + rect.height as i32 / 2;
+            center >= ink_top - 3 && center <= ink_bottom + 3
+                && rect.x >= row.x - 8 && rect.x < row.x + row.width as i32
+        }).cloned().collect();
+        if row_blocks.len() < 3 { continue; }
+        row_blocks.sort_by_key(|block| block.box_rect.x);
+        let plausible_gap = row_blocks.windows(2).any(|pair| {
+            let gap = pair[1].box_rect.x - pair[0].box_rect.x - pair[0].box_rect.width as i32;
+            (4..=22).contains(&gap)
+                && pair[0].text.chars().last().is_some_and(is_cjk_char)
+                && pair[1].text.chars().next().is_some_and(is_cjk_char)
+        });
+        if !plausible_gap { continue; }
+        attempts += 1;
+        // Pixel projection can include scrollbar specks and trim the top of
+        // glyphs. Crop from trusted boxes with modest context instead: the
+        // real terminal row recovers 口 at (8,95) 370x32, whereas the broad
+        // projection crop (0,99) 388x25 repeats the omission.
+        let old_left = row_blocks[0].box_rect.x;
+        let old_right = row_blocks.iter().map(|block| block.box_rect.x + block.box_rect.width as i32)
+            .max().unwrap_or(old_left);
+        let old_top = row_blocks.iter().map(|block| block.box_rect.y).min().unwrap_or(row.y);
+        let old_bottom = row_blocks.iter().map(|block| block.box_rect.y + block.box_rect.height as i32)
+            .max().unwrap_or(old_top);
+        let crop_x = (old_left - 10).max(0);
+        let crop_y = (old_top - 7).max(0);
+        let crop_right = (old_right + 24).min(width as i32);
+        let crop_bottom = (old_bottom + 7).min(height as i32);
+        let crop_rect = PhysicalRect { x: crop_x, y: crop_y,
+            width: (crop_right - crop_x).max(1) as u32,
+            height: (crop_bottom - crop_y).max(1) as u32 };
+        let Some(crop) = crop_bmp(image, width, height, crop_rect) else { continue };
+        let Ok(found) = crate::onnx_ocr::recognize_bmp(&crop) else { continue };
+        if found.blocks.len() != 1 { continue; }
+        let candidate = &found.blocks[0];
+        let new_left = crop_x + candidate.box_rect.x;
+        let new_right = new_left + candidate.box_rect.width as i32;
+        if candidate.confidence < 0.90 || (new_left - old_left).abs() > 12
+            || new_right < old_right - 6 || new_right > old_right + 40
+            || candidate.box_rect.height > row.height
+        { continue; }
+        let Some((left_index, glyph)) = one_missing_cjk_at_fragment_gap(&row_blocks, &candidate.text)
+        else { continue; };
+        let left = &row_blocks[left_index];
+        let next = &row_blocks[left_index + 1];
+        if let Some(block) = primary.blocks.iter_mut().find(|block|
+            block.box_rect == left.box_rect && block.text == left.text)
+        {
+            block.text.push(glyph);
+            block.box_rect.width = (next.box_rect.x - block.box_rect.x).max(1) as u32;
+            recovered += 1;
+        }
+    }
     primary
 }
 
 #[cfg(target_os = "windows")]
 fn rescue_fragmented_onnx(image: &[u8], primary: OcrResult) -> OcrResult {
+    let primary = rescue_dark_cjk_fragment_gaps(image, primary);
     let primary = tighten_unseen_leading_pixels(image, primary);
     let primary = rescue_overlapping_rows(image, primary);
+    let primary = rescue_punctuation_tail_artifacts(image, primary);
+    let primary = rescue_dark_uncovered_text_rows(image, primary);
+    let primary = rescue_dark_command_tails(image, primary);
     let primary = rescue_mixed_script_urls(image, primary);
     // A small user-selected crop may contain only one toolbar label and one
     // icon, so it must not depend on the full-screen dense-toolbar heuristic.
@@ -2234,8 +2881,16 @@ fn rescue_fragmented_onnx(image: &[u8], primary: OcrResult) -> OcrResult {
     let large_fragmented_rows = should_review_large_fragmented_rows(&primary);
     let large_word_rows = should_review_large_word_rows(&primary);
     let compact_spacing = should_review_compact_ascii_spacing(&primary);
+    let missing_prompt = should_review_missing_terminal_prompt(&primary);
+    let impossible_suffix = primary.blocks.iter().any(|block|
+        impossible_mixed_suffix_prefix(block).is_some());
+    let attached_icon_tail = primary.blocks.iter().any(|block| {
+        suspected_icon_tail(&block.text).is_some() && block.box_rect.height >= 24
+            && block.box_rect.width >= 180 && block.confidence < 0.98
+    });
     if !fragmented && !suspicious_gaps && !dense_toolbar && !large_fragmented_rows
-        && !compact_spacing && !large_word_rows
+        && !compact_spacing && !missing_prompt && !large_word_rows && !impossible_suffix
+        && !attached_icon_tail
     {
         return primary;
     }
@@ -2244,12 +2899,23 @@ fn rescue_fragmented_onnx(image: &[u8], primary: OcrResult) -> OcrResult {
         Err(_) if dense_toolbar => OcrResult { blocks: Vec::new() },
         Err(_) => return primary,
     };
-    let primary = restore_agreed_terminal_row_spacing(primary, &alternate);
+    let primary = restore_agreed_prompt_prefix(
+        restore_agreed_terminal_row_spacing(primary, &alternate), &alternate);
+    let primary = if impossible_suffix {
+        rescue_impossible_mixed_suffix(primary, &alternate)
+    } else {
+        primary
+    };
+    let primary = if attached_icon_tail {
+        rescue_attached_icon_tails(image, &primary, &alternate).unwrap_or(primary)
+    } else {
+        primary
+    };
     // A spacing-only review grants the second engine authority over *gaps in
     // agreeing rows*, never the entire image. WinRT reads the VITE spaces but
     // corrupts the terminal's URL, numbers and paths; generic whole-result
     // selection would turn a local improvement into a major regression.
-    if compact_spacing && !fragmented && !suspicious_gaps && !dense_toolbar
+    if (compact_spacing || missing_prompt) && !fragmented && !suspicious_gaps && !dense_toolbar
         && !large_fragmented_rows
     {
         return primary;
@@ -2319,7 +2985,9 @@ fn rescue_fragmented_onnx(_image: &[u8], primary: OcrResult) -> OcrResult {
 #[cfg(test)]
 mod fragmentation_review_tests {
     #[cfg(target_os = "windows")]
-    use super::restore_agreed_terminal_row_spacing;
+    use super::{restore_agreed_terminal_row_spacing, rescue_impossible_mixed_suffix,
+        impossible_mixed_suffix_prefix, suspected_icon_tail,
+        restore_agreed_prompt_prefix, should_review_missing_terminal_prompt};
     use super::{
         alternate_covers_more_text, prefer_alternate_result, should_review_fragmented_result,
         should_review_suspicious_row_gaps, rescue_suspicious_rows, fill_primary_row_gaps,
@@ -2330,6 +2998,10 @@ mod fragmentation_review_tests {
         cjk_line_tail_extra, is_plausible_url_repair,
         restore_agreed_mixed_script_spaces,
         colored_toolbar_icon_split,
+        confirmed_punctuation_tail_artifact,
+        dark_uncovered_text_rows, rescue_dark_uncovered_text_rows,
+        rescue_dark_command_tails, one_missing_cjk_at_fragment_gap,
+        rescue_dark_cjk_fragment_gaps, rescue_fragmented_onnx,
         agreed_ascii_word_spaces,
         should_review_compact_ascii_spacing,
         BoundingBox, OcrResult, TextBlock,
@@ -2352,6 +3024,140 @@ mod fragmentation_review_tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn row_crop_may_supply_only_one_missing_chinese_glyph_at_a_real_gap() {
+        let row = vec![
+            TextBlock { text: "[*]".into(), confidence: 0.97,
+                box_rect: BoundingBox { x: 18, y: 102, width: 22, height: 18 } },
+            TextBlock { text: "正在检测并释放".into(), confidence: 0.99,
+                box_rect: BoundingBox { x: 53, y: 102, width: 121, height: 18 } },
+            TextBlock { text: "1420".into(), confidence: 0.99,
+                box_rect: BoundingBox { x: 187, y: 102, width: 35, height: 18 } },
+            TextBlock { text: "端".into(), confidence: 0.97,
+                box_rect: BoundingBox { x: 231, y: 102, width: 22, height: 18 } },
+            TextBlock { text: "与历史进程".into(), confidence: 0.99,
+                box_rect: BoundingBox { x: 261, y: 102, width: 93, height: 18 } },
+        ];
+        assert_eq!(one_missing_cjk_at_fragment_gap(&row,
+            "[*]正在检测并释放1420 端口与历史进程。."), Some((3, '口')));
+        assert_eq!(one_missing_cjk_at_fragment_gap(&row,
+            "[*]正在检测并释放1421 端口与历史进程。."), None,
+            "a disagreeing digit must veto the crop even if it reads the missing glyph");
+        assert_eq!(one_missing_cjk_at_fragment_gap(&row,
+            "[*]正在检测并释放1420 端口与历史进程新。."), None,
+            "two extra glyphs must not be silently accepted");
+    }
+
+    #[test]
+    #[ignore = "needs installed v6 Tiny ONNX model; run with CATWALK_OCR_MODELS_DIR"]
+    fn recovers_a_wholly_missed_dark_terminal_row_without_reading_separator_lines() {
+        let png = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/windows_terminal_dense.png")).unwrap();
+        let rgba = image::load_from_memory(&png).unwrap().to_rgba8();
+        let (width, height) = rgba.dimensions();
+        let mut bmp = vec![0u8; 54 + (width * height * 4) as usize];
+        bmp[0..2].copy_from_slice(b"BM");
+        let file_len = bmp.len() as u32;
+        bmp[2..6].copy_from_slice(&file_len.to_le_bytes());
+        bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+        bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&(width as i32).to_le_bytes());
+        bmp[22..26].copy_from_slice(&(-(height as i32)).to_le_bytes());
+        bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&32u16.to_le_bytes());
+        for (dst, pixel) in bmp[54..].chunks_exact_mut(4).zip(rgba.pixels()) {
+            dst.copy_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+        }
+        crate::onnx_ocr::switch_active_version("v6t").unwrap();
+        let mut detected = crate::onnx_ocr::recognize_bmp(&bmp).unwrap();
+        let cjk_repaired = rescue_dark_cjk_fragment_gaps(&bmp, detected.clone());
+        assert!(cjk_repaired.blocks.iter().any(|block|
+            (95..115).contains(&block.box_rect.y) && block.text.contains("端口")),
+            "full-row reread should recover the missing CJK glyph");
+        let whole_pipeline = rescue_fragmented_onnx(&bmp, detected.clone());
+        assert!(whole_pipeline.blocks.iter().any(|block|
+            (95..115).contains(&block.box_rect.y) && block.text.contains("端口")),
+            "later OCR review stages must preserve the verified glyph: {:?}",
+            whole_pipeline.blocks.iter().filter(|block| block.box_rect.y < 130)
+                .map(|block| block.text.as_str()).collect::<Vec<_>>());
+        let repaired_tails = rescue_dark_command_tails(&bmp, detected.clone());
+        assert!(repaired_tails.blocks.iter().any(|block| {
+            block.text.contains("Running DevCommand")
+                && block.text.contains("--no-default-features --color always --")
+        }), "a tight physical row crop should recover the omitted command tail");
+        detected.blocks.retain(|block| {
+            let center = block.box_rect.y + block.box_rect.height as i32 / 2;
+            !(120..142).contains(&center)
+        });
+        let gaps = dark_uncovered_text_rows(&bmp, &detected);
+        assert!(gaps.iter().any(|row| row.y <= 123 && row.y + row.height as i32 >= 137),
+            "green status row should be an uncovered pixel row: {gaps:?}");
+        assert!(!gaps.iter().any(|row| row.y <= 72 && row.y + row.height as i32 >= 75),
+            "two-pixel rule characters are not a text row: {gaps:?}");
+        let restored = rescue_dark_uncovered_text_rows(&bmp, detected);
+        assert!(restored.blocks.iter().any(|block| block.text.contains("端口1420/1421")),
+            "a cropped, high-confidence OCR result should restore the status row");
+    }
+
+    #[test]
+    fn punctuation_tail_requires_full_row_agreement_before_deletion() {
+        let row = vec![
+            TextBlock { text: "*后端热重载".into(), confidence: 0.99,
+                box_rect: BoundingBox { x: 30, y: 45, width: 113, height: 19 } },
+            TextBlock { text: "[Cargo Watch]:鑫".into(), confidence: 0.88,
+                box_rect: BoundingBox { x: 146, y: 45, width: 133, height: 19 } },
+            TextBlock { text: "修改 Rust 代码自动重新编译并重载".into(), confidence: 0.99,
+                box_rect: BoundingBox { x: 280, y: 45, width: 294, height: 19 } },
+        ];
+        let references: Vec<_> = row.iter().collect();
+        let candidate = TextBlock { text: "*后端热重载[CargoWatch]：修改Rust代码自动重新编译并重载".into(),
+            confidence: 0.99,
+            box_rect: BoundingBox { x: 30, y: 45, width: 544, height: 19 } };
+        assert!(confirmed_punctuation_tail_artifact(&references, 1, &candidate));
+        let incomplete = TextBlock { text: "*后端热重载[CargoWatch]：修改Rust代码自动重新编译".into(),
+            ..candidate.clone() };
+        assert!(!confirmed_punctuation_tail_artifact(&references, 1, &incomplete));
+        let mut real_character = row.clone();
+        real_character[1].confidence = 0.98;
+        let real_refs: Vec<_> = real_character.iter().collect();
+        assert!(!confirmed_punctuation_tail_artifact(&real_refs, 1, &candidate));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn short_icon_tail_review_does_not_flag_common_english_endings() {
+        assert_eq!(suspected_icon_tail("devices in your settings ca"),
+            Some("devices in your settings"));
+        assert_eq!(suspected_icon_tail("you can sign in"), None);
+        assert_eq!(suspected_icon_tail("you can sign up"), None);
+        assert_eq!(suspected_icon_tail("three words are fine"), None);
+        assert_eq!(suspected_icon_tail("settings ca"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn trims_only_geometrically_impossible_mixed_script_heading_tail() {
+        let primary = OcrResult { blocks: vec![TextBlock {
+            text: "changing your password美藝5堂".into(), confidence: 0.82,
+            box_rect: BoundingBox { x: 33, y: 130, width: 576, height: 51 },
+        }] };
+        let alternate = OcrResult { blocks: vec![TextBlock {
+            text: "changing your password:".into(), confidence: 0.99,
+            box_rect: BoundingBox { x: 41, y: 133, width: 558, height: 50 },
+        }] };
+        assert!(impossible_mixed_suffix_prefix(&primary.blocks[0]).is_some());
+        let fixed = rescue_impossible_mixed_suffix(primary.clone(), &alternate);
+        assert_eq!(fixed.blocks[0].text, "changing your password:");
+        assert_eq!(fixed.blocks[0].box_rect.width, 558);
+
+        let mut legitimate = primary;
+        legitimate.blocks[0].text = "changing your password欢迎".into();
+        legitimate.blocks[0].box_rect.width = 680;
+        assert_eq!(rescue_impossible_mixed_suffix(legitimate.clone(), &alternate)
+            .blocks[0].text, legitimate.blocks[0].text,
+            "a suffix occupying real glyph width must not be deleted");
     }
 
     #[test]
@@ -2439,6 +3245,28 @@ mod fragmentation_review_tests {
         );
         assert_eq!(
             agreed_ascii_word_spaces(
+                "VITEv7.3.6 ready in 239 ms",
+                "VITE v7 3 6 ready in 239 ms",
+            ),
+            Some("VITE v7.3.6 ready in 239 ms".into()),
+        );
+        assert_eq!(
+            agreed_ascii_word_spaces(
+                "RunningBeforeDevCommand npm run dev",
+                "Running BeforeDevCommand npm run dev')",
+            ),
+            Some("Running BeforeDevCommand npm run dev".into()),
+        );
+        assert_eq!(
+            agreed_ascii_word_spaces(
+                "MaobuTranslator v0.3.14",
+                "Maobu Translator v0 3 14",
+            ),
+            None,
+            "a model's arbitrary identifier split must not change an unrelated proper name",
+        );
+        assert_eq!(
+            agreed_ascii_word_spaces(
                 "VITEv7.3.6readyin239ms",
                 "VITE v7 3 6 ready in 238 ms",
             ),
@@ -2470,6 +3298,62 @@ mod fragmentation_review_tests {
         ] };
         let result = restore_agreed_terminal_row_spacing(primary, &alternate);
         assert_eq!(result.blocks[0].text, "VITE v7.3.6 ready in 239 ms");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn terminal_spacing_uses_full_row_to_repair_only_a_fused_first_box() {
+        let primary = OcrResult { blocks: vec![
+            TextBlock { text: "VITEV7.3.6".into(), confidence: 0.93,
+                box_rect: BoundingBox { x: 31, y: 389, width: 105, height: 15 } },
+            TextBlock { text: "ready in 239 ms".into(), confidence: 0.97,
+                box_rect: BoundingBox { x: 142, y: 388, width: 149, height: 18 } },
+        ] };
+        let alternate = OcrResult { blocks: vec![
+            TextBlock { text: "VITE v7 3 6 ready in".into(), confidence: 0.99,
+                box_rect: BoundingBox { x: 33, y: 390, width: 188, height: 16 } },
+            TextBlock { text: "239 ms".into(), confidence: 0.99,
+                box_rect: BoundingBox { x: 232, y: 391, width: 53, height: 11 } },
+        ] };
+        let repaired = restore_agreed_terminal_row_spacing(primary.clone(), &alternate);
+        assert_eq!(repaired.blocks[0].text, "VITE V7.3.6");
+        assert_eq!(repaired.blocks[0].box_rect, primary.blocks[0].box_rect);
+        assert_eq!(repaired.blocks[1].text, primary.blocks[1].text);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn terminal_prompt_prefix_uses_second_engine_only_for_the_missing_symbol() {
+        let primary = OcrResult { blocks: vec![TextBlock {
+            text: "app_v2@0.3.14 tauri".into(), confidence: 0.99,
+            box_rect: BoundingBox { x: 27, y: 217, width: 180, height: 19 },
+        }] };
+        let alternate = OcrResult { blocks: vec![TextBlock {
+            text: "> app_v2@O.3.IU tauri".into(), confidence: 0.99,
+            box_rect: BoundingBox { x: 16, y: 219, width: 188, height: 16 },
+        }] };
+        let recovered = restore_agreed_prompt_prefix(primary.clone(), &alternate);
+        assert_eq!(recovered.blocks[0].text, "> app_v2@0.3.14 tauri");
+        assert_eq!(recovered.blocks[0].box_rect.x, 16);
+
+        let mut remote = alternate;
+        remote.blocks[0].box_rect.y = 269;
+        assert_eq!(restore_agreed_prompt_prefix(primary, &remote).blocks[0].text,
+            "app_v2@0.3.14 tauri");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn prompt_review_requires_a_left_aligned_versioned_command_in_a_dense_scene() {
+        let mut blocks = result(&["row"; 10]);
+        blocks.blocks[0].text = "app_v2@0.3.14 tauri".into();
+        blocks.blocks[0].box_rect.x = 27;
+        assert!(should_review_missing_terminal_prompt(&blocks));
+        blocks.blocks[0].box_rect.x = 100;
+        assert!(!should_review_missing_terminal_prompt(&blocks));
+        blocks.blocks[0].box_rect.x = 27;
+        blocks.blocks[0].text = "contact@example.com".into();
+        assert!(!should_review_missing_terminal_prompt(&blocks));
     }
 
     #[test]

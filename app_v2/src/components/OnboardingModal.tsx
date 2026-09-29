@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, X, Download, CheckCircle2, Cpu } from 'lucide-react';
 import { useAppTheme } from '../hooks/useAppTheme';
+import { hasAnyCompleteModelSet } from './OcrModelGuideModal';
 import {
   cmdOfflineModelsStatus,
   cmdDownloadOfflineModel,
@@ -75,8 +76,7 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
     cmdOfflineModelsStatus()
       .then((models) => {
         if (models && models.length > 0) {
-          const anyInstalled = models.some((m) => m.installed);
-          setOcrStatus((s) => ({ ...s, installed: anyInstalled }));
+          setOcrStatus((s) => ({ ...s, installed: hasAnyCompleteModelSet(models) }));
         }
       })
       .catch(() => {});
@@ -85,13 +85,15 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
   const handleQuickDownloadOcr = async () => {
     setOcrStatus((s) => ({ ...s, downloading: true, progress: 15 }));
     try {
-      await cmdDownloadOfflineModel('ppocrv4-det');
+      await cmdDownloadOfflineModel('ppocrv6t-det');
       setOcrStatus((s) => ({ ...s, progress: 45 }));
-      await cmdDownloadOfflineModel('ppocrv4-rec');
+      await cmdDownloadOfflineModel('ppocrv6t-rec');
       setOcrStatus((s) => ({ ...s, progress: 85 }));
-      await cmdDownloadOfflineModel('ppocrv4-cls');
+      await cmdDownloadOfflineModel('ppocrv6t-cls');
+      if (!(await cmdSwitchOcrVersion('v6t'))) {
+        throw new Error('PP-OCRv6 Tiny 模型未完整安装');
+      }
       setOcrStatus((s) => ({ ...s, progress: 100, installed: true, downloading: false }));
-      await cmdSwitchOcrVersion('v4');
     } catch {
       setOcrStatus((s) => ({ ...s, downloading: false }));
     }
@@ -234,7 +236,7 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
                 </div>
                 <div className="min-w-0">
                   <p className="text-xs font-semibold">
-                    {ocrStatus.downloading ? `正在准备 PP-OCRv4 离线引擎 (${ocrStatus.progress}%)` : '离线 OCR 引擎推荐就绪'}
+                    {ocrStatus.downloading ? `正在准备 PP-OCRv6 Tiny 离线引擎 (${ocrStatus.progress}%)` : '离线 OCR 引擎推荐就绪'}
                   </p>
                   <p className="text-[11px] opacity-75 truncate">
                     无需外网 · 极速毫秒级响应 (~16MB)
