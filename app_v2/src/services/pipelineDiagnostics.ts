@@ -46,5 +46,5 @@ export function summarizeTranslationSources(blocks: Pick<OverlayBlock, 'sourceTi
     const name = block.translationFailed ? '翻译失败' : (block.sourceTier || '来源未注明');
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
-  return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-CN'));
 }
