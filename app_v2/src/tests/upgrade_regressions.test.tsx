@@ -62,8 +62,13 @@ async function mouseSelection() {
   fireEvent.mouseDown(container, { clientX: 100, clientY: 100, button: 0 });
   fireEvent.mouseMove(container, { clientX: 400, clientY: 200 });
   fireEvent.mouseUp(container);
-  // v2.4: release freezes the rect into adjust mode — confirm with Enter
-  fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+  // v2.4: release freezes the rect into adjust mode — confirm with Enter or button click
+  const confirmBtn = screen.queryByTestId('adjust-confirm-btn') || screen.queryByTestId('btn-tool-confirm');
+  if (confirmBtn) {
+    fireEvent.click(confirmBtn);
+  } else {
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+  }
 }
 
 describe('shared hotkey matcher (services/hotkeys)', () => {
@@ -432,7 +437,7 @@ describe('capture overlay v2.3: Enter fullscreen / R repeat / W watch', () => {
     await screen.findByText(/猫步划词/);
 
     await mouseSelection();
-    const confirmBtn = screen.queryByTestId('btn-tool-confirm');
+    const confirmBtn = screen.queryByTestId('adjust-confirm-btn') || screen.queryByTestId('btn-tool-confirm');
     if (confirmBtn) {
       fireEvent.click(confirmBtn);
     }
