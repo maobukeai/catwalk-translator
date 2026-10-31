@@ -11,7 +11,7 @@ import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
 import {
   cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall,
-  cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart,
+  cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart, cmdResetWindowSize,
 } from '../../../services/tauri';
 import { normalizeHotkeyForCompare } from '../../../services/hotkeys';
 import type { OfflineEngineStatus } from '../../../services/tauri';
@@ -344,6 +344,39 @@ export const AppearancePanel: React.FC = () => {
                     </button>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* 6. Window Geometry & Sizing Controls */}
+            <div className={`space-y-2 pt-3 border-t ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className={`block text-xs font-bold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>
+                    窗口尺寸恢复 (Window Geometry)
+                  </label>
+                  <p className={`text-[11px] mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                    如果窗口意外变大或拉伸变形，可一键将其重置为出厂标准大小并屏幕居中
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await cmdResetWindowSize();
+                    } catch (e) {
+                      console.warn('Reset window size failed:', e);
+                    }
+                  }}
+                  className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border shadow-xs transition-colors cursor-pointer ${
+                    isLight
+                      ? 'bg-white hover:bg-slate-50 border-slate-300 text-slate-700 active:bg-slate-100'
+                      : 'bg-zinc-800 hover:bg-zinc-700 border-white/10 text-zinc-200 active:bg-zinc-600'
+                  }`}
+                  title="重置为主窗口标准尺寸 960 × 720 并居中"
+                >
+                  <RotateCcw className="h-3.5 w-3.5 text-blue-500" />
+                  <span>恢复默认尺寸 (960×720)</span>
+                </button>
               </div>
             </div>
           </div>

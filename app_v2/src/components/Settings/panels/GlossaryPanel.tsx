@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import * as XLSX from 'xlsx';
 import {
   BookOpen,
   Sparkles,
@@ -131,6 +130,7 @@ export const GlossaryPanel: React.FC = () => {
 
     try {
       if (ext === 'xlsx' || ext === 'xls') {
+        const XLSX = await import('xlsx');
         // Excel 格式：在前端使用 xlsx 解析为结构化条目
         const buffer = await file.arrayBuffer();
         const workbook = XLSX.read(buffer, { type: 'array' });

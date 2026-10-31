@@ -48,12 +48,13 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   useEffect(() => {
     if (!isTauri()) return;
     let unlistenResize: (() => void) | undefined;
+    let disposed = false;
 
     const checkMaximized = async () => {
       try {
         const win = getCurrentWindow();
         const max = await win.isMaximized();
-        setInternalMaximized(max);
+        if (!disposed) setInternalMaximized(max);
       } catch (err) {
         console.warn('Check maximized error:', err);
       }
@@ -65,11 +66,12 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       listen('tauri://resize', () => {
         checkMaximized();
       }).then((u) => {
-        unlistenResize = u;
+        if (disposed) u(); else unlistenResize = u;
       });
     }).catch(() => {});
 
     return () => {
+      disposed = true;
       if (unlistenResize) unlistenResize();
     };
   }, []);
@@ -91,6 +93,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
     e.stopPropagation();
     if (onToggleMaximize) {
       onToggleMaximize();
+      return;
     }
     if (isTauri()) {
       try {

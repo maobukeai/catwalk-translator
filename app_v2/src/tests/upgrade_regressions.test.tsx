@@ -535,8 +535,13 @@ describe('Youdao-style panel display mode', () => {
     expect(row).not.toBeNull();
     fireEvent.mouseEnter(row);
 
-    const outline = document.querySelector('.overlay-outline') as HTMLElement;
-    expect(outline.style.border).toContain('0.95'); // highlighted border color
-    expect(outline.style.boxShadow).toContain('rgba(56,189,248');
+    // The highlight is applied by a React re-render triggered by mouseEnter, so it is
+    // not guaranteed to be committed on the very next line under load. Wait for it
+    // instead of asserting synchronously.
+    await waitFor(() => {
+      const outline = document.querySelector('.overlay-outline') as HTMLElement;
+      expect(outline.style.border).toContain('0.95'); // highlighted border color
+      expect(outline.style.boxShadow).toContain('rgba(56,189,248');
+    });
   });
 });

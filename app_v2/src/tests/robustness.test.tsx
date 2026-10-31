@@ -60,10 +60,16 @@ function countCmd(calls: Array<{ cmd: string }>, cmd: string) {
 const container = () => document.querySelector('.fixed.inset-0') as HTMLElement;
 
 async function selectAndConfirm() {
+  // Flush capture initialization before drawing. An idle overlay also uses a
+  // crosshair cursor, so the cursor alone does not prove selection is ready.
+  await act(async () => {});
   fireEvent.mouseDown(container(), { clientX: 100, clientY: 100, button: 0 });
   fireEvent.mouseMove(container(), { clientX: 400, clientY: 200 });
   fireEvent.mouseUp(container());
-  fireEvent(window, new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+  // Auto mode recognizes on release; Enter is a separate fullscreen/copy action.
+  if (useSettingsStore.getState().settings.captureReleaseAction === 'adjust') {
+    pressKey('Enter', 'Enter');
+  }
 }
 
 function pressKey(key: string, code: string, init: KeyboardEventInit = {}) {
@@ -283,19 +289,45 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
   });
 
   it('region watch uses the quiet cmd_watch_tick path (no window hide/show cycle)', async () => {
+    // The watch interval defaults to 3s, so the first tick may not land instantly on a
+    // loaded machine. The contract under test is "the quiet path is used (no hide/show",
+    // not "within one poll interval".
     const { calls } = await openWithResult();
     const beginBefore = countCmd(calls, 'cmd_begin_capture');
 
     pressKey('w', 'KeyW');
     await waitFor(() => {
       expect(countCmd(calls, 'cmd_watch_tick')).toBeGreaterThanOrEqual(1);
-    });
+    }, { timeout: 8000 });
     expect(await screen.findByText(/区域监控中/)).toBeInTheDocument();
     // The legacy flicker path re-ran begin+show every tick — must stay quiet now
     expect(countCmd(calls, 'cmd_begin_capture')).toBe(beginBefore);
 
     pressKey('w', 'KeyW');
     await screen.findByText(/已停止区域监控/);
+  });
+
+  it('does not recapture or reopen the overlay after a pending watch fails on unmount', async () => {
+    let rejectWatch!: (reason: Error) => void;
+    const { calls } = await openWithResult({
+      watchImpl: () => new Promise((_, reject) => { rejectWatch = reject; }),
+    });
+    const beginBefore = countCmd(calls, 'cmd_begin_capture');
+    const showBefore = countCmd(calls, 'cmd_show_overlay');
+    pressKey('w', 'KeyW');
+    // Wait until the watch tick has actually been dispatched. `toBe(1)` was an exact
+    // equality on a counter that the watch interval also increments, and a tick can be
+    // coalesced away while a previous one is still awaiting - so assert on the contract
+    // ("a tick was dispatched") rather than an exact count.
+    await waitFor(() => expect(countCmd(calls, 'cmd_watch_tick')).toBeGreaterThanOrEqual(1),
+      { timeout: 8000 });
+    cleanup();
+    await act(async () => { rejectWatch(new Error('late quiet-capture failure')); });
+    expect(countCmd(calls, 'cmd_begin_capture')).toBe(beginBefore);
+    expect(countCmd(calls, 'cmd_show_overlay')).toBe(showBefore);
+    // Drain the rejected tick's continuation before the next spec starts. Without this
+    // its `.catch`/`finally` can interleave with the following test's watch tick.
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
   });
 
   it('treats a resolved but invalid quiet-watch layout as a fallback failure', async () => {
@@ -325,7 +357,7 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
     pressKey('w', 'KeyW');
     await waitFor(() => {
       expect((document.querySelector('.overlay-block') as HTMLElement).style.left).toBe('310px');
-    });
+    }, { timeout: 8000 });
   });
 
   it('region watch clears stale cards when the watched area becomes empty', async () => {
@@ -340,11 +372,15 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
     pressKey('w', 'KeyW');
     await waitFor(() => {
       expect(document.querySelector('.overlay-block')).toBeNull();
-    });
+    }, { timeout: 8000 });
   });
 
   it('persistent quiet-path failures auto-stop the watch instead of flickering forever', async () => {
-    // Shrink the interval so three failures land inside the assertion window
+    // Shrink the interval so the three failures arrive quickly. The per-assertion
+    // budgets below are deliberately generous: this spec asserts the auto-stop
+    // BEHAVIOUR (3 consecutive failures -> stop + notice), which is the product
+    // contract. It must not also assert how fast a loaded CI box can schedule
+    // three 1s-interval ticks, which the feature never promised.
     useSettingsStore.getState().setWatchIntervalMs(1000);
     createMockIpcHarness();
     const calls: Array<{ cmd: string; args: any }> = [];
@@ -373,15 +409,15 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
     pressKey('w', 'KeyW');
     await waitFor(() => {
       expect(countCmd(calls, 'cmd_watch_tick')).toBeGreaterThanOrEqual(1);
-    }, { timeout: 3000 });
+    }, { timeout: 8000 });
 
     // Three consecutive quiet failures → auto-stop with an honest notice
     await waitFor(() => {
       expect(screen.getByText(/静默监控通道不可用/)).toBeInTheDocument();
-    }, { timeout: 4500 });
+    }, { timeout: 12000 });
     await waitFor(() => {
       expect(countCmd(calls, 'cmd_watch_tick')).toBeGreaterThanOrEqual(3);
-    }, { timeout: 4500 });
+    }, { timeout: 12000 });
   });
 
   it('cancelling mid-recognition returns to the selection phase and drops the result', async () => {
@@ -408,5 +444,23 @@ describe('overlay robustness (copy / misclick / retry / escape / context menu / 
     // The late result must not render any cards
     expect(document.querySelector('.overlay-block')).toBeNull();
     void calls;
+  });
+
+  it('does not start translation when pending recognition completes after unmount', async () => {
+    let resolveLayout!: (layout: OverlayResult) => void;
+    const calls = wireHarness({
+      layoutImpl: () => new Promise<OverlayResult>((resolve) => { resolveLayout = resolve; }),
+    });
+    (window as any).__TAURI_INTERNALS__ = {};
+    const overlay = render(<CaptureOverlay isOpen={true} onClose={vi.fn()} />);
+    await screen.findByText(/猫步划词/);
+    await selectAndConfirm();
+    await waitFor(() => expect(countCmd(calls, 'cmd_region_ocr_layout')).toBe(1));
+    overlay.unmount();
+    await act(async () => {
+      resolveLayout({ ...STANDARD_LAYOUT, blocks: [{ ...STANDARD_LAYOUT.blocks[0] }] });
+    });
+    expect(countCmd(calls, 'cmd_translate_phrases_styled')).toBe(0);
+    expect(countCmd(calls, 'cmd_translate_phrases')).toBe(0);
   });
 });

@@ -34,18 +34,21 @@ import {
 } from '../../services/tauri';
 import { matchesHotkey } from '../../services/hotkeys';
 import { speakText, stopSpeech } from "../../services/tts";
-import { estimateDenseProseFontSizes, estimateDenseRowFontHeights, estimateSafeErasePadding, resolveAABBCollisions } from '../../services/overlayLayout';
+import { estimateDenseProseColumnWidths, estimateDenseProseFontSizes, estimateDenseRowFontHeights, estimateSafeErasePadding, resolveAABBCollisions } from '../../services/overlayLayout';
 import { detectSpeechLang } from '../../services/langDetect';
-import { buildCaptureEngineChoices, flattenCaptureEngineChoices } from '../../services/engineOptions';
+import { buildCaptureEngineChoices, flattenCaptureEngineChoices, isCaptureOnlineEngine, resolveCaptureLlmConfig } from '../../services/engineOptions';
+import { translateCaptureOnline } from '../../services/captureTranslation';
 import type { OverlayBlock, OverlayResult, LanguageCode, TranslationResult } from '../../services/types';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { CheatSheetModal } from './CheatSheetModal';
-import { OverlayBlockCard, OverlayErasePlate, measureTextWidth, toSolidBg, getCardTextColor } from './OverlayBlockCard';
+import { OverlayBlockCard, OverlayErasePlate, measureTextWidth } from './OverlayBlockCard';
+import { drawOverlaySnapshot, serializeOverlayRegion } from '../../services/overlaySnapshot';
 import { SnippingToolbar, type AnnotationTool } from './SnippingToolbar';
 import { memoKey, memoGet, memoPut } from './translationMemo';
 import { YoudaoResultPanel } from './YoudaoResultPanel';
 import { PipelineDiagnostics } from './PipelineDiagnostics';
 import { classifyTranslationFailure, hasUsableTranslation, isSuccessfulLlmTier, type PipelineDiagnosticsData } from '../../services/pipelineDiagnostics';
+import { translatePhrasesProgressively, withDeadline } from '../../services/progressiveTranslation';
 
 export interface AnnotationItem {
   id: string;
@@ -135,6 +138,16 @@ let LAST_SELECTION: SelRect | null = (() => {
   } catch { /* corrupted entry — start fresh */ }
   return null;
 })();
+
+/** Test-only: clear module-level selection recall so specs start from a clean slate.
+ *  `LAST_SELECTION` lives outside React, so unmounting a component does not reset it
+ *  and one spec's selection can otherwise leak into the next. */
+export function __resetLastSelectionForTests() {
+  LAST_SELECTION = null;
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem('catwalk_last_selection');
+  } catch { /* storage unavailable */ }
+}
 
 function rememberLastSelection(rect: SelRect) {
   LAST_SELECTION = { ...rect };
@@ -315,6 +328,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   const watchModeRef = useRef(false);
   const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const watchTickBusyRef = useRef(false);
+  // A tick requested while another is in flight is coalesced into a single follow-up
   const watchQuietFailuresRef = useRef(0);
   const lastWatchTextRef = useRef<string | null>(null);
 
@@ -341,11 +355,20 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     }
     const fontLineHeights = estimateDenseRowFontHeights(overlayResult.blocks);
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+    const columnWidths = estimateDenseProseColumnWidths(overlayResult.blocks, fontLineHeights);
+    const layoutBlocks = overlayResult.blocks.map((block, i) => ({
+      ...block, layoutMaxWidth: columnWidths[i],
+      layoutRight: overlayResult.selectionW > 0
+        ? overlayResult.selectionX + overlayResult.selectionW : undefined,
+      layoutTop: overlayResult.selectionH > 0 ? overlayResult.selectionY : undefined,
+      layoutBottom: overlayResult.selectionH > 0
+        ? overlayResult.selectionY + overlayResult.selectionH : undefined,
+    }));
     const proseFontSizes = estimateDenseProseFontSizes(
-      overlayResult.blocks, fontLineHeights, vw, measureTextWidth, cardViewMode === 'original',
+      layoutBlocks, fontLineHeights, vw, measureTextWidth, cardViewMode === 'original',
     );
     const erasePaddings = estimateSafeErasePadding(overlayResult.blocks);
-    const kept = overlayResult.blocks
+    const kept = layoutBlocks
       .map((block, i) => {
         // Rendered cards are typically taller than the OCR box (font fit × 1.2
         // line-height) and can overflow horizontally — the real rendered size
@@ -368,7 +391,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     if (!enableAabb) return kept;
     const w = typeof window !== 'undefined' ? window.innerWidth : 1920;
     const h = typeof window !== 'undefined' ? window.innerHeight : 1080;
-    return resolveAABBCollisions(kept, w, h);
+    return resolveAABBCollisions(kept, w, h, 4, {
+      top: overlayResult.selectionY,
+      bottom: overlayResult.selectionY + overlayResult.selectionH,
+    });
   }, [overlayResult, enableAabb, dismissedBlockIndexes, renderedSizes, cardViewMode]);
 
   // 定时器持有引用：连续 showFeedback 时先清旧 timer，
@@ -434,7 +460,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     try {
       const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
       const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
-      const line = await cmdHoverLookup(x, y, scaleFactor, vw, vh);
+      const line = await withDeadline(cmdHoverLookup(x, y, scaleFactor, vw, vh), 30_000, '文字识别超时');
       if (!mountedRef.current || epoch !== hoverEpochRef.current) return;
       if (!line || !line.text || line.text.trim().length < 2) {
         setHoverBubble(null);
@@ -443,26 +469,29 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       let translated = '';
       let tier = '';
       try {
-        const res = await cmdUniversalTranslate({
+        const res = await withDeadline(cmdUniversalTranslate({
           text: line.text,
           sourceLang: 'auto',
           targetLang,
           preset: selectedEngine !== 'auto' ? selectedEngine : effectivePreset(),
-          llmConfig: ['deepseek', 'openai', 'ollama', 'glm', 'custom'].some((k) => selectedEngine.toLowerCase().includes(k))
-            ? settings.llmConfig
-            : null,
+          llmConfig: resolveCaptureLlmConfig(settings, selectedEngine),
           llmConfigs: settings.llmConfigs,
           presetDicts: settings.presetDicts,
           onlineEngines: settings.onlineEngines,
           translationTiers: settings.translationTiers,
+          forcedEngine: selectedEngine === 'auto' ? undefined : selectedEngine,
           baiduAppId: settings.baiduAppId,
           baiduSecret: settings.baiduSecret,
           baiduLlmApiKey: settings.baiduLlmApiKey,
           deeplApiKey: settings.deeplApiKey,
           deeplCustomUrl: settings.deeplCustomUrl,
-        });
+          volcengineAccessKey: settings.volcengineAccessKey,
+          volcengineSecretKey: settings.volcengineSecretKey,
+          yandexApiKey: settings.yandexApiKey,
+          yandexFolderId: settings.yandexFolderId,
+        }), 30_000, '翻译请求超时');
         translated = res.mainTranslation || '';
-        tier = res.engines[0]?.sourceTier || '';
+        tier = res.engines.find((entry) => entry.translated === translated)?.sourceTier || '';
       } catch { /* show the original text only */ }
       if (!mountedRef.current || epoch !== hoverEpochRef.current) return;
       setHoverBubble({
@@ -472,9 +501,17 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     } catch {
       // transient OCR failure — the next hover retries
     } finally {
-      hoverBusyRef.current = false;
+      if (epoch === hoverEpochRef.current) hoverBusyRef.current = false;
     }
   }, [scaleFactor, targetLang, selectedEngine, settings]);
+
+  useEffect(() => {
+    // The component stays mounted between captures. A previous frame's hover
+    // must neither block the new frame nor publish when it eventually returns.
+    hoverEpochRef.current += 1;
+    hoverBusyRef.current = false;
+    setHoverBubble(null);
+  }, [isOpen, targetLang, selectedEngine]);
 
   useEffect(() => {
     if (settings.captureEngine) {
@@ -492,8 +529,15 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   // 防止 toast 定时器在环境销毁后仍 setState
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
+      processEpochRef.current += 1;
+      hoverEpochRef.current += 1;
+      watchModeRef.current = false;
       if (feedbackToastTimerRef.current) clearTimeout(feedbackToastTimerRef.current);
       if (emptyNoticeTimerRef.current) clearTimeout(emptyNoticeTimerRef.current);
+      if (actionToastTimerRef.current) clearTimeout(actionToastTimerRef.current);
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+      if (watchTimerRef.current) clearInterval(watchTimerRef.current);
     };
   }, []);
 
@@ -513,6 +557,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       if (emptyNoticeTimerRef.current) clearTimeout(emptyNoticeTimerRef.current);
       if (actionToastTimerRef.current) clearTimeout(actionToastTimerRef.current);
       setTranslatingProgress(null);
+      setIsAiRefining(false);
       setAdjustRect(null);
       setAdjustHandle(null);
       adjustStartRef.current = null;
@@ -533,12 +578,13 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       return;
     }
 
+    let cancelled = false;
     const init = async () => {
       try {
         if (isTauri()) {
           const captureStartedAt = performance.now();
           const payload = await cmdBeginCapture();   // hides main window (0ms image transfer!)
-          if (!mountedRef.current) return;
+          if (cancelled || !mountedRef.current) return;
           lastCaptureMsRef.current = performance.now() - captureStartedAt;
           setScaleFactor(payload.scaleFactor || window.devicePixelRatio || 1.0);
           const detected = payload.detectedApp ?? null;
@@ -553,7 +599,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           lastCaptureMsRef.current = undefined;
           setScaleFactor(window.devicePixelRatio || 1.0);
         }
-        if (mountedRef.current) {
+        if (!cancelled && mountedRef.current) {
           setPhase(openInHoverMode ? 'hovering' : 'selecting');
           // One-time discoverability hint for the cheat sheet
           try {
@@ -567,7 +613,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         }
       } catch (err) {
         console.error('[CaptureOverlay] init failed:', err);
-        if (mountedRef.current) {
+        if (!cancelled && mountedRef.current) {
           setPhase('idle');
           onClose();
         }
@@ -577,6 +623,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     init();
 
     return () => {
+      cancelled = true;
       stopSpeech();
       if (isTauri()) cmdCloseOverlay().catch(console.warn);
     };
@@ -584,34 +631,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
   // ── 智能解析当前选中的 LLM 实例配置 ──────────────────────────────────────────
   const resolveLlmConfig = useCallback(
-    (engine: string) => {
-      const isLlm =
-        engine.startsWith('llm:') ||
-        engine === 'llm' ||
-        engine === 'ai' ||
-        ['deepseek', 'openai', 'ollama', 'glm', 'gemini', 'claude', 'qwen', 'moonshot', 'kimi', 'custom', 'siliconflow', 'groq'].some((k) =>
-          engine.toLowerCase().includes(k)
-        ) ||
-        !!settings.llmConfigs?.some(
-          (c) => c.id === engine || `llm:${c.id}` === engine || c.model?.toLowerCase() === engine.toLowerCase()
-        );
-
-      if (!isLlm && engine !== 'auto') {
-        return null;
-      }
-
-      const targetClean = engine.startsWith('llm:') ? engine.slice(4) : engine;
-      const matched = settings.llmConfigs?.find(
-        (c) =>
-          c.id === targetClean ||
-          `llm:${c.id}` === engine ||
-          c.model?.toLowerCase() === targetClean.toLowerCase() ||
-          c.provider?.toLowerCase() === targetClean.toLowerCase() ||
-          targetClean.toLowerCase().includes(c.provider?.toLowerCase() || '') ||
-          targetClean.toLowerCase().includes(c.model?.toLowerCase() || '')
-      );
-      return matched || settings.llmConfig || null;
-    },
+    (engine: string) => resolveCaptureLlmConfig(settings, engine),
     [settings]
   );
 
@@ -623,32 +643,57 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       if (!overlayResult || overlayResult.blocks.length === 0) return;
       const translationStartedAt = performance.now();
       const total = overlayResult.blocks.length;
+      const processEpoch = processEpochRef.current;
       retranslateEpochRef.current += 1;
       const currentEpoch = retranslateEpochRef.current;
-      const stale = () => !mountedRef.current || retranslateEpochRef.current !== currentEpoch;
+      const stale = () => !mountedRef.current || retranslateEpochRef.current !== currentEpoch || processEpoch !== processEpochRef.current;
 
       setTranslatingProgress({ done: 0, total });
+      setIsAiRefining(false);
+      // A new language/engine owns these cards now. Old-language text must not
+      // survive a failed request and appear to belong to the new selection.
+      setOverlayResult((prev) => prev ? { ...prev, blocks: prev.blocks.map((block) => ({
+        ...block, translated: '', sourceTier: 'OCR', translationFailed: false,
+      })) } : prev);
       try {
         const activeLlm = resolveLlmConfig(engine);
         const preset = engine !== 'auto' ? engine : effectivePreset();
         const style = settings.translationStyle;
-        const forcedEngine = engine === 'auto' ? undefined : engine;
+        const isForcedOnline = isCaptureOnlineEngine(engine);
+        const memoPreset = isForcedOnline ? `forced:${preset}` : preset;
 
         // 1. 优先从前端 TranslationMemo 缓存中读取相同 targetLang 的结果 (0ms 瞬开)
         const phrases = overlayResult.blocks.map((b) => b.original);
         const memoHits = new Map<number, TranslationResult>();
         const misses: number[] = [];
         phrases.forEach((p, i) => {
-          const hit = memoGet(memoKey(p, newTargetLang, preset, style, glossaryFp));
+          const hit = memoGet(memoKey(p, newTargetLang, memoPreset, style, glossaryFp));
           if (hasUsableTranslation(hit)) memoHits.set(i, hit!);
           else misses.push(i);
         });
         if (!stale()) setPipelineDiagnostics((prev) => ({ ...prev, translationMs: undefined, aiRefineMs: undefined, memoHits: memoHits.size, total, failure: undefined }));
+        let completed = memoHits.size;
+        const publishResult = (index: number, result: TranslationResult) => {
+          if (stale()) return;
+          setOverlayResult((prev) => prev ? {
+            ...prev,
+            blocks: prev.blocks.map((block, i) => i === index ? {
+              ...block,
+              translated: hasUsableTranslation(result) ? result.translated : block.original,
+              sourceTier: result.sourceTier,
+              translationFailed: !hasUsableTranslation(result),
+            } : block),
+          } : prev);
+        };
+        memoHits.forEach((hit, index) => publishResult(index, hit));
+        if (!stale()) setTranslatingProgress({ done: completed, total });
 
         // 2. 当用户显式指定了第三方在线通道（如 DeepL/Baidu 等）
-        if (forcedEngine && !forcedEngine.startsWith('llm') && !settings.presetDicts?.[forcedEngine as keyof typeof settings.presetDicts]) {
+        if (isForcedOnline) {
           let done = memoHits.size;
-          const updatedBlocks = [...overlayResult.blocks];
+          const updatedBlocks = overlayResult.blocks.map((block) => ({
+            ...block, translated: '', sourceTier: 'OCR', translationFailed: false,
+          }));
           
           memoHits.forEach((hit, idx) => {
             updatedBlocks[idx] = {
@@ -658,48 +703,40 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               translationFailed: !hasUsableTranslation(hit),
             };
           });
-          if (mountedRef.current) setTranslatingProgress({ done, total });
+          if (!stale()) {
+            setOverlayResult((prev) => prev ? { ...prev, blocks: [...updatedBlocks] } : prev);
+            setTranslatingProgress({ done, total });
+          }
 
           if (misses.length > 0) {
-            await Promise.all(
-              misses.map(async (idx) => {
+            await translatePhrasesProgressively(misses.map((idx) => phrases[idx]), {
+              preset,
+              // Each explicitly selected online engine uses its own request.
+              // Keep requests bounded while publishing each completed card.
+              batchSize: 1,
+              isStale: stale,
+              targetLang: newTargetLang,
+              request: async (batch) => {
+                return [await translateCaptureOnline(batch[0], engine, newTargetLang, effectivePreset(), settings)];
+              },
+              onResult: (missIndex, trResult) => {
+                if (stale()) return;
+                const idx = misses[missIndex];
                 const block = overlayResult.blocks[idx];
-                const res = await cmdUniversalTranslate({
-                  text: block.original,
-                  sourceLang: 'auto',
-                  targetLang: newTargetLang,
-                  preset: effectivePreset(),
-                  llmConfig: activeLlm,
-                  llmConfigs: settings.llmConfigs,
-                  presetDicts: settings.presetDicts,
-                  onlineEngines: settings.onlineEngines,
-                  translationTiers: settings.translationTiers,
-                  style: settings.translationStyle,
-                  forcedEngine,
-                  baiduAppId: settings.baiduAppId,
-                  baiduSecret: settings.baiduSecret,
-                  baiduLlmApiKey: settings.baiduLlmApiKey,
-                  deeplApiKey: settings.deeplApiKey,
-                  deeplCustomUrl: settings.deeplCustomUrl,
-                });
                 done += 1;
-                if (mountedRef.current) setTranslatingProgress({ done, total });
-                const trResult: TranslationResult = {
-                  original: block.original,
-                  translated: res.mainTranslation || block.translated,
-                  sourceTier: res.engines[0]?.sourceTier || block.sourceTier,
-                };
                 if (hasUsableTranslation(trResult)) {
-                  memoPut(memoKey(block.original, newTargetLang, preset, style, glossaryFp), trResult);
+                  memoPut(memoKey(block.original, newTargetLang, memoPreset, style, glossaryFp), trResult);
                 }
                 updatedBlocks[idx] = {
                   ...block,
-                  translated: trResult.translated,
+                  translated: hasUsableTranslation(trResult) ? trResult.translated : block.original,
                   sourceTier: trResult.sourceTier,
-                  translationFailed: !res.mainTranslation || !hasUsableTranslation(trResult),
+                  translationFailed: !hasUsableTranslation(trResult),
                 };
-              })
-            );
+                setOverlayResult((prev) => prev ? { ...prev, blocks: [...updatedBlocks] } : prev);
+                setTranslatingProgress({ done, total });
+              },
+            });
           }
           if (stale()) return;
           setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : null));
@@ -718,13 +755,17 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
               (engine === 'auto' || !engine.startsWith('llm'));
             const fastLlmConfig = isProgressive ? null : activeLlm;
 
-            const fetched = await cmdTranslatePhrasesStyled(
-              misses.map((i) => phrases[i]),
-              preset,
-              fastLlmConfig,
-              style,
-              newTargetLang
-            );
+            const fetched = await translatePhrasesProgressively(misses.map((i) => phrases[i]), {
+              preset, llmConfig: fastLlmConfig, style, targetLang: newTargetLang,
+              isStale: stale,
+              onResult: (missIndex, result) => {
+                if (stale()) return;
+                const index = misses[missIndex];
+                if (hasUsableTranslation(result)) memoPut(memoKey(phrases[index], newTargetLang, preset, style, glossaryFp), result);
+                publishResult(index, result);
+                setTranslatingProgress({ done: ++completed, total });
+              },
+            });
             if (stale()) return;
 
             const byIdx = new Map<number, TranslationResult>();
@@ -746,7 +787,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             const res = translations[i];
             return {
               ...block,
-              translated: res?.translated || block.translated,
+              translated: hasUsableTranslation(res) ? res.translated : block.original,
               sourceTier: res?.sourceTier || block.sourceTier,
               translationFailed: !hasUsableTranslation(res),
             };
@@ -808,8 +849,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                   let resultMap: Record<string, string> = {};
                   let usedLlm: (typeof candidateLlms)[0] | null = null;
                   for (const currentLlm of candidateLlms) {
+                    if (stale()) return;
                     try {
-                      const map = await cmdLlmBatchRefine(phrasesToRefine, currentLlm, style, newTargetLang);
+                      const map = await withDeadline(cmdLlmBatchRefine(phrasesToRefine, currentLlm, style, newTargetLang), 45_000, 'AI 精翻超时');
                       if (map && Object.keys(map).length > 0) {
                         resultMap = map;
                         usedLlm = currentLlm;
@@ -864,10 +906,15 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         }
       } catch (err) {
         console.warn('[CaptureOverlay] Retranslate error:', err);
-        if (!stale()) setPipelineDiagnostics((prev) => ({ ...prev, translationMs: performance.now() - translationStartedAt, failure: classifyTranslationFailure(err) }));
-        showFeedback('⚠️ 重译失败，可按 Tab 切换引擎后重试');
+        if (!stale()) {
+          setOverlayResult((prev) => prev ? { ...prev, blocks: prev.blocks.map((block) => ({
+            ...block, translated: block.original, sourceTier: '翻译失败·点击重试', translationFailed: true,
+          })) } : prev);
+          setPipelineDiagnostics((prev) => ({ ...prev, translationMs: performance.now() - translationStartedAt, failure: classifyTranslationFailure(err) }));
+          showFeedback('⚠️ 重译失败，可按 Tab 切换引擎后重试');
+        }
       } finally {
-        if (mountedRef.current) setTranslatingProgress(null);
+        if (!stale()) setTranslatingProgress(null);
       }
     },
     [overlayResult, settings, effectivePreset, resolveLlmConfig, glossaryFp]
@@ -1367,8 +1414,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     // 新选区开始、取消或 overlay 关闭都会 bump epoch，使旧 stage-2 的所有
     // 后续写入作废，防止旧译文按 index 错位覆盖新选区的卡片。
     const epoch = processEpochRef.current;
-    const stale = () => !mountedRef.current || epoch !== processEpochRef.current;
+    const translationEpoch = ++retranslateEpochRef.current;
+    const stale = () => !mountedRef.current || epoch !== processEpochRef.current || translationEpoch !== retranslateEpochRef.current;
     const translationStartedAt = performance.now();
+    setIsAiRefining(false);
 
     if (layout.blocks.length === 0) {
       if (isWatch) {
@@ -1431,6 +1480,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     const preset = selectedEngine !== 'auto' ? selectedEngine : effectivePreset();
     const llmConfig = resolveLlmConfig(selectedEngine);
     const style = settings.translationStyle;
+    const isForcedOnline = isCaptureOnlineEngine(selectedEngine);
+    const memoPreset = isForcedOnline ? `forced:${preset}` : preset;
 
     try {
       // Memo partition: unchanged phrases (typical for region-watch ticks) come
@@ -1438,11 +1489,27 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       const memoHits = new Map<number, TranslationResult>();
       const misses: number[] = [];
       phrases.forEach((p, i) => {
-        const hit = memoGet(memoKey(p, targetLang, preset, style, glossaryFp));
+        const hit = memoGet(memoKey(p, targetLang, memoPreset, style, glossaryFp));
         if (hasUsableTranslation(hit)) memoHits.set(i, hit!);
         else misses.push(i);
       });
       if (!stale()) setPipelineDiagnostics((prev) => ({ ...prev, memoHits: memoHits.size, total: phrases.length, failure: undefined }));
+      let completed = memoHits.size;
+      const publishResult = (index: number, result: TranslationResult) => {
+        if (stale()) return;
+        const usable = hasUsableTranslation(result);
+        setOverlayResult((prev) => prev ? {
+          ...prev,
+          blocks: prev.blocks.map((block, i) => i === index ? {
+            ...block,
+            translated: usable ? result.translated : block.original,
+            sourceTier: result.sourceTier,
+            translationFailed: !usable,
+          } : block),
+        } : prev);
+      };
+      memoHits.forEach((hit, index) => publishResult(index, hit));
+      if (!stale()) setTranslatingProgress({ done: completed, total: phrases.length });
 
       let translations: TranslationResult[];
       if (misses.length === 0) {
@@ -1454,13 +1521,21 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           (selectedEngine === 'auto' || !selectedEngine.startsWith('llm'));
         const fastLlmConfig = isProgressive ? null : llmConfig;
 
-        const fetched = await cmdTranslatePhrasesStyled(
-          misses.map((i) => phrases[i]),
-          preset,
-          fastLlmConfig,
-          style,
-          targetLang,
-        );
+        const fetched = await translatePhrasesProgressively(misses.map((i) => phrases[i]), {
+          preset, llmConfig: fastLlmConfig, style, targetLang,
+          batchSize: isForcedOnline ? 1 : undefined,
+          request: isForcedOnline
+            ? async (batch) => [await translateCaptureOnline(batch[0], selectedEngine, targetLang, effectivePreset(), settings)]
+            : undefined,
+          isStale: stale,
+          onResult: (missIndex, result) => {
+            if (stale()) return;
+            const index = misses[missIndex];
+            if (hasUsableTranslation(result)) memoPut(memoKey(phrases[index], targetLang, memoPreset, style, glossaryFp), result);
+            publishResult(index, result);
+            setTranslatingProgress({ done: ++completed, total: phrases.length });
+          },
+        });
         if (stale()) return;
         const byIdx = new Map<number, TranslationResult>();
         misses.forEach((pi, k) => {
@@ -1468,7 +1543,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
           if (tr) {
             byIdx.set(pi, tr);
             if (hasUsableTranslation(tr)) {
-              memoPut(memoKey(phrases[pi], targetLang, preset, style, glossaryFp), tr);
+              memoPut(memoKey(phrases[pi], targetLang, memoPreset, style, glossaryFp), tr);
             }
           }
         });
@@ -1489,7 +1564,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       if (stale()) return;
       setOverlayResult((prev) => (prev ? { ...prev, blocks: updatedBlocks } : prev));
       setPipelineDiagnostics((prev) => ({ ...prev, translationMs: performance.now() - translationStartedAt }));
-      setTranslatingProgress({ done: translatedCount, total: layout.blocks.length });
+      setTranslatingProgress({ done: layout.blocks.length, total: layout.blocks.length });
+      if (translatedCount < layout.blocks.length && !isWatch) {
+        showFeedback(`⚠️ ${layout.blocks.length - translatedCount} 段暂未译出，可在卡片上重试`);
+      }
 
       // 截图整场划词会话通过 cmdSaveCaptureSession 归档至「截图划词回放」，
       // 不再将零散碎块无脑刷屏写入全局历史记录，单个词块由用户在卡片上点击 ⭐ 主动加入生词本。
@@ -1561,8 +1639,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
               // 逐个尝试候选模型，首选失败自动轮转备用模型（如商汤欠费自动无缝切到 Gemini）
               for (const currentLlm of candidateLlms) {
+                if (stale()) return;
                 try {
-                  const map = await cmdLlmBatchRefine(phrasesToRefine, currentLlm, style, targetLang);
+                  const map = await withDeadline(cmdLlmBatchRefine(phrasesToRefine, currentLlm, style, targetLang), 45_000, 'AI 精翻超时');
                   if (map && Object.keys(map).length > 0) {
                     resultMap = map;
                     usedLlm = currentLlm;
@@ -1600,6 +1679,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
                       ...nextBlocks[index],
                       translated: aiText.trim(),
                       sourceTier: `${modelName} AI 精翻 ✨`,
+                      translationFailed: false,
                     };
                   }
                 });
@@ -1647,11 +1727,17 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     if (!overlayResult) return;
     const block = overlayResult.blocks[blockIndex];
     if (!block) return;
+    const epoch = processEpochRef.current;
+    const translationEpoch = retranslateEpochRef.current;
+    const stale = () => !mountedRef.current || epoch !== processEpochRef.current || translationEpoch !== retranslateEpochRef.current;
     const preset = selectedEngine !== 'auto' ? selectedEngine : effectivePreset();
     const llmConfig = resolveLlmConfig(selectedEngine);
     try {
-      const [tr] = await cmdTranslatePhrasesStyled([block.original], preset, llmConfig, settings.translationStyle, targetLang);
-      if (!mountedRef.current) return;
+      const tr = await withDeadline(isCaptureOnlineEngine(selectedEngine)
+        ? translateCaptureOnline(block.original, selectedEngine, targetLang, effectivePreset(), settings)
+        : cmdTranslatePhrasesStyled([block.original], preset, llmConfig, settings.translationStyle, targetLang).then((results) => results[0]),
+      llmConfig ? 30_000 : 12_000, '翻译请求超时，请重试');
+      if (stale()) return;
       if (hasUsableTranslation(tr)) {
         setOverlayResult((prev) => prev ? {
           ...prev,
@@ -1665,7 +1751,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         showFeedback('⚠️ 仍失败 — 可按 Tab 换引擎后再试');
       }
     } catch {
-      if (mountedRef.current) showFeedback('⚠️ 重试失败：翻译通道不可用');
+      if (!stale()) showFeedback('⚠️ 重试失败：翻译通道不可用');
     }
   }, [overlayResult, selectedEngine, settings, targetLang]);
 
@@ -1713,23 +1799,25 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   /** 离屏合成选区截图：按需将底图、原位翻译色块与译文、SVG 标注合成到一张高保真图 */
   const getComposedRegionDataUrl = useCallback(
     async (rect: SelRect, includeTranslations: boolean, includeAnnotations: boolean): Promise<string> => {
+      // Freeze the displayed mode, zoom, wrapping and dragged positions at
+      // click time, before IPC/image decoding can allow another render.
+      const root = containerRef.current;
+      if (includeTranslations && !root) throw new Error('原位显示已关闭，请重新截图');
+      const overlaySnapshot = includeTranslations && root ? serializeOverlayRegion(root, rect) : null;
       const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
       const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
       const b64 = await cmdGetRegionImageBase64(rect, scaleFactor, vw, vh);
-      if (!b64) return '';
+      if (!b64) throw new Error('无法读取选区底图');
 
-      return new Promise<string>((resolve) => {
+      return new Promise<string>((resolve, reject) => {
         const img = new Image();
-        img.onload = () => {
+        img.onload = async () => {
           try {
             const canvas = document.createElement('canvas');
             canvas.width = img.width;
             canvas.height = img.height;
             const ctx = canvas.getContext('2d');
-            if (!ctx) {
-              resolve('');
-              return;
-            }
+            if (!ctx) throw new Error('无法创建图片画布');
 
             // 1. 底层干净屏幕原图
             ctx.drawImage(img, 0, 0);
@@ -1737,29 +1825,10 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             const scaleX = img.width / Math.max(1, rect.width);
             const scaleY = img.height / Math.max(1, rect.height);
 
-            // 2. 原位 1:1 视觉翻译合成（底色抹除层 + 译文文本）
-            if (includeTranslations && overlayResult?.blocks && overlayResult.blocks.length > 0) {
-              const fontLineHeights = estimateDenseRowFontHeights(overlayResult.blocks);
-              overlayResult.blocks.forEach((block, blockIndex) => {
-                const bx = (block.logicalX - rect.x) * scaleX;
-                const by = (block.logicalY - rect.y) * scaleY;
-                const bw = block.logicalW * scaleX;
-                const bh = block.logicalH * scaleY;
-
-                ctx.fillStyle = toSolidBg(block.bgCss, block.fgCss);
-                ctx.fillRect(bx, by, bw, bh);
-
-                if (block.translated) {
-                  const fontSize = Math.round(
-                    Math.max(11, fontLineHeights[blockIndex] * 0.72) * scaleY
-                  );
-                  ctx.font = `600 ${fontSize}px "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif`;
-                  ctx.fillStyle = getCardTextColor(block.bgCss, block.fgCss);
-                  ctx.textBaseline = 'top';
-                  ctx.fillText(block.translated, bx + 2 * scaleX, by + 2 * scaleY, bw);
-                }
-              });
-            }
+            // 2. Paint the actual visible in-place layers. Source erasures
+            // remain below every card, just as on screen; panel/hidden modes
+            // do not invent invisible cover cards during export.
+            await drawOverlaySnapshot(ctx, overlaySnapshot, canvas.width, canvas.height);
 
             // 3. SVG 标注绘制（矩形、箭头、涂鸦画笔、马赛克、文字）
             if (includeAnnotations && annotations && annotations.length > 0) {
@@ -1833,15 +1902,15 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             }
 
             resolve(canvas.toDataURL('image/png'));
-          } catch {
-            resolve('');
+          } catch (error) {
+            reject(error);
           }
         };
-        img.onerror = () => resolve('');
+        img.onerror = () => reject(new Error('选区底图解码失败'));
         img.src = 'data:image/bmp;base64,' + b64;
       });
     },
-    [scaleFactor, overlayResult, annotations]
+    [scaleFactor, annotations]
   );
 
   /** Copy the selection region image (clean desktop BMP or composed with annotations/translations) to clipboard. */
@@ -1905,7 +1974,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
   const handleRenderedSize = useCallback((blockIndex: number, size: { width: number; height: number }) => {
     setRenderedSizes((prev) => {
       const cur = prev[blockIndex];
-      if (cur && Math.abs(cur.height - size.height) <= 2 && Math.abs(cur.width - size.width) <= 2) return prev;
+      // Cards already filter interior jitter. Do not filter a second time at
+      // 2px and discard the small edge corrections they deliberately report.
+      if (cur && Math.abs(cur.height - size.height) <= 0.5 && Math.abs(cur.width - size.width) <= 0.5) return prev;
       return { ...prev, [blockIndex]: size };
     });
   }, []);
@@ -1965,6 +2036,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
     setAdjustRect(selection);
     setPhase('processing');
+    setIsAiRefining(false);
+    setTranslatingProgress(null);
     setBannerDismissed(false);
     setCardMenu(null);
     setPipelineDiagnostics({ captureMs: lastCaptureMsRef.current });
@@ -1976,13 +2049,13 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       const viewportW = typeof window !== 'undefined' ? window.innerWidth : undefined;
       const viewportH = typeof window !== 'undefined' ? window.innerHeight : undefined;
       const ocrStartedAt = performance.now();
-      const layout = await cmdRegionOcrLayout(
+      const layout = await withDeadline(cmdRegionOcrLayout(
         selection,
         scaleFactor,
         viewportW,
         viewportH,
         detectedOcrPreset(),
-      );
+      ), 30_000, '文字识别超时，请缩小选区后重试');
 
       if (!mountedRef.current) return;
       if (epoch !== processEpochRef.current) return; // cancelled while awaiting
@@ -1992,6 +2065,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     } catch (err) {
       if (typeof window === 'undefined' || !mountedRef.current || epoch !== processEpochRef.current) return;
       console.error('[CaptureOverlay] Region OCR failed:', err);
+      setPipelineDiagnostics((prev) => ({ ...prev, failure: classifyTranslationFailure(err) }));
       setPhase((settings.captureReleaseAction ?? 'auto') === 'adjust' && adjustRect ? 'adjusting' : 'selecting');
       setStartPos(null);
       setCurrPos(null);
@@ -2018,6 +2092,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     setAdjustRect(null);
 
     setPhase('processing');
+    setIsAiRefining(false);
+    setTranslatingProgress(null);
     setBannerDismissed(false);
     const epoch = ++processEpochRef.current;
     setPipelineDiagnostics({ captureMs: lastCaptureMsRef.current });
@@ -2026,9 +2102,9 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
       const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
       const ocrStartedAt = performance.now();
-      const layouts = await Promise.all(
+      const layouts = await withDeadline(Promise.all(
         rects.map((sel) => cmdRegionOcrLayout(sel, scaleFactor, vw, vh, detectedOcrPreset())),
-      );
+      ), 30_000, '多选区文字识别超时，请减少选区后重试');
       if (!mountedRef.current || epoch !== processEpochRef.current) return;
       setPipelineDiagnostics({ captureMs: lastCaptureMsRef.current, ocrLayoutMs: performance.now() - ocrStartedAt });
 
@@ -2092,10 +2168,11 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     if (!watchModeRef.current || watchTickBusyRef.current) return;
     if (!LAST_SELECTION) return;
     watchTickBusyRef.current = true;
-    // 与手动划词共用 epoch：新的一次 tick 使上一次在途结果作废，
-    // 反之用户手动划新区域时，本次 tick 的结果也不再写入。
-    const epoch = ++processEpochRef.current;
+    // A poll without a frame change must not cancel translations still running
+    // for this region. Invalidate them only when a replacement layout is ready.
+    const epoch = processEpochRef.current;
     const ocrStartedAt = performance.now();
+    const isCurrentWatch = () => watchModeRef.current && mountedRef.current && epoch === processEpochRef.current;
     try {
       const vw = typeof window !== 'undefined' ? window.innerWidth : undefined;
       const vh = typeof window !== 'undefined' ? window.innerHeight : undefined;
@@ -2104,12 +2181,14 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         try {
           // Quiet path: Rust refreshes only the watched rect in place — the
           // overlay window never hides, so there is zero on-screen flicker.
-          layout = await cmdWatchTick(LAST_SELECTION, scaleFactor, vw, vh, detectedOcrPreset());
+          layout = await withDeadline(cmdWatchTick(LAST_SELECTION, scaleFactor, vw, vh, detectedOcrPreset()), 30_000, '区域监控识别超时');
+          if (!isCurrentWatch()) return;
           if (!layout || !Array.isArray(layout.blocks)) {
             throw new Error('区域监控返回了无效 OCR 布局');
           }
           watchQuietFailuresRef.current = 0;
         } catch {
+          if (!isCurrentWatch()) return;
           // Fallback: legacy refresh (hide overlay → capture → restore).
           // Persistent quiet-path failure auto-stops the watch instead of
           // degrading into the old flicker every tick.
@@ -2120,13 +2199,15 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             return;
           }
           await cmdBeginCapture();
+          if (!isCurrentWatch()) return;
           await cmdShowOverlay();
-          layout = await cmdRegionOcrLayout(LAST_SELECTION, scaleFactor, vw, vh, detectedOcrPreset());
+          if (!isCurrentWatch()) return;
+          layout = await withDeadline(cmdRegionOcrLayout(LAST_SELECTION, scaleFactor, vw, vh, detectedOcrPreset()), 30_000, '区域监控识别超时');
         }
       } else {
-        layout = await cmdRegionOcrLayout(LAST_SELECTION, scaleFactor, vw, vh, detectedOcrPreset());
+        layout = await withDeadline(cmdRegionOcrLayout(LAST_SELECTION, scaleFactor, vw, vh, detectedOcrPreset()), 30_000, '区域监控识别超时');
       }
-      if (!watchModeRef.current || !mountedRef.current || epoch !== processEpochRef.current) return;
+      if (!isCurrentWatch()) return;
       if (!layout || !Array.isArray(layout.blocks)) {
         throw new Error('区域监控回退后仍未得到有效 OCR 布局');
       }
@@ -2142,6 +2223,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
         b.bgCss,
       ]));
       if (fingerprint === lastWatchTextRef.current) return;
+      processEpochRef.current += 1;
       lastWatchTextRef.current = fingerprint;
       setPipelineDiagnostics({ ocrLayoutMs: performance.now() - ocrStartedAt });
       await applyLayoutAndTranslate(layout, true);
@@ -2331,15 +2413,16 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
 
     setSnapping(true);
     snappingRef.current = true;
+    const snapEpoch = processEpochRef.current;
     try {
-      const snapped = await cmdSnapRegion(
+      const snapped = await withDeadline(cmdSnapRegion(
         lx,
         ly,
         scaleFactor,
         typeof window !== 'undefined' ? window.innerWidth : undefined,
         typeof window !== 'undefined' ? window.innerHeight : undefined,
-      );
-      if (!mountedRef.current) return;
+      ), 30_000, '文本吸附超时');
+      if (!mountedRef.current || snapEpoch !== processEpochRef.current) return;
       if (!snapped || snapped.width < 12 || snapped.height < 12) {
         showFeedback('🪄 此处未检测到可吸附的文本段落');
         return;
@@ -2347,6 +2430,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       showFeedback('🪄 已智能吸附文本段落');
       setPendingRects([]);
       setAdjustRect(null);
+      snappingRef.current = false;
+      setSnapping(false);
       await processSelection({
         x: Math.round(snapped.x),
         y: Math.round(snapped.y),
@@ -2355,9 +2440,12 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
       });
     } catch (err) {
       console.warn('[CaptureOverlay] Snap failed:', err);
+      if (mountedRef.current && snapEpoch === processEpochRef.current) showFeedback('⚠️ 文本吸附失败，请手动划框重试');
     } finally {
-      snappingRef.current = false;
-      if (mountedRef.current) setSnapping(false);
+      if (snapEpoch === processEpochRef.current) {
+        snappingRef.current = false;
+        if (mountedRef.current) setSnapping(false);
+      }
     }
   }, [phase, isDragging, scaleFactor, processSelection, adjustRect]);
 
@@ -2375,6 +2463,8 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     if (isPinned && !force) {
       return;
     }
+    hoverEpochRef.current += 1;
+    hoverBusyRef.current = false;
     setPhase('idle');
     setOverlayResult(null);
     setStartPos(null);
@@ -2384,6 +2474,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
     setBannerDismissed(false);
     setFeedbackToast(null);
     setTranslatingProgress(null);
+    setIsAiRefining(false);
     setPipelineDiagnostics({});
     setAdjustRect(null);
     setAdjustHandle(null);
@@ -3343,6 +3434,7 @@ export const CaptureOverlay: React.FC<CaptureOverlayProps> = ({
             });
           }}
           onRetry={block.translationFailed ? () => { void retryBlockTranslation(block.__i); } : undefined}
+          translationPending={translatingProgress !== null}
           viewMode={cardViewMode}
           scale={(cardScales[block.__i] ?? 1.0) * globalFontScale}
           fontLineHeight={block.fontLineHeight}

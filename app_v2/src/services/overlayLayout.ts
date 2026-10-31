@@ -1,7 +1,7 @@
 import { OverlayBlock } from './types';
 
 /**
- * Resolves overlapping translated cards so glyphs can never visually stack.
+ * Resolves overlapping translated cards using measured display geometry.
  *
  * Collision boxes use the REAL rendered size when the card reported one
  * (aabbH / aabbW via ResizeObserver), falling back to the OCR logical box —
@@ -18,8 +18,8 @@ import { OverlayBlock } from './types';
  * Pass 2 handles bottom overflow by pulling the chain upward while preserving
  * ≥ margin gaps between vertically adjacent cards (the old proportional
  * subtraction closed gaps to negative values, re-stacking dense bottoms).
- * Only when the whole chain is taller than the container can overlap remain —
- * physically unsolvable without shrinking text.
+ * Pass 3 preserves spacing at the top bound. A chain taller than the available
+ * selection overflows at its tail rather than stacking cards or shrinking text.
  */
 const COLLISION_EPS = 3;
 
@@ -57,9 +57,14 @@ export function estimateSafeErasePadding(
 
 function denseProseGroups(
   blocks: Array<Pick<OverlayBlock, 'original' | 'logicalY' | 'logicalH'> & Partial<Pick<OverlayBlock, 'logicalX' | 'logicalW'>>>,
-  heights: number[],
 ): number[][] {
-  const order = blocks.map((_, i) => i).sort((a, b) => blocks[a].logicalY - blocks[b].logicalY);
+  // Membership follows source geometry, not the font heights this grouping
+  // later normalizes. Otherwise lowering a noisy tall box can make a valid
+  // line gap fail on the second pass and give the same paragraph two sizes.
+  const heights = blocks.map((block) => Math.max(1, block.logicalH
+    / Math.max(1, block.original.split(/\r?\n/).filter(Boolean).length)));
+  const order = blocks.map((_, i) => i).sort((a, b) => blocks[a].logicalY - blocks[b].logicalY
+    || (blocks[a].logicalX ?? 0) - (blocks[b].logicalX ?? 0));
   // Commands and file paths are independent console rows, not a wrapped
   // paragraph. Sharing one width-fitted font with the next log entry makes
   // ordinary short rows shrink merely because a neighbouring path is long.
@@ -72,20 +77,39 @@ function denseProseGroups(
     && !codeLike(blocks[i].original)
     && blocks[i].original.replace(/\s/g, '').length >= 26;
   const groups: number[][] = [];
-  let active: number[] | undefined;
+  const groupForLine = new Map<number, number[]>();
+  const seen: number[] = [];
   for (const index of order) {
-    const previousIndex = active?.[active.length - 1];
-    if (previousIndex !== undefined) {
+    const current = blocks[index];
+    // OCR order interleaves columns. Find the preceding line in this column,
+    // including non-prose blocks so a same-column control still breaks a
+    // paragraph. A label in another panel must not reset this column's group.
+    let previousIndex: number | undefined;
+    for (const candidate of seen) {
+      const previous = blocks[candidate];
+      if (previous.logicalY >= current.logicalY
+        || Math.abs((previous.logicalX ?? 0) - (current.logicalX ?? 0)) > 24) continue;
+      if (previousIndex === undefined
+        || previous.logicalY > blocks[previousIndex].logicalY
+        || (previous.logicalY === blocks[previousIndex].logicalY
+          && Math.abs((previous.logicalX ?? 0) - (current.logicalX ?? 0))
+            < Math.abs((blocks[previousIndex].logicalX ?? 0) - (current.logicalX ?? 0)))) {
+        previousIndex = candidate;
+      }
+    }
+    seen.push(index);
+    const active = previousIndex === undefined ? undefined : groupForLine.get(previousIndex);
+    if (previousIndex !== undefined && active) {
       const previous = blocks[previousIndex];
-      const current = blocks[index];
       const referenceH = Math.max(heights[previousIndex], heights[index]);
       const deltaY = current.logicalY - previous.logicalY;
       const continuation = !isLongRow(index)
         && heights[index] <= 32
+        && !current.original.includes('\n') && !codeLike(current.original)
         && (current.logicalW ?? 0) >= 80
         && current.original.replace(/\s/g, '').length >= 8
         && !/[。！？.!?;:：]\s*$/.test(previous.original);
-      if (Math.abs((current.logicalX ?? 0) - (previous.logicalX ?? 0)) <= 24
+      if (Math.abs((current.logicalX ?? 0) - (blocks[active[0]].logicalX ?? 0)) <= 24
         && referenceH / Math.max(1, Math.min(heights[previousIndex], heights[index])) <= 1.3
         // A long row after a paragraph gap is a new paragraph even when its
         // left edge and font height match. Allowing 1.7x joined separate
@@ -93,14 +117,61 @@ function denseProseGroups(
         // translation shrink unrelated lines through the shared font fit.
         && deltaY >= referenceH * 0.8 && deltaY <= referenceH * 1.4
         && (isLongRow(index) || continuation)) {
-        active!.push(index);
+        active.push(index);
+        groupForLine.set(index, active);
         continue;
       }
     }
-    active = isLongRow(index) ? [index] : undefined;
-    if (active) groups.push(active);
+    if (isLongRow(index)) {
+      const group = [index];
+      groups.push(group);
+      groupForLine.set(index, group);
+    }
   }
   return groups.filter((group) => group.length >= 2);
+}
+
+/** Keep parallel prose columns independent when a translation needs wrapping. */
+export function estimateDenseProseColumnWidths(blocks: OverlayBlock[], heights: number[]): (number | undefined)[] {
+  const widths: (number | undefined)[] = blocks.map(() => undefined);
+  const columns = denseProseGroups(blocks).map((indices) => ({
+    indices,
+    left: Math.min(...indices.map((i) => blocks[i].logicalX)),
+    right: Math.max(...indices.map((i) => blocks[i].logicalX + blocks[i].logicalW)),
+    top: Math.min(...indices.map((i) => blocks[i].logicalY)),
+    bottom: Math.max(...indices.map((i) => blocks[i].logicalY + blocks[i].logicalH)),
+    lineHeight: Math.min(...indices.map((i) => heights[i])),
+  }));
+  for (const column of columns) {
+    const hasParallelColumn = columns.some((other) => {
+      if (other === column) return false;
+      const gap = Math.max(column.left, other.left) - Math.min(column.right, other.right);
+      const overlapY = Math.min(column.bottom, other.bottom) - Math.max(column.top, other.top);
+      return gap >= 8 && overlapY >= Math.min(column.lineHeight, other.lineHeight) * 0.6;
+    });
+    if (!hasParallelColumn) continue;
+    // Use only the known source envelope, not the empty gutter: it can contain
+    // a separator or controls that OCR did not detect. Short final lines may
+    // use the rest of their own paragraph's width, but never another column.
+    for (const i of column.indices) widths[i] = Math.max(40, column.right - blocks[i].logicalX);
+  }
+  return widths;
+}
+
+/** Shared budget for font fitting and the card's actual CSS max-width. */
+export function getOverlayCardMaxWidth(
+  block: Pick<OverlayBlock, 'logicalX' | 'logicalW' | 'layoutMaxWidth' | 'layoutRight'>,
+  viewportWidth: number, x = block.logicalX, manuallyMoved = false,
+): number {
+  const preferred = Math.max(40, Math.min(
+    Math.max(40, viewportWidth - x - 20),
+    block.layoutMaxWidth ?? Math.max(Math.round(block.logicalW * 1.6 + 16), 120),
+  ));
+  // The desktop is wider than a captured bubble or panel. Ink that expands
+  // beyond that selection is both misplaced on screen and cut off on export.
+  // A deliberate drag may leave the selection; automatic layout may not.
+  return !manuallyMoved && Number.isFinite(block.layoutRight)
+    ? Math.min(preferred, Math.max(1, block.layoutRight! - x)) : preferred;
 }
 
 function isDenseTerminalOverlay(
@@ -137,14 +208,31 @@ export function estimateDenseRowFontHeights(
     return Math.max(1, block.logicalH / lineCount);
   });
   const rows: number[][] = [];
-  const order = blocks.map((_, i) => i).sort((a, b) => blocks[a].logicalY - blocks[b].logicalY);
+  // Same-y text in separate panels need not have the same font. Normalize
+  // compact, horizontally neighboring controls only; paragraph lines get
+  // their own per-column normalization below. X order keeps a toolbar's
+  // transitive neighbors together even when OCR top edges have small jitter.
+  const order = blocks.map((_, i) => i).filter((i) =>
+    !blocks[i].original.includes('\n') && blocks[i].original.replace(/\s/g, '').length <= 24
+      && (blocks[i].logicalW ?? 0) <= 220 && heights[i] <= 36,
+  ).sort((a, b) => (blocks[a].logicalX ?? 0) - (blocks[b].logicalX ?? 0)
+    || blocks[a].logicalY - blocks[b].logicalY);
 
   for (const index of order) {
     const row = rows.find((indices) => {
       const rowYs = indices.map((i) => blocks[i].logicalY);
       const minY = Math.min(...rowYs, blocks[index].logicalY);
       const maxY = Math.max(...rowYs, blocks[index].logicalY);
-      return maxY - minY <= 6;
+      if (maxY - minY > 6) return false;
+      const block = blocks[index];
+      return indices.some((i) => {
+        const peer = blocks[i];
+        if (block.logicalX === undefined || block.logicalW === undefined
+          || peer.logicalX === undefined || peer.logicalW === undefined) return true;
+        const gap = Math.max(block.logicalX, peer.logicalX)
+          - Math.min(block.logicalX + block.logicalW, peer.logicalX + peer.logicalW);
+        return gap <= Math.max(24, Math.min(heights[index], heights[i]) * 2);
+      });
     });
     if (row) row.push(index);
     else rows.push([index]);
@@ -175,7 +263,7 @@ export function estimateDenseRowFontHeights(
   // padding may differ by several pixels between those lines even though the
   // source font is uniform. Normalize only neighbouring long rows with the
   // same left margin; do not flatten headings, buttons or unrelated columns.
-  for (const group of denseProseGroups(blocks, heights)) {
+  for (const group of denseProseGroups(blocks)) {
     const sorted = group.map((i) => normalized[i]).sort((a, b) => a - b);
     const reference = (sorted[Math.floor((sorted.length - 1) / 2)]
       + sorted[Math.floor(sorted.length / 2)]) / 2;
@@ -204,7 +292,7 @@ export function estimateDenseProseFontSizes(
   showOriginal = false,
 ): (number | undefined)[] {
   const sizes: (number | undefined)[] = blocks.map(() => undefined);
-  for (const group of denseProseGroups(blocks, heights)) {
+  for (const group of denseProseGroups(blocks)) {
     const baseSizes: number[] = [];
     const fitted = group.map((i) => {
       const block = blocks[i];
@@ -215,10 +303,10 @@ export function estimateDenseProseFontSizes(
       baseSizes.push(base);
       const text = (showOriginal ? original : block.translated || original).replace(/\s*\n+\s*/g, ' ').trim();
       const measured = measure(text, base) || text.length * base * (cjkCount / nonSpace > 0.3 ? 1.05 : 0.52);
-      const cardMaxWidth = Math.max(40, Math.min(
-        Math.max(40, viewportWidth - block.logicalX - 20),
-        Math.max(Math.round(block.logicalW * 1.6 + 16), 120),
-      ));
+      // A capture edge is a wrapping fence, not a reason to shrink all the
+      // lines of a paragraph again. Keep its existing source/column fit;
+      // the rendered card enforces layoutRight and reports its actual height.
+      const cardMaxWidth = getOverlayCardMaxWidth({ ...block, layoutRight: undefined }, viewportWidth);
       const allowed = Math.min(Math.max(block.logicalW * 1.05, 60), Math.max(cardMaxWidth - 4, 40));
       return measured > allowed ? base * allowed / measured * 0.97 : base;
     });
@@ -244,15 +332,22 @@ export function resolveAABBCollisions<T extends OverlayBlock>(
   blocks: T[],
   containerWidth: number,
   containerHeight: number,
-  margin = 4
+  margin = 4,
+  verticalBounds?: { top: number; bottom: number },
 ): T[] {
   if (blocks.length === 0) return [];
 
   const getH = (b: T) => Math.max(b.aabbH ?? 0, b.logicalH);
   const getW = (b: T) => Math.max(b.aabbW ?? 0, b.logicalW);
+  const hasBounds = !!verticalBounds
+    && Number.isFinite(verticalBounds.top) && Number.isFinite(verticalBounds.bottom)
+    && Math.floor(Math.min(containerHeight, verticalBounds.bottom)) > Math.ceil(Math.max(0, verticalBounds.top));
+  const top = hasBounds ? Math.ceil(Math.max(0, verticalBounds!.top)) : 0;
+  const bottom = hasBounds ? Math.floor(Math.min(containerHeight, verticalBounds!.bottom)) : containerHeight;
 
   // Sort blocks by logicalY ascending
-  const resolved = blocks.map((b) => ({ ...b })).sort((a, b) => a.logicalY - b.logicalY);
+  const resolved = blocks.map((b) => ({ ...b, logicalY: Math.round(b.logicalY) }))
+    .sort((a, b) => a.logicalY - b.logicalY);
   const n = resolved.length;
 
   // ── 0. 横向菜单栏同行弹性避让与微缩 (Horizontal Same-Row Elastic Avoidance & Scaling) ──
@@ -359,7 +454,7 @@ export function resolveAABBCollisions<T extends OverlayBlock>(
         const overlapY = Math.min(bi.logicalY + hi, bj.logicalY + hj) - Math.max(bi.logicalY, bj.logicalY);
 
         if (overlapX > COLLISION_EPS && overlapY > COLLISION_EPS) {
-          const newY = bi.logicalY + hi + margin;
+          const newY = Math.ceil(bi.logicalY + hi + margin);
           if (newY > bj.logicalY) {
             resolved[j].logicalY = newY;
             changed = true;
@@ -382,7 +477,7 @@ export function resolveAABBCollisions<T extends OverlayBlock>(
   for (const idx of order) {
     const bi = resolved[idx];
     const hi = getH(bi);
-    let limitBottom = containerHeight;
+    let limitBottom = bottom;
     for (let j = 0; j < n; j++) {
       if (j === idx || snapY[j] <= snapY[idx]) continue;
       const bj = resolved[j];
@@ -391,16 +486,27 @@ export function resolveAABBCollisions<T extends OverlayBlock>(
       }
     }
     if (bi.logicalY + hi > limitBottom) {
-      bi.logicalY = limitBottom - hi;
+      bi.logicalY = Math.floor(limitBottom - hi);
     }
   }
 
-  // 3. Final clamp: nothing above the top edge; integer pixels (fractional
-  // coordinates render as blurry subpixel text). Rounding jitter ≤1px is
-  // absorbed by the 4px margin. When the whole chain cannot fit the screen
-  // the top rows may exceed upward — unavoidable without shrinking text.
+  // 3. Repair the top bound in the SAME frozen vertical order. Clamping every
+  // negative Y independently used to pile several oversized rows at y=0.
+  // When a chain cannot fit, preserve order/spacing/font size and let its tail
+  // overflow visibly instead. Export validates that tail rather than silently
+  // cropping it. Independent horizontal bands do not drag one another down.
+  for (const idx of [...order].reverse()) {
+    const bi = resolved[idx];
+    let minY = top;
+    for (let j = 0; j < n; j++) {
+      if (snapY[j] >= snapY[idx] || overlapXOf(getW, bi, resolved[j]) <= COLLISION_EPS) continue;
+      minY = Math.max(minY, resolved[j].logicalY + getH(resolved[j]) + margin);
+    }
+    bi.logicalY = Math.max(Math.round(bi.logicalY), Math.ceil(minY));
+  }
+  // Horizontal clamping is unchanged; source rectangles/erase patches remain
+  // anchored separately from these display positions.
   for (let i = 0; i < n; i++) {
-    resolved[i].logicalY = Math.round(Math.max(0, resolved[i].logicalY));
     const width = getW(resolved[i]);
     resolved[i].logicalX = Math.round(
       Math.max(0, Math.min(resolved[i].logicalX, Math.max(0, containerWidth - width)))

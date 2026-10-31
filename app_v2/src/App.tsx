@@ -80,9 +80,10 @@ function App() {
     fetchSettings();
     if (isTauri()) {
       let unlistenResize: (() => void) | undefined;
+      let disposed = false;
       import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
         const win = getCurrentWindow();
-        win.isMaximized().then(setIsMaximized).catch(() => {});
+        win.isMaximized().then((max) => { if (!disposed) setIsMaximized(max); }).catch(() => {});
       }).catch(() => {});
 
       import('@tauri-apps/api/event').then(({ listen }) => {
@@ -90,14 +91,15 @@ function App() {
           try {
             const { getCurrentWindow } = await import('@tauri-apps/api/window');
             const max = await getCurrentWindow().isMaximized();
-            setIsMaximized(max);
+            if (!disposed) setIsMaximized(max);
           } catch {}
         }).then((u) => {
-          unlistenResize = u;
+          if (disposed) u(); else unlistenResize = u;
         });
       }).catch(() => {});
 
       return () => {
+        disposed = true;
         if (unlistenResize) unlistenResize();
       };
     }
@@ -520,9 +522,9 @@ function App() {
         </>
       )}
 
-      {/* Only show app chrome when overlay is NOT open */}
-      {!isOverlayOpen && (
-        <>
+      {/* Hide the chrome during capture without destroying form/chat/settings
+          state. Cancelling a screenshot must preserve the user's input. */}
+      <div className={isOverlayOpen ? 'hidden' : 'contents'} aria-hidden={isOverlayOpen || undefined}>
           <TitleBar
             onTriggerCapture={() => setIsOverlayOpen(true)}
             hotkey={settings.hotkey || "F4"}
@@ -618,8 +620,7 @@ function App() {
               />
             </div>
           </div>
-        </>
-      )}
+      </div>
 
       {/* Screen Selection & Translation Overlay — renders full-screen when open */}
       <CaptureOverlay

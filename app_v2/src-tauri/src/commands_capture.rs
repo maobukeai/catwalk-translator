@@ -1106,53 +1106,35 @@ pub fn set_was_main_window_visible(vis: bool) {
     WAS_MAIN_WINDOW_VISIBLE.store(vis, Ordering::SeqCst);
 }
 
-/// Main-window geometry (physical px) saved before the overlay expands, so
-/// closing the overlay can restore the user's exact size/position instead of
-/// snapping to a hardcoded default.
-static SAVED_MAIN_GEOMETRY: std::sync::Mutex<Option<(i32, i32, u32, u32)>> =
+/// Full pre-capture window state. Never infer validity from primary-screen
+/// dimensions: maximized, snapped and secondary-monitor windows are valid too.
+static SAVED_MAIN_GEOMETRY: std::sync::Mutex<Option<crate::window_state::MainWindowState>> =
     std::sync::Mutex::new(None);
+// begin/show/close are separate async IPC calls. Serialize their native window
+// transitions so a hotkey or double click cannot capture intermediate geometry.
+static OVERLAY_TRANSITION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub fn clear_saved_main_geometry() {
+    if let Ok(mut slot) = SAVED_MAIN_GEOMETRY.lock() {
+        *slot = None;
+    }
+}
 
 /// Backend-driven capture: Rust hides main window, captures clean desktop to memory, then enables transparent overlay
 #[tauri::command]
 pub async fn cmd_begin_capture(
     window: tauri::WebviewWindow,
 ) -> Result<crate::capture::ScreenCapturePayload, String> {
+    let _transition = OVERLAY_TRANSITION.lock().await;
     let is_overlay = IS_OVERLAY_ACTIVE.load(Ordering::SeqCst);
     if !is_overlay {
+        let snapshot = crate::window_state::MainWindowState::capture(&window)?;
         let was_vis = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false);
         WAS_MAIN_WINDOW_VISIBLE.store(was_vis, Ordering::SeqCst);
-    }
-
-    #[cfg(target_os = "windows")]
-    let (screen_w, screen_h) = {
-        #[link(name = "user32")]
-        extern "system" {
-            fn GetSystemMetrics(n_index: i32) -> i32;
-        }
-        const SM_CXSCREEN: i32 = 0;
-        const SM_CYSCREEN: i32 = 1;
-        unsafe {
-            let sw = GetSystemMetrics(SM_CXSCREEN).max(1) as u32;
-            let sh = GetSystemMetrics(SM_CYSCREEN).max(1) as u32;
-            (sw, sh)
-        }
-    };
-    #[cfg(not(target_os = "windows"))]
-    let (screen_w, screen_h) = (1920u32, 1080u32);
-
-    // Remember the exact pre-overlay geometry so close can restore it verbatim.
-    // If the window is already in overlay mode or currently full screen, NEVER overwrite SAVED_MAIN_GEOMETRY!
-    if !is_overlay {
-        if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
-            let is_fullscreen = (size.width + 10 >= screen_w && size.height + 10 >= screen_h)
-                || size.width >= screen_w
-                || size.height >= screen_h;
-            if pos.x > -10000 && pos.y > -10000 && size.width >= 200 && size.height >= 200 && !is_fullscreen {
-                if let Ok(mut slot) = SAVED_MAIN_GEOMETRY.lock() {
-                    *slot = Some((pos.x, pos.y, size.width, size.height));
-                }
-            }
-        }
+        *SAVED_MAIN_GEOMETRY.lock().map_err(|e| e.to_string())? = Some(snapshot);
+        // Mark the session before the first await, rather than only when show
+        // arrives. A repeated capture must retain the original visible state.
+        IS_OVERLAY_ACTIVE.store(true, Ordering::SeqCst);
     }
 
     // 0. 采样前台窗口识别 3D/CG 软件（必须在隐藏主窗口之前，此时前台即用户正在使用的软件）
@@ -1215,7 +1197,14 @@ pub async fn cmd_begin_capture(
     }
 
     // 3. Win32 GDI captures 100% clean desktop pixels directly into Rust static memory (~15ms)
-    let mut payload = crate::capture::capture_desktop_payload()?;
+    let mut payload = match crate::capture::capture_desktop_payload() {
+        Ok(payload) => payload,
+        Err(error) => {
+            // A failed screenshot must not leave the user's main window hidden.
+            let _ = close_overlay_inner(&window, None).await;
+            return Err(error);
+        }
+    };
 
     // Zero base64 transfer to React — return payload with scale_factor only!
     payload.data_url = String::new();
@@ -1227,8 +1216,13 @@ pub async fn cmd_begin_capture(
 /// On Windows, uses the virtual screen dimensions to cover all monitors including taskbar.
 #[tauri::command]
 pub async fn cmd_show_overlay(window: tauri::WebviewWindow) -> Result<(), String> {
-    IS_OVERLAY_ACTIVE.store(true, Ordering::SeqCst);
+    let _transition = OVERLAY_TRANSITION.lock().await;
+    if !IS_OVERLAY_ACTIVE.load(Ordering::SeqCst) {
+        return Err("截图已结束，请重新开始截图".into());
+    }
     let _ = window.unminimize();
+    let _ = window.set_fullscreen(false);
+    let _ = window.unmaximize();
 
     #[cfg(target_os = "windows")]
     {
@@ -1264,7 +1258,6 @@ pub async fn cmd_show_overlay(window: tauri::WebviewWindow) -> Result<(), String
         }
 
         let _ = window.set_always_on_top(true);
-        let _ = window.set_shadow(false);
         let _ = window.set_resizable(false);
         let _ = window.set_position(tauri::PhysicalPosition::new(vx, vy));
         let _ = window.set_size(tauri::PhysicalSize::new(vw as u32, vh as u32));
@@ -1293,14 +1286,23 @@ pub async fn cmd_close_overlay(
     window: tauri::WebviewWindow,
     restore_main: Option<bool>,
 ) -> Result<(), String> {
-    IS_OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
-    use tauri::{LogicalSize, Manager};
+    let _transition = OVERLAY_TRANSITION.lock().await;
+    close_overlay_inner(&window, restore_main).await
+}
+
+async fn close_overlay_inner(
+    window: &tauri::WebviewWindow,
+    restore_main: Option<bool>,
+) -> Result<(), String> {
+    use tauri::Manager;
+    // A repeated close (Esc plus unmount cleanup, for example) must never resize
+    // the main window or fall back to a different default geometry.
+    if !IS_OVERLAY_ACTIVE.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    let snapshot = SAVED_MAIN_GEOMETRY.lock().map_err(|e| e.to_string())?.clone();
     let should_restore =
         restore_main.unwrap_or_else(|| WAS_MAIN_WINDOW_VISIBLE.load(Ordering::SeqCst));
-    if !should_restore {
-        WAS_MAIN_WINDOW_VISIBLE.store(false, Ordering::SeqCst);
-    }
-
     let (glass_on, is_dark) = match window.app_handle().try_state::<AppState>() {
         Some(st) => match st.settings.lock() {
             Ok(lock) => (glass_enabled_for_settings(&lock), is_dark_for_settings(&lock)),
@@ -1308,62 +1310,33 @@ pub async fn cmd_close_overlay(
         },
         None => (true, true),
     };
-
-    #[cfg(target_os = "windows")]
-    crate::set_windows_dwm_blur(&window, glass_on, is_dark);
-
-    #[cfg(target_os = "windows")]
-    let (screen_w, screen_h) = {
-        #[link(name = "user32")]
-        extern "system" {
-            fn GetSystemMetrics(n_index: i32) -> i32;
-        }
-        const SM_CXSCREEN: i32 = 0;
-        const SM_CYSCREEN: i32 = 1;
-        unsafe {
-            let sw = GetSystemMetrics(SM_CXSCREEN).max(1) as u32;
-            let sh = GetSystemMetrics(SM_CYSCREEN).max(1) as u32;
-            (sw, sh)
-        }
-    };
-    #[cfg(not(target_os = "windows"))]
-    let (screen_w, screen_h) = (1920u32, 1080u32);
-
-    // Restore the user's pre-overlay geometry when valid; fall back to the
-    // standard 960×720 centered default to guarantee normal window size.
-    let saved = SAVED_MAIN_GEOMETRY.lock().ok().and_then(|s| *s);
-    let valid_saved = saved.filter(|&(_x, _y, w, h)| {
-        w >= 200 && h >= 200 && (w + 10 < screen_w || h + 10 < screen_h)
-    });
-
-    if should_restore {
-        let _ = window.set_always_on_top(false);
-        let _ = window.set_shadow(true);
-        let _ = window.set_resizable(true);
-        if let Some((x, y, w, h)) = valid_saved {
-            let _ = window.set_size(tauri::PhysicalSize::new(w, h));
-            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
-        } else {
-            let _ = window.set_size(LogicalSize::new(960.0_f64, 720.0_f64));
-            let _ = window.center();
-        }
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    } else {
-        // 绝对静默隐退：取消/关闭划词时强行直接 hide 到系统托盘，绝不弹窗打扰当前游戏或工作
-        let _ = window.hide();
-        let _ = window.set_always_on_top(false);
-        let _ = window.set_shadow(true);
-        let _ = window.set_resizable(true);
-        if let Some((x, y, w, h)) = valid_saved {
-            let _ = window.set_size(tauri::PhysicalSize::new(w, h));
-            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
-        } else {
-            let _ = window.set_size(LogicalSize::new(960.0_f64, 720.0_f64));
-            let _ = window.center();
-        }
+    if let Some(snapshot) = snapshot {
+        snapshot.restore(window, should_restore).await?;
     }
+    #[cfg(target_os = "windows")]
+    crate::set_windows_dwm_blur(window, glass_on, is_dark);
+    IS_OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
+    WAS_MAIN_WINDOW_VISIBLE.store(should_restore, Ordering::SeqCst);
+    clear_saved_main_geometry();
+    Ok(())
+}
+
+/// 重置主窗口到默认 960×720 居中尺寸，并清理内存中缓存的窗口几何信息
+#[tauri::command]
+pub async fn cmd_reset_window_size(window: tauri::WebviewWindow) -> Result<(), String> {
+    use tauri::LogicalSize;
+    let _transition = OVERLAY_TRANSITION.lock().await;
+    if is_overlay_active() {
+        return Err("请先退出截图，再重置主窗口大小".into());
+    }
+    window.set_fullscreen(false).map_err(|e| e.to_string())?;
+    window.unmaximize().map_err(|e| e.to_string())?;
+    window.unminimize().map_err(|e| e.to_string())?;
+    let _ = window.set_size(LogicalSize::new(960.0_f64, 720.0_f64));
+    let _ = window.center();
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    clear_saved_main_geometry();
     Ok(())
 }
 

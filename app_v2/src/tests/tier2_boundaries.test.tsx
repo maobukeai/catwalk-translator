@@ -259,7 +259,8 @@ describe('Tier 2 Boundary & Corner Case Test Suite', () => {
 
       const state = useSettingsStore.getState();
       expect(state.isSaving).toBe(false);
-      expect(state.toastMessage).toBe('Failed to save settings');
+      expect(state.toastMessage).toBe('设置保存失败，请重试');
+      expect(state.toastKind).toBe('error');
       spy.mockRestore();
     });
 

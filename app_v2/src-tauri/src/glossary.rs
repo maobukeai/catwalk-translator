@@ -83,19 +83,13 @@ impl GlossaryStore {
 
     /// 持久化写盘
     fn save_to_disk(&self, list: &[UserGlossaryEntry]) -> Result<(), String> {
-        if let Some(parent) = self.file_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let json = serde_json::to_string_pretty(list)
-            .map_err(|e| format!("序列化术语库 JSON 失败: {e}"))?;
-        fs::write(&self.file_path, json)
-            .map_err(|e| format!("写入术语库文件失败 ({:?}): {e}", self.file_path))?;
-        Ok(())
+        crate::persistence::write_json(&self.file_path, list)
     }
 
     /// 导入术语（支持 merge 合并增量 或 replace 全量覆盖）
     pub fn import_entries(&self, new_entries: Vec<UserGlossaryEntry>, mode: &str) -> Result<GlossaryImportSummary, String> {
-        let mut guard = self.entries.write().unwrap();
+        let mut current = self.entries.write().map_err(|e| e.to_string())?;
+        let mut guard = current.clone();
         let total_parsed = new_entries.len();
         let mut added = 0;
         let mut updated = 0;
@@ -118,7 +112,7 @@ impl GlossaryStore {
                 deduplicated.push(item);
                 added += 1;
             }
-            *guard = deduplicated;
+            guard = deduplicated;
         } else {
             // merge 模式
             for item in new_entries {
@@ -149,45 +143,53 @@ impl GlossaryStore {
         }
 
         self.save_to_disk(&guard)?;
+        let total_after = guard.len();
+        *current = guard;
 
         Ok(GlossaryImportSummary {
             total_parsed,
             added,
             updated,
             skipped,
-            total_after: guard.len(),
+            total_after,
         })
     }
 
     /// 单条添加或更新
     pub fn upsert_entry(&self, entry: UserGlossaryEntry) -> Result<(), String> {
-        let mut guard = self.entries.write().unwrap();
+        let mut current = self.entries.write().map_err(|e| e.to_string())?;
+        let mut guard = current.clone();
         let s_lower = entry.source.trim().to_lowercase();
         if let Some(existing) = guard.iter_mut().find(|e| e.source.trim().to_lowercase() == s_lower) {
             *existing = entry;
         } else {
             guard.push(entry);
         }
-        self.save_to_disk(&guard)
+        self.save_to_disk(&guard)?;
+        *current = guard;
+        Ok(())
     }
 
     /// 删除单条
     pub fn delete_entry(&self, id: &str) -> Result<bool, String> {
-        let mut guard = self.entries.write().unwrap();
+        let mut current = self.entries.write().map_err(|e| e.to_string())?;
+        let mut guard = current.clone();
         let init_len = guard.len();
         guard.retain(|e| e.id != id);
         let removed = guard.len() < init_len;
         if removed {
             self.save_to_disk(&guard)?;
+            *current = guard;
         }
         Ok(removed)
     }
 
     /// 清空全部
     pub fn clear_all(&self) -> Result<(), String> {
-        let mut guard = self.entries.write().unwrap();
+        let mut guard = self.entries.write().map_err(|e| e.to_string())?;
+        self.save_to_disk(&[])?;
         guard.clear();
-        self.save_to_disk(&guard)
+        Ok(())
     }
 }
 

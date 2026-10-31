@@ -14,6 +14,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+mod common;
+use common::{assert_online_fallback_or_retry, read_http_request};
 
 // ============================================================================
 // 1. Invalid LLM Endpoints & HTTP Errors
@@ -56,10 +58,10 @@ async fn test_challenger_invalid_endpoint_http_404_500_errors() {
 
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
-            let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 21\r\n\r\nInternal Server Error";
+            if read_http_request(&mut socket).await.is_err() { continue; }
+            let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
             let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
         }
     });
 
@@ -74,16 +76,15 @@ async fn test_challenger_invalid_endpoint_http_404_500_errors() {
     };
 
     let phrases = vec!["Unmatched 500 Phrase".to_string()];
+    let error = pipeline.translate_via_llm(&phrases, &config, &[]).await.unwrap_err();
+    assert!(error.contains("500"), "Unexpected HTTP error: {error}");
     let results = pipeline
         .translate_phrases(&phrases, "blender", Some(&config), &[])
         .await;
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].original, "Unmatched 500 Phrase");
-    // Graceful fallback to Online / Fallback API
-    assert!(
-        results[0].source_tier == "Online Fallback" || results[0].source_tier == "Fallback API"
-    );
+    assert_online_fallback_or_retry(&pipeline, &results[0]);
 }
 
 #[tokio::test]
@@ -137,16 +138,16 @@ async fn test_challenger_missing_api_key_401_unauthorized() {
     let addr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
-        if let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            if read_http_request(&mut socket).await.is_err() { continue; }
             let response_body = r#"{"error": {"message": "Invalid API Key"}}"#;
             let response = format!(
-                "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 response_body.len(),
                 response_body
             );
             let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
         }
     });
 
@@ -161,15 +162,15 @@ async fn test_challenger_missing_api_key_401_unauthorized() {
     };
 
     let phrases = vec!["Unmatched 401 Phrase".to_string()];
+    let error = pipeline.translate_via_llm(&phrases, &config, &[]).await.unwrap_err();
+    assert!(error.contains("401"), "Unexpected authentication error: {error}");
     let results = pipeline
         .translate_phrases(&phrases, "blender", Some(&config), &[])
         .await;
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].original, "Unmatched 401 Phrase");
-    assert!(
-        results[0].source_tier == "Online Fallback" || results[0].source_tier == "Fallback API"
-    );
+    assert_online_fallback_or_retry(&pipeline, &results[0]);
 }
 
 // ============================================================================

@@ -4,6 +4,7 @@ import { AnkiSyncModal } from '../components/Vocabulary/AnkiSyncModal';
 import { GlossaryPanel } from '../components/Settings/panels/GlossaryPanel';
 import { createMockIpcHarness, getActiveHarness } from './harness/tauriIpcMock';
 import type { HistoryItem, UserGlossaryEntry } from '../services/types';
+import * as XLSX from 'xlsx';
 
 const SAMPLE_HISTORY: HistoryItem[] = [
   {
@@ -166,6 +167,34 @@ describe('Anki Ecosystem and Universal Glossary Engine', () => {
   });
 
   describe('GlossaryPanel', () => {
+    it('imports a real XLSX workbook using the upgraded parser', async () => {
+      createMockIpcHarness();
+      let imported: UserGlossaryEntry[] = [];
+      getActiveHarness()!.invokeMock.mockImplementation(async (cmd: string, args?: any) => {
+        if (cmd === 'cmd_get_custom_glossary') return imported;
+        if (cmd === 'cmd_import_custom_glossary') {
+          imported = args.entries;
+          return { totalParsed: imported.length, added: imported.length, updated: 0, skipped: 0, totalAfter: imported.length };
+        }
+        return null;
+      });
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+        ['source', 'target', 'category', 'note'],
+        ['Bevel', '倒角', 'Blender', '建模术语'],
+        ['', '空原词应跳过', '', ''],
+      ]), 'Terms');
+      const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+      const file = new File([buffer], 'terms.xlsx');
+      file.arrayBuffer = async () => buffer;
+      render(<GlossaryPanel />);
+      const dropzone = screen.getByText(/拖拽 Excel \(\.xlsx\) 或 CSV \/ TSV \/ TXT 文件至此处/).closest('div')!;
+      fireEvent.drop(dropzone, { dataTransfer: { files: [file] } });
+      expect(await screen.findByText(/导入成功！共解析 1 条，新增 1 条/)).toBeInTheDocument();
+      expect(imported).toHaveLength(1);
+      expect(imported[0]).toMatchObject({ source: 'Bevel', target: '倒角', category: 'Blender', note: '建模术语' });
+    });
+
     it('loads glossary list, filters by search, and adds a new entry', async () => {
       createMockIpcHarness();
       let glossaryStore = [...SAMPLE_GLOSSARY];

@@ -7,20 +7,24 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "check": "tsc --noEmit",
     "tauri": "tauri",
     "test": "vitest run",
     "release:bump": "python ../scripts/bump_version.py"
   },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "dependencies": {
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-autostart": "~2.5.1",
     "@tauri-apps/plugin-opener": "^2",
     "clsx": "^2.1.1",
     "lucide-react": "^1.30.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tailwind-merge": "^3.6.0",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
@@ -38,6 +42,6 @@
     "tailwindcss": "^4.3.3",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
-    "vitest": "^3.0.5"
+    "vitest": "^4.1.11"
   }
 }

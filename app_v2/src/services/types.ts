@@ -46,6 +46,13 @@ export interface OverlayBlock {
   aabbH?: number;
   /** Real rendered width for AABB collision (nowrap text can overflow logicalW) */
   aabbW?: number;
+  /** Frontend-only width limit for a paragraph in a confirmed multi-column layout. */
+  layoutMaxWidth?: number;
+  /** Frontend-only selection right edge in overlay CSS coordinates (not a width). */
+  layoutRight?: number;
+  /** Frontend-only vertical selection bounds for precise edge corrections. */
+  layoutTop?: number;
+  layoutBottom?: number;
   /** CSS rgba() background color sampled from desktop */
   bgCss: string;
   /** Real sampled ink colour (rgb() string) or high-contrast fallback */

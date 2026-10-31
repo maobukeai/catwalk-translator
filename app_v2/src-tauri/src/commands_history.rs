@@ -20,14 +20,16 @@ pub async fn cmd_save_capture_session(
     if session.blocks.is_empty() {
         return Ok(());
     }
-    let mut lock = state
+    let mut guard = state
         .capture_sessions
         .lock()
         .map_err(|e| format!("Failed to lock capture sessions: {}", e))?;
+    let mut lock = guard.clone();
     lock.retain(|s| s.id != session.id);
     lock.insert(0, session);
     lock.truncate(MAX_CAPTURE_SESSIONS);
-    save_capture_sessions_file(&app_handle, &lock);
+    save_capture_sessions_file(&app_handle, &lock)?;
+    *guard = lock;
     Ok(())
 }
 
@@ -47,12 +49,14 @@ pub async fn cmd_clear_capture_sessions(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut lock = state
+    let mut guard = state
         .capture_sessions
         .lock()
         .map_err(|e| format!("Failed to lock capture sessions: {}", e))?;
+    let mut lock = guard.clone();
     lock.clear();
-    save_capture_sessions_file(&app_handle, &[]);
+    save_capture_sessions_file(&app_handle, &[])?;
+    *guard = lock;
     Ok(())
 }
 
@@ -71,10 +75,11 @@ pub async fn cmd_add_history(
     state: State<'_, AppState>,
     item: HistoryItem,
 ) -> Result<(), String> {
-    let mut lock = state
+    let mut guard = state
         .history
         .lock()
         .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let mut lock = guard.clone();
     lock.retain(|i| i.id != item.id);
     lock.insert(0, item);
 
@@ -95,7 +100,8 @@ pub async fn cmd_add_history(
             lock.truncate(MAX_HISTORY_CAPACITY);
         }
     }
-    save_history_file(&app_handle, &lock);
+    save_history_file(&app_handle, &lock)?;
+    *guard = lock;
     Ok(())
 }
 
@@ -105,15 +111,17 @@ pub async fn cmd_toggle_favorite(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<bool, String> {
-    let mut lock = state
+    let mut guard = state
         .history
         .lock()
         .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let mut lock = guard.clone();
     for item in lock.iter_mut() {
         if item.id == id {
             item.is_favorite = !item.is_favorite;
             let fav = item.is_favorite;
-            save_history_file(&app_handle, &lock);
+            save_history_file(&app_handle, &lock)?;
+            *guard = lock;
             return Ok(fav);
         }
     }
@@ -126,12 +134,14 @@ pub async fn cmd_delete_history(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
-    let mut lock = state
+    let mut guard = state
         .history
         .lock()
         .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let mut lock = guard.clone();
     lock.retain(|item| item.id != id);
-    save_history_file(&app_handle, &lock);
+    save_history_file(&app_handle, &lock)?;
+    *guard = lock;
     Ok(())
 }
 
@@ -140,12 +150,14 @@ pub async fn cmd_clear_history(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut lock = state
+    let mut guard = state
         .history
         .lock()
         .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let mut lock = guard.clone();
     lock.clear();
-    save_history_file(&app_handle, &lock);
+    save_history_file(&app_handle, &lock)?;
+    *guard = lock;
     Ok(())
 }
 
@@ -155,14 +167,16 @@ pub async fn cmd_clear_unfavorited_history(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
-    let mut lock = state
+    let mut guard = state
         .history
         .lock()
         .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let mut lock = guard.clone();
     let before_len = lock.len();
     lock.retain(|item| item.is_favorite);
     let removed = before_len - lock.len();
-    save_history_file(&app_handle, &lock);
+    save_history_file(&app_handle, &lock)?;
+    *guard = lock;
     Ok(removed)
 }
 
@@ -177,14 +191,16 @@ pub async fn cmd_delete_history_entries(
         return Ok(0);
     }
     let id_set: std::collections::HashSet<String> = ids.into_iter().collect();
-    let mut lock = state
+    let mut guard = state
         .history
         .lock()
         .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let mut lock = guard.clone();
     let before_len = lock.len();
     lock.retain(|item| !id_set.contains(&item.id));
     let removed = before_len - lock.len();
-    save_history_file(&app_handle, &lock);
+    save_history_file(&app_handle, &lock)?;
+    *guard = lock;
     Ok(removed)
 }
 
@@ -200,10 +216,11 @@ pub async fn cmd_batch_set_favorite(
         return Ok(0);
     }
     let id_set: std::collections::HashSet<String> = ids.into_iter().collect();
-    let mut lock = state
+    let mut guard = state
         .history
         .lock()
         .map_err(|e| format!("Failed to lock history: {}", e))?;
+    let mut lock = guard.clone();
     let mut count = 0;
     for item in lock.iter_mut() {
         if id_set.contains(&item.id) {
@@ -211,7 +228,8 @@ pub async fn cmd_batch_set_favorite(
             count += 1;
         }
     }
-    save_history_file(&app_handle, &lock);
+    save_history_file(&app_handle, &lock)?;
+    *guard = lock;
     Ok(count)
 }
 

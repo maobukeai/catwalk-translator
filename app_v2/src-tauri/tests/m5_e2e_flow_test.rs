@@ -4,11 +4,11 @@
 //!   1. translate + color sample (dict hit + dark/light bg decision)
 //!   2. empty OCR input degrades gracefully (no panic, empty response)
 //!   3. out-of-bounds boxRect safe in cmd_sample_colors_core_logic
-//!   4. begin_capture -> capture_and_ocr -> translate -> overlay flow
+//!   4. fixture BMP crop -> explicit mock OCR -> real translation/overlay flow
 use app_v2_lib::{
-    capture::set_latest_capture,
     commands::{cmd_capture_and_ocr, cmd_sample_colors_core_logic},
     models::{BoundingBox, LlmConfig, PhysicalRect, TextBlock},
+    ocr::{crop_bmp, MockOcrEngine, OcrEngine},
     translator::{CgDictionaryEngine, MultiTierPipeline},
 };
 
@@ -144,6 +144,10 @@ fn e2e_translate_plus_color_sample() {
 fn e2e_empty_ocr_degrades_gracefully() {
     tauri::async_runtime::block_on(async {
         let pipeline = MultiTierPipeline::new();
+        let empty_ocr = cmd_capture_and_ocr(PhysicalRect {
+            x: 0, y: 0, width: 0, height: 0,
+        }, None, None, None).await.unwrap();
+        assert!(empty_ocr.blocks.is_empty());
 
         // a) translate_phrases with empty list returns empty vec, no panic.
         let empty_res = pipeline
@@ -243,16 +247,14 @@ fn e2e_out_of_bounds_box_safe() {
 }
 
 // ============================================================================
-// E2E #4: begin_capture -> capture_and_ocr -> translate -> overlay flow
+// E2E #4: fixture crop -> mock OCR -> real translation -> overlay data
 // ============================================================================
 #[test]
-fn e2e_begin_capture_then_ocr_flow() {
+fn e2e_mock_ocr_translation_overlay_flow() {
     tauri::async_runtime::block_on(async {
-        // The real cmd_begin_capture requires a live WebviewWindow, which
-        // tests don't have. Reproduce the capture side-effect by injecting a
-        // known desktop BMP via set_latest_capture (mirrors what
-        // cmd_begin_capture stores in LATEST_CAPTURE). Then run the *real*
-        // cmd_capture_and_ocr and cmd_translate_phrases chain end-to-end.
+        // Native screen capture/OCR require a desktop and installed models.
+        // Use an explicit OCR fixture after the real BMP crop, then exercise
+        // real dictionary translation and color sampling without that state.
         let bmp_w: u32 = 1920;
         let bmp_h: u32 = 1080;
         let pixel_count = bmp_w as usize * bmp_h as usize;
@@ -260,14 +262,16 @@ fn e2e_begin_capture_then_ocr_flow() {
         // any cropped sub-region is non-empty and color sampling is defined.
         let mut bmp_data = vec![0u8; 54 + pixel_count * 4];
         bmp_data[..2].copy_from_slice(b"BM");
+        let file_size = bmp_data.len() as u32;
+        bmp_data[2..6].copy_from_slice(&file_size.to_le_bytes());
+        bmp_data[10..14].copy_from_slice(&54u32.to_le_bytes());
         // DIB header size
         bmp_data[14..18].copy_from_slice(&(40u32).to_le_bytes());
         bmp_data[18..22].copy_from_slice(&(bmp_w as i32).to_le_bytes());
         bmp_data[22..26].copy_from_slice(&(bmp_h as i32).to_le_bytes());
-        bmp_data[26..28].copy_from_slice(&2u16.to_le_bytes());
+        bmp_data[26..28].copy_from_slice(&1u16.to_le_bytes());
         bmp_data[28..30].copy_from_slice(&32u16.to_le_bytes());
-        // pixel offset: header (54)
-        bmp_data[34..38].copy_from_slice(&(54u32).to_le_bytes());
+        bmp_data[34..38].copy_from_slice(&((pixel_count * 4) as u32).to_le_bytes());
         // fill BGRA pixels
         for i in 0..pixel_count {
             let base = 54 + i * 4;
@@ -277,25 +281,20 @@ fn e2e_begin_capture_then_ocr_flow() {
             bmp_data[base + 3] = 255;   // A
         }
 
-        set_latest_capture(bmp_data, bmp_w, bmp_h, 1.0);
-
-        // 1) cmd_capture_and_ocr runs the full real flow:
-        //    retrieve capture -> scale-adjust coords -> crop BMP -> native OCR.
-        //    In headless tests the native OCR is unavailable, so the command
-        //    deterministically falls back to a non-empty OcrResult fixture
-        //    ("Artificial Intelligence"). We assert structured output.
+        // 1) Real crop followed by explicit test-only OCR.
         let selection = PhysicalRect {
             x: 100,
             y: 100,
             width: 400,
             height: 200,
         };
-        let ocr = cmd_capture_and_ocr(selection, None, None, None)
-            .await
-            .expect("capture_and_ocr must not panic and must return a structured result");
+        let crop = crop_bmp(&bmp_data, bmp_w, bmp_h, selection).unwrap();
+        assert_eq!(i32::from_le_bytes(crop[18..22].try_into().unwrap()), 400);
+        assert_eq!(i32::from_le_bytes(crop[22..26].try_into().unwrap()).abs(), 200);
+        let ocr = MockOcrEngine::init().recognize(&crop).unwrap();
         assert!(
             ocr.blocks.len() >= 1,
-            "begin_capture -> capture_and_ocr must yield at least one structured TextBlock"
+            "the explicit OCR fixture must provide structured TextBlocks"
         );
         for block in &ocr.blocks {
             assert!(

@@ -40,6 +40,7 @@ import {
 import * as tauriService from "../../services/tauri";
 import { cmdUniversalTranslate, cmdTranslatePhrasesStyled, detectLanguage, saveTranslationHistory, cmdImageOcrTranslate, cmdOpenPin } from "../../services/tauri";
 import { exportTranslationImage } from "../../services/exportImage";
+import { hasUsableTranslation } from "../../services/pipelineDiagnostics";
 import { speakText } from "../../services/tts";
 import type { ImageTranslateResponse } from "../../services/tauri";
 import { useSettingsStore } from "../../stores/useSettingsStore";
@@ -558,6 +559,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   const [detectedLangName, setDetectedLangName] = useState<string>("");
 
   const [loading, setLoading] = useState(false);
+  const [translationError, setTranslationError] = useState<string | null>(null);
   const [response, setResponse] = useState<UniversalTranslationResponse | null>(null);
   const [selectedEngineIndex, setSelectedEngineIndex] = useState<number>(0);
   const [preferredEngine, setPreferredEngine] = useState<string>(() => {
@@ -629,6 +631,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   // 翻译请求序号：防止并发触发（切语言/交换/重译）时慢的旧请求覆盖新结果
   const translationSeqRef = useRef(0);
   const stage1DoneSeqRef = useRef(0);
+  const imageRequestSeqRef = useRef(new Map<string, number>());
 
   // Tab row scroll refs & helpers
   const tabsRef = useRef<HTMLDivElement | null>(null);
@@ -938,6 +941,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   // Execute translation
   const performTranslation = useCallback(
     async (text: string, src: LanguageCode, tgt: LanguageCode) => {
+      const seq = ++translationSeqRef.current;
       const trimmed = text.trim();
       if (!trimmed) {
         setResponse(null);
@@ -947,8 +951,9 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         return;
       }
 
-      const seq = ++translationSeqRef.current;
       setLoading(true);
+      setTranslationError(null);
+      setIsAiRefining(false);
 
       const baseParams = {
         text: trimmed,
@@ -972,7 +977,8 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         yandexFolderId: settings.yandexFolderId,
       };
 
-      const currentPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine;
+      let currentPref = preferredEngine;
+      try { currentPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine; } catch {}
       const isAutoMode = currentPref === 'auto';
       const hasActiveLlm = !!(
         isConfiguredLlm(settings.llmConfig) ||
@@ -1022,10 +1028,11 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           .then(([flashRes]) => {
             if (seq !== translationSeqRef.current) return;
             if (stage1DoneSeqRef.current === seq) return;
-            if (flashRes && flashRes.translated && flashRes.translated.trim() && !isFaultyOrUnconfiguredTranslation(flashRes.translated)) {
+            if (hasUsableTranslation(flashRes) && !isFaultyOrUnconfiguredTranslation(flashRes.translated)) {
+              setTranslationError(null);
               setResponse((prev) => {
                 if (stage1DoneSeqRef.current === seq) return prev;
-                if (prev && !prev.engines.some(e => e.engineName.includes('⚡'))) return prev;
+                if (prev?.original === trimmed && !prev.engines.some(e => e.engineName.includes('⚡'))) return prev;
                 return {
                   original: trimmed,
                   detectedLang: src === "auto" ? (detectLanguage(trimmed).detected || "en") : src,
@@ -1067,8 +1074,8 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           // 若已有先锋有效结果且新返回的 mainTranslation 处于重试或待配置态，优先保留先锋优质译文
           let finalMain = res.mainTranslation;
           const isResMainFaulty = isFaultyOrUnconfiguredTranslation(finalMain);
-          if (isResMainFaulty && prev?.mainTranslation && !isFaultyOrUnconfiguredTranslation(prev.mainTranslation)) {
-            finalMain = prev.mainTranslation;
+          if (isResMainFaulty && prev?.original === trimmed && prev.mainTranslation && !isFaultyOrUnconfiguredTranslation(prev.mainTranslation)) {
+            return { ...res, mainTranslation: prev.mainTranslation, engines: [...prev.engines, ...resEngines] };
           }
           return {
             ...res,
@@ -1216,6 +1223,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 setSelectedEngineIndex((prevIdx) => (prevIdx > 0 ? prevIdx - 1 : 0));
               }
             } catch (aiErr) {
+              if (seq !== translationSeqRef.current) return;
               console.warn('[DualPaneTranslator] Progressive AI refine failed:', aiErr);
               setResponse((prev) => {
                 if (!prev || seq !== translationSeqRef.current) return prev;
@@ -1240,11 +1248,12 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       } catch (err) {
         if (seq !== translationSeqRef.current) return;
         console.error("Translation error:", err);
+        setTranslationError(`翻译失败：${err instanceof Error ? err.message : String(err)}。请检查网络或翻译通道后重试。`);
       } finally {
         if (seq === translationSeqRef.current) setLoading(false);
       }
     },
-    [settings.defaultPreset, settings.llmConfig, settings.llmConfigs, settings.presetDicts, settings.onlineEngines, settings.translationTiers, settings.translationStyle, settings.enableLlmProgressiveRefine, preferredEngine]
+    [settings.defaultPreset, settings.llmConfig, settings.llmConfigs, settings.presetDicts, settings.onlineEngines, settings.translationTiers, settings.translationStyle, settings.enableLlmProgressiveRefine, settings.baiduAppId, settings.baiduSecret, settings.baiduLlmApiKey, settings.deeplApiKey, settings.deeplCustomUrl, settings.volcengineAccessKey, settings.volcengineSecretKey, settings.yandexApiKey, settings.yandexFolderId, preferredEngine]
   );
 
   // 用户修改输入文本时的智能语种配对（仅当源语言为 auto 时在输入不同语种时自动配对目标语言，绝不干扰用户手动切换下拉框）
@@ -1280,6 +1289,13 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
   // Live input debounce listener
   useEffect(() => {
+    // Invalidate in-flight work immediately, including during the debounce gap
+    // and when the input is cleared. Late replies must never restore old text.
+    ++translationSeqRef.current;
+    setResponse(null);
+    setTranslationError(null);
+    setIsAiRefining(false);
+    setSelectedEngineIndex(0);
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
@@ -1296,6 +1312,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
     }, 350);
 
     return () => {
+      ++translationSeqRef.current;
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
   }, [sourceText, sourceLang, targetLang, performTranslation]);
@@ -1351,6 +1368,8 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   /** 翻译队列中的单张图片（结果与错误写回队列条目） */
   const translateImageItem = useCallback(
     async (item: ImageQueueItem, enginePreset?: string) => {
+      const seq = (imageRequestSeqRef.current.get(item.id) || 0) + 1;
+      imageRequestSeqRef.current.set(item.id, seq);
       setImageItems((prev) =>
         prev.map((it) => (it.id === item.id ? { ...it, isTranslating: true, error: null } : it))
       );
@@ -1387,6 +1406,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         }
 
         const res = await cmdImageOcrTranslate(base64, finalPreset, targetLlmConfig);
+        if (imageRequestSeqRef.current.get(item.id) !== seq) return;
         setImageItems((prev) =>
           prev.map((it) =>
             it.id === item.id
@@ -1400,6 +1420,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           )
         );
       } catch (err) {
+        if (imageRequestSeqRef.current.get(item.id) !== seq) return;
         setImageItems((prev) =>
           prev.map((it) =>
             it.id === item.id ? { ...it, error: err instanceof Error ? err.message : String(err), isTranslating: false } : it
@@ -2215,6 +2236,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           </div>
 
           <textarea
+            aria-label="原文输入"
             value={sourceText}
             onChange={(e) => handleSourceTextChange(e.target.value)}
             placeholder="输入或粘贴文本，或直接拖入图片、按 Ctrl+V 粘贴图片翻译..."
@@ -2440,6 +2462,11 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
           </div>
 
           <div className="flex-1 w-full overflow-y-auto py-3 text-base leading-relaxed scrollbar-thin relative">
+            {translationError && (
+              <div role="alert" className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
+                {translationError}
+              </div>
+            )}
             {loading ? (
               <div className="space-y-3 py-1 animate-pulse">
                 <div className={`h-4 rounded ${isLight ? 'bg-slate-200' : 'bg-slate-700/50'} w-3/4 mb-2`} />

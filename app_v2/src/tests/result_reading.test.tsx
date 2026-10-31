@@ -263,10 +263,41 @@ describe('result reading experience (view cycle / selectable / zoom / active car
       const card1 = screen.getByText('次表面散射').closest('.overlay-block') as HTMLElement;
       const card2 = screen.getByText('粗糙度').closest('.overlay-block') as HTMLElement;
       await waitFor(() => {
-        // AABB push: card2 top must sit below card1's reported 90px height
-        expect(parseFloat(card2.style.top)).toBeGreaterThanOrEqual(100 + 90 - 1);
+        // This 116px chain cannot fit a 100px selection. Keep its head at
+        // selectionY=90 and preserve the real height + gap, not the old
+        // absolute y=100 anchor (which ignored the selection boundary).
+        expect(parseFloat(card1.style.top)).toBe(TWO_BLOCK_LAYOUT.selectionY);
+        expect(parseFloat(card2.style.top) - parseFloat(card1.style.top)).toBe(94);
       });
-      void card1;
+    } finally {
+      delete (globalThis as any).ResizeObserver;
+    }
+  });
+
+  it('propagates a 1px edge-height change through the parent and both mounted cards', async () => {
+    class ControlledRO {
+      static instances: ControlledRO[] = [];
+      constructor(public cb: (entries: Array<{ contentRect: { height: number; width: number } }>) => void) {
+        ControlledRO.instances.push(this);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    (globalThis as any).ResizeObserver = ControlledRO;
+    try {
+      await openWithResult();
+      const firstCard = screen.getByText('次表面散射').closest('.overlay-block') as HTMLElement;
+      const secondCard = screen.getByText('粗糙度').closest('.overlay-block') as HTMLElement;
+      act(() => {
+        ControlledRO.instances[0].cb([{ contentRect: { height: 64, width: 180 } }]);
+        ControlledRO.instances[1].cb([{ contentRect: { height: 22, width: 120 } }]);
+      });
+      await waitFor(() => expect([firstCard.style.top, secondCard.style.top]).toEqual(['100px', '168px']));
+      act(() => ControlledRO.instances[1].cb([{ contentRect: { height: 23, width: 120 } }]));
+      await waitFor(() => expect([firstCard.style.top, secondCard.style.top]).toEqual(['99px', '167px']));
+      expect(ControlledRO.instances).toHaveLength(2);
+      expect(screen.getByText('次表面散射').closest('.overlay-block')).toBe(firstCard);
+      expect(screen.getByText('粗糙度').closest('.overlay-block')).toBe(secondCard);
     } finally {
       delete (globalThis as any).ResizeObserver;
     }
@@ -296,7 +327,9 @@ describe('result reading experience (view cycle / selectable / zoom / active car
       });
       await waitFor(() => {
         const currentCard = screen.getByText('粗糙度').closest('.overlay-block') as HTMLElement;
-        expect(parseFloat(currentCard.style.top)).toBeGreaterThanOrEqual(189);
+        const firstCard = screen.getByText('次表面散射').closest('.overlay-block') as HTMLElement;
+        expect(parseFloat(firstCard.style.top)).toBe(TWO_BLOCK_LAYOUT.selectionY);
+        expect(parseFloat(currentCard.style.top) - parseFloat(firstCard.style.top)).toBe(94);
         expect(currentCard).toBe(secondCard);
       });
     } finally {

@@ -221,7 +221,7 @@ mod feature_3_rapidocr_reconstruction {
     }
 
     #[test]
-    fn test_f3_02_dbnet_text_box_detection() {
+    fn test_f3_02_ocr_requires_captured_input() {
         tauri::async_runtime::block_on(async {
             let selection = PhysicalRect {
                 x: 0,
@@ -230,10 +230,7 @@ mod feature_3_rapidocr_reconstruction {
                 height: 100,
             };
             let res = cmd_capture_and_ocr(selection, None, None, None).await;
-            assert!(res.is_ok());
-            let ocr_res = res.unwrap();
-            assert_eq!(ocr_res.blocks.len(), 1);
-            assert_eq!(ocr_res.blocks[0].text, "Artificial Intelligence");
+            assert_eq!(res.unwrap_err(), "No desktop capture available in memory");
         });
     }
 
@@ -536,14 +533,14 @@ mod feature_6_test_harness_integration {
     #[test]
     fn test_f6_01_mock_ipc_pipeline_verification() {
         tauri::async_runtime::block_on(async {
-            let selection = PhysicalRect {
-                x: 0,
-                y: 0,
-                width: 500,
-                height: 300,
-            };
-            let res = cmd_capture_and_ocr(selection, None, None, None).await;
-            assert!(res.is_ok());
+            let engine = app_v2_lib::ocr::MockOcrEngine::init();
+            let ocr = app_v2_lib::ocr::OcrEngine::recognize(&engine, &[0; 16]).unwrap();
+            let phrases = ocr.blocks.iter().map(|b| b.text.clone()).collect::<Vec<_>>();
+            let translations = app_v2_lib::translator::shared_pipeline()
+                .translate_phrases(&phrases, "blender", None, &[]).await;
+            assert_eq!(translations.len(), ocr.blocks.len());
+            assert_eq!(translations[0].original, "Principled BSDF");
+            assert_eq!(translations[0].translated, "原理化 BSDF");
         });
     }
 

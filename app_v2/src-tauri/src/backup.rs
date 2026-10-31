@@ -188,11 +188,20 @@ pub fn sanitize_settings_for_backup(
         s.baidu_llm_api_key = None;
         s.deepl_api_key = None;
         s.deepl_custom_url = None;
+        s.volcengine_access_key = None;
+        s.volcengine_secret_key = None;
+        s.yandex_api_key = None;
+        s.yandex_folder_id = None;
         if let Some(ref mut llm) = s.llm_config {
             llm.api_key = String::new();
         }
         for item in s.llm_configs.iter_mut() {
             item.api_key = String::new();
+        }
+        if let Some(providers) = &mut s.ai_providers {
+            for provider in providers {
+                provider.api_key.clear();
+            }
         }
         if let Some(ref mut wd) = s.webdav_config {
             wd.password = None;
@@ -228,6 +237,17 @@ pub fn build_backup_zip_bytes(
     sessions: &[CaptureSession],
     source: &str,
     included_items: Option<&[String]>,
+) -> Result<(Vec<u8>, BackupManifest), String> {
+    build_backup_zip_with_glossary(settings, history, sessions, source, included_items, None)
+}
+
+fn build_backup_zip_with_glossary(
+    settings: &AppSettings,
+    history: &[HistoryItem],
+    sessions: &[CaptureSession],
+    source: &str,
+    included_items: Option<&[String]>,
+    glossary: Option<&[crate::glossary::UserGlossaryEntry]>,
 ) -> Result<(Vec<u8>, BackupManifest), String> {
     let items = normalize_included_items(included_items);
     let (y, mo, d, h, mi, s) = local_datetime_now();
@@ -295,6 +315,15 @@ pub fn build_backup_zip_bytes(
             .map_err(|e| format!("写入 zip 内容 capture_sessions.json 失败：{e}"))?;
     }
 
+    if items.iter().any(|item| item == ITEM_CUSTOM_DICT) {
+        if let Some(entries) = glossary {
+            writer.start_file("custom_glossary.json", options)
+                .map_err(|e| format!("写入术语库备份失败: {e}"))?;
+            let json = serde_json::to_vec_pretty(entries).map_err(|e| e.to_string())?;
+            writer.write_all(&json).map_err(|e| e.to_string())?;
+        }
+    }
+
     let cursor = writer
         .finish()
         .map_err(|e| format!("封装 zip 失败：{e}"))?;
@@ -305,6 +334,14 @@ pub fn build_backup_zip_bytes(
 pub fn build_current_zip_bytes(
     app_handle: &tauri::AppHandle,
     source: &str,
+) -> Result<(Vec<u8>, BackupManifest), String> {
+    build_current_zip_with_items(app_handle, source, None)
+}
+
+fn build_current_zip_with_items(
+    app_handle: &tauri::AppHandle,
+    source: &str,
+    override_items: Option<&[String]>,
 ) -> Result<(Vec<u8>, BackupManifest), String> {
     let state = app_handle
         .try_state::<AppState>()
@@ -325,17 +362,21 @@ pub fn build_current_zip_bytes(
         .map_err(|e| format!("锁定 capture_sessions 失败：{e}"))?
         .clone();
 
-    let included_items = settings
+    let included_items = override_items.or_else(|| settings
         .backup_settings
         .as_ref()
-        .and_then(|bs| bs.included_items.as_deref());
+        .and_then(|bs| bs.included_items.as_deref()));
 
-    build_backup_zip_bytes(&settings, &history, &sessions, source, included_items)
+    build_backup_zip_with_glossary(&settings, &history, &sessions, source, included_items, Some(&state.glossary_store.get_all()))
 }
 
 /// 创建一份本地备份：写 zip 到 backups 目录 + 更新 lastBackupAtMs + 按份数淘汰。
 pub fn create_backup(app_handle: &tauri::AppHandle, source: &str) -> Result<BackupEntry, String> {
-    let (bytes, manifest) = build_current_zip_bytes(app_handle, source)?;
+    create_backup_with_items(app_handle, source, None)
+}
+
+fn create_backup_with_items(app_handle: &tauri::AppHandle, source: &str, items: Option<&[String]>) -> Result<BackupEntry, String> {
+    let (bytes, manifest) = build_current_zip_with_items(app_handle, source, items)?;
     let dir = backup_dir(app_handle);
 
     // 同秒内多次备份时追加序号，避免覆盖
@@ -349,7 +390,7 @@ pub fn create_backup(app_handle: &tauri::AppHandle, source: &str) -> Result<Back
         counter += 1;
     }
 
-    fs::write(&path, &bytes).map_err(|e| format!("写入备份文件失败：{e}"))?;
+    crate::persistence::write_atomic(&path, &bytes)?;
     let size_bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(bytes.len() as u64);
     let entry = BackupEntry {
         name,
@@ -368,12 +409,14 @@ pub fn create_backup(app_handle: &tauri::AppHandle, source: &str) -> Result<Back
             .settings
             .lock()
             .map_err(|e| format!("锁定 settings 失败：{e}"))?;
-        let bs = settings
+        let mut updated = settings.clone();
+        let bs = updated
             .backup_settings
             .get_or_insert_with(BackupSettings::default);
         bs.last_backup_at_ms = Some(entry.created_at_ms);
         let max = bs.max_local_backups.unwrap_or(10);
-        commands::save_settings_file(app_handle, &settings);
+        commands::save_settings_file(app_handle, &updated)?;
+        *settings = updated;
         max
     };
     enforce_local_retention(app_handle, max_local);
@@ -401,9 +444,51 @@ fn read_zip_file(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
     let cursor = std::io::Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(cursor).ok()?;
     let mut file = archive.by_name(name).ok()?;
+    if file.size() > 128 * 1024 * 1024 { return None; }
     let mut out = Vec::new();
-    file.read_to_end(&mut out).ok()?;
+    (&mut file).take(128 * 1024 * 1024 + 1).read_to_end(&mut out).ok()?;
+    if out.len() > 128 * 1024 * 1024 { return None; }
     Some(out)
+}
+
+/// Validate every selected payload before changing any live data.
+fn validate_backup_bytes(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > 256 * 1024 * 1024 { return Err("备份包超过大小上限".to_string()); }
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| format!("备份 ZIP 无效: {e}"))?;
+    let mut names = std::collections::HashSet::new();
+    let mut total = 0u64;
+    for index in 0..archive.len() {
+        let file = archive.by_index(index).map_err(|e| e.to_string())?;
+        total = total.saturating_add(file.size());
+        if file.size() > 128 * 1024 * 1024 || total > 256 * 1024 * 1024 {
+            return Err("备份解压后超过大小上限".to_string());
+        }
+        if !names.insert(file.name().to_string()) { return Err("备份包包含重复文件".to_string()); }
+    }
+    let raw = read_zip_file(bytes, "manifest.json").ok_or("备份包缺少有效的 manifest.json")?;
+    let manifest: BackupManifest = serde_json::from_slice(&raw).map_err(|e| format!("备份清单无效: {e}"))?;
+    if manifest.schema_version != SCHEMA_VERSION { return Err("备份版本与当前应用不兼容".to_string()); }
+    let items = &manifest.included_items;
+    let validate_json = |name: &str, required: bool| -> Result<Option<Vec<u8>>, String> {
+        if !names.contains(name) {
+            return if required { Err(format!("备份包缺少 {name}")) } else { Ok(None) };
+        }
+        read_zip_file(bytes, name).map(Some).ok_or_else(|| format!("备份条目 {name} 读取失败"))
+    };
+    if let Some(raw) = validate_json("settings.json", items.iter().any(|i| matches!(i.as_str(), ITEM_SETTINGS | ITEM_API_KEYS | ITEM_CUSTOM_DICT)))? {
+        serde_json::from_slice::<AppSettings>(&raw).map_err(|e| format!("设置备份无效: {e}"))?;
+    }
+    if let Some(raw) = validate_json("history.json", items.iter().any(|i| i == ITEM_HISTORY))? {
+        serde_json::from_slice::<Vec<HistoryItem>>(&raw).map_err(|e| format!("生词本备份无效: {e}"))?;
+    }
+    if let Some(raw) = validate_json("capture_sessions.json", items.iter().any(|i| i == ITEM_CAPTURE_SESSIONS))? {
+        serde_json::from_slice::<Vec<CaptureSession>>(&raw).map_err(|e| format!("截图会话备份无效: {e}"))?;
+    }
+    if let Some(raw) = validate_json("custom_glossary.json", false)? {
+        serde_json::from_slice::<Vec<crate::glossary::UserGlossaryEntry>>(&raw).map_err(|e| format!("术语库备份无效: {e}"))?;
+    }
+    Ok(())
 }
 
 /// 列出本地备份（按时间新→旧排序）。读取每个 zip 的 manifest 获取来源标签，
@@ -452,12 +537,13 @@ pub fn list_backups_internal(app_handle: &tauri::AppHandle) -> Vec<BackupEntry> 
 }
 
 /// 统一恢复管线：校验 zip → 覆盖内存态与磁盘 → 应用设置副作用 → 广播刷新事件。
-/// 恢复前会先对当前数据做一次安全备份（best effort）。
+/// 恢复前必须成功创建完整安全备份，失败时取消恢复。
 pub fn restore_from_bytes(
     app_handle: &tauri::AppHandle,
     window: Option<&tauri::WebviewWindow>,
     bytes: Vec<u8>,
 ) -> Result<RestoreSummary, String> {
+    validate_backup_bytes(&bytes)?;
     let manifest_bytes = read_zip_file(&bytes, "manifest.json")
         .ok_or_else(|| "备份包缺少 manifest.json，不是有效的猫步翻译备份".to_string())?;
     let manifest: BackupManifest = serde_json::from_slice(&manifest_bytes)
@@ -474,9 +560,8 @@ pub fn restore_from_bytes(
         .ok_or_else(|| "应用状态不可用".to_string())?;
 
     // 恢复前对当前数据做全量安全备份（包含当前全部数据）
-    let safety_backup_name = create_backup(app_handle, "manual")
-        .map(|e| e.name)
-        .unwrap_or_default();
+    let safety_backup_name = create_backup_with_items(app_handle, "manual", Some(&all_backup_items()))
+        .map_err(|e| format!("恢复前创建完整安全备份失败，已取消恢复: {e}"))?.name;
 
     // 读取 zip 内部各文件
     let zip_settings_opt: Option<AppSettings> = read_zip_file(&bytes, "settings.json")
@@ -514,11 +599,9 @@ pub fn restore_from_bytes(
     if included_items.iter().any(|i| i == ITEM_HISTORY) {
         if let Some(hist) = zip_history_opt {
             final_history_count = hist.len();
-            *state
-                .history
-                .lock()
-                .map_err(|e| format!("锁定 history 失败：{e}"))? = hist.clone();
-            commands::save_history_file(app_handle, &hist);
+            let mut current = state.history.lock().map_err(|e| format!("锁定 history 失败：{e}"))?;
+            commands::save_history_file(app_handle, &hist)?;
+            *current = hist;
             restored_items.push(ITEM_HISTORY.to_string());
         }
     } else {
@@ -529,11 +612,9 @@ pub fn restore_from_bytes(
     if included_items.iter().any(|i| i == ITEM_CAPTURE_SESSIONS) {
         if let Some(sess) = zip_sessions_opt {
             final_session_count = sess.len();
-            *state
-                .capture_sessions
-                .lock()
-                .map_err(|e| format!("锁定 capture_sessions 失败：{e}"))? = sess.clone();
-            commands::save_capture_sessions_file(app_handle, &sess);
+            let mut current = state.capture_sessions.lock().map_err(|e| format!("锁定 capture_sessions 失败：{e}"))?;
+            commands::save_capture_sessions_file(app_handle, &sess)?;
+            *current = sess;
             restored_items.push(ITEM_CAPTURE_SESSIONS.to_string());
         }
     } else {
@@ -565,6 +646,15 @@ pub fn restore_from_bytes(
             current_settings.translation_tiers = zip_settings.translation_tiers;
             current_settings.preset_dicts = zip_settings.preset_dicts;
             current_settings.online_engines = zip_settings.online_engines;
+            current_settings.proxy_mode = zip_settings.proxy_mode;
+            current_settings.proxy_bypass_domestic = zip_settings.proxy_bypass_domestic;
+            current_settings.retry_preset = zip_settings.retry_preset;
+            current_settings.enable_llm_progressive_refine = zip_settings.enable_llm_progressive_refine;
+            current_settings.auto_favorite_quality_terms = zip_settings.auto_favorite_quality_terms;
+            current_settings.anki_settings = zip_settings.anki_settings;
+            current_settings.auto_check_update = zip_settings.auto_check_update;
+            current_settings.auto_silent_update = zip_settings.auto_silent_update;
+            current_settings.backup_settings = zip_settings.backup_settings;
             if zip_settings.appearance.is_some() {
                 current_settings.appearance = zip_settings.appearance;
             }
@@ -648,6 +738,12 @@ pub fn restore_from_bytes(
             current_settings.deepl_custom_url = zip_settings.deepl_custom_url;
             current_settings.llm_config = zip_settings.llm_config;
             current_settings.llm_configs = zip_settings.llm_configs;
+            current_settings.ai_providers = zip_settings.ai_providers;
+            current_settings.volcengine_access_key = zip_settings.volcengine_access_key;
+            current_settings.volcengine_secret_key = zip_settings.volcengine_secret_key;
+            current_settings.yandex_api_key = zip_settings.yandex_api_key;
+            current_settings.yandex_folder_id = zip_settings.yandex_folder_id;
+            current_settings.use_baidu_same_secret = zip_settings.use_baidu_same_secret;
 
             // WebDAV 密码处理：若 zip 带有密码则覆盖，否则保留本地原密码
             if let Some(mut new_wd) = zip_settings.webdav_config {
@@ -668,6 +764,17 @@ pub fn restore_from_bytes(
 
         // (c) 自定义词库与过滤规则
         if included_items.iter().any(|i| i == ITEM_CUSTOM_DICT) {
+            let glossary = if let Some(raw) = read_zip_file(&bytes, "custom_glossary.json") {
+                serde_json::from_slice::<Vec<crate::glossary::UserGlossaryEntry>>(&raw)
+                    .map_err(|e| format!("术语库备份无效: {e}"))?
+            } else {
+                // Older backups stored terms only inside settings.json.
+                zip_settings.custom_dict_items.iter().map(|term| crate::glossary::UserGlossaryEntry {
+                    id: term.id.clone(), source: term.original.clone(), target: term.translated.clone(),
+                    category: term.category.clone(), note: term.note.clone(), created_at: 0,
+                }).collect()
+            };
+            state.glossary_store.import_entries(glossary, "replace")?;
             current_settings.custom_dict_items = zip_settings.custom_dict_items;
             if zip_settings.ocr_filter_rules.is_some() {
                 current_settings.ocr_filter_rules = zip_settings.ocr_filter_rules;
@@ -683,11 +790,11 @@ pub fn restore_from_bytes(
             bs.last_backup_at_ms = Some(now_ms());
         }
 
+        commands::save_settings_file(app_handle, &current_settings)?;
         *state
             .settings
             .lock()
             .map_err(|e| format!("锁定 settings 失败：{e}"))? = current_settings.clone();
-        commands::save_settings_file(app_handle, &current_settings);
         commands::apply_settings_side_effects(app_handle, window, &current_settings);
     }
 
@@ -868,6 +975,7 @@ mod tests {
             default_preset: "blender".to_string(),
             llm_config: Some(LlmConfig::new("OpenAI", "sk-secret-key-12345", "gpt-4o", "https://api.openai.com/v1")),
             llm_configs: vec![LlmConfig::new("Claude", "sk-ant-secret-67890", "claude-3-5-sonnet", "https://api.anthropic.com/v1")],
+            ai_providers: None,
             translation_tiers: vec!["llm".to_string(), "online".to_string()],
             preset_dicts: Default::default(),
             online_engines: Default::default(),
@@ -953,7 +1061,14 @@ mod tests {
 
     #[test]
     fn test_sanitize_settings_without_api_keys() {
-        let s = sample_settings();
+        let mut s = sample_settings();
+        s.ai_providers = Some(serde_json::from_value(serde_json::json!([{
+            "id": "custom-provider", "name": "My provider", "providerType": "Custom",
+            "endpoint": "https://example.com/v1", "apiKey": "provider-secret",
+            "enabled": true, "defaultModelId": "model-one", "models": [{
+                "id": "model-one", "modelId": "test-model", "displayName": "My model", "enabled": false
+            }]
+        }])).unwrap());
         let items = vec![ITEM_SETTINGS.to_string(), ITEM_CUSTOM_DICT.to_string()];
         let sanitized = sanitize_settings_for_backup(&s, &items);
 
@@ -964,6 +1079,12 @@ mod tests {
         assert_eq!(sanitized.llm_config.as_ref().unwrap().api_key, "");
         assert_eq!(sanitized.llm_configs[0].api_key, "");
         assert!(sanitized.webdav_config.as_ref().unwrap().password.is_none());
+        assert!(sanitized.volcengine_access_key.is_none());
+        assert!(sanitized.volcengine_secret_key.is_none());
+        assert!(sanitized.yandex_api_key.is_none());
+        assert_eq!(sanitized.ai_providers.as_ref().unwrap()[0].api_key, "");
+        let roundtrip: AppSettings = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
+        assert_eq!(roundtrip.ai_providers, s.ai_providers);
 
         // 基础设置与词库保留
         assert_eq!(sanitized.theme, "dark");
@@ -1022,6 +1143,31 @@ mod tests {
         assert!(archive_all.by_name("settings.json").is_ok());
         assert!(archive_all.by_name("history.json").is_ok());
         assert!(archive_all.by_name("capture_sessions.json").is_ok());
+    }
+
+    #[test]
+    fn backup_includes_real_glossary_and_validates_all_payloads_before_restore() {
+        let entries = vec![crate::glossary::UserGlossaryEntry {
+            id: "term-1".into(), source: "Bevel".into(), target: "倒角".into(),
+            category: "Blender".into(), note: None, created_at: 1,
+        }];
+        let (bytes, _) = build_backup_zip_with_glossary(&sample_settings(), &[], &[], "manual", None, Some(&entries)).unwrap();
+        assert!(validate_backup_bytes(&bytes).is_ok());
+        let decoded: Vec<crate::glossary::UserGlossaryEntry> = serde_json::from_slice(&read_zip_file(&bytes, "custom_glossary.json").unwrap()).unwrap();
+        assert_eq!(decoded, entries);
+
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("manifest.json", options).unwrap();
+        zip.write_all(serde_json::to_string(&BackupManifest {
+            schema_version: SCHEMA_VERSION, app_version: "0.3.38".into(),
+            created_at: "2026-09-30".into(), created_at_ms: 1, source: "manual".into(),
+            included_items: vec![ITEM_HISTORY.into()],
+        }).unwrap().as_bytes()).unwrap();
+        zip.start_file("history.json", options).unwrap();
+        zip.write_all(b"{invalid JSON").unwrap();
+        let corrupt = zip.finish().unwrap().into_inner();
+        assert!(validate_backup_bytes(&corrupt).unwrap_err().contains("生词本"));
     }
 }
 

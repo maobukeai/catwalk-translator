@@ -120,16 +120,9 @@ fn pictures_export_dir(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
         .unwrap_or_else(|_| std::env::temp_dir().join("maobu_exports"))
 }
 
-pub fn save_settings_file(app_handle: &tauri::AppHandle, settings: &AppSettings) {
+pub fn save_settings_file(app_handle: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
     let path = get_app_config_dir(app_handle).join("settings.json");
-    if let Ok(json) = serde_json::to_string_pretty(settings) {
-        if let Err(e) = fs::write(&path, json) {
-            // 设置（含 API Key）落盘失败必须留下痕迹，否则用户会误以为已保存成功
-            eprintln!("[settings] 写入失败 {}: {}", path.display(), e);
-        }
-    } else {
-        eprintln!("[settings] 序列化失败: {:?}", path);
-    }
+    crate::persistence::write_json(&path, settings)
 }
 
 pub fn load_settings_file(app_handle: &tauri::AppHandle) -> AppSettings {
@@ -142,17 +135,18 @@ pub fn load_settings_file(app_handle: &tauri::AppHandle) -> AppSettings {
         }
     }
     let default_s = AppSettings::default();
-    save_settings_file(app_handle, &default_s);
+    // Do not overwrite an unreadable/corrupt configuration with defaults.
+    if !path.exists() {
+        if let Err(e) = save_settings_file(app_handle, &default_s) {
+            eprintln!("[settings] {e}");
+        }
+    }
     default_s
 }
 
-pub fn save_history_file(app_handle: &tauri::AppHandle, history: &[HistoryItem]) {
+pub fn save_history_file(app_handle: &tauri::AppHandle, history: &[HistoryItem]) -> Result<(), String> {
     let path = get_app_config_dir(app_handle).join("history.json");
-    if let Ok(json) = serde_json::to_string_pretty(history) {
-        if let Err(e) = fs::write(&path, json) {
-            eprintln!("[history] 写入失败 {}: {}", path.display(), e);
-        }
-    }
+    crate::persistence::write_json(&path, history)
 }
 
 pub fn load_history_file(app_handle: &tauri::AppHandle) -> Vec<HistoryItem> {
@@ -167,13 +161,9 @@ pub fn load_history_file(app_handle: &tauri::AppHandle) -> Vec<HistoryItem> {
     vec![]
 }
 
-pub fn save_capture_sessions_file(app_handle: &tauri::AppHandle, sessions: &[CaptureSession]) {
+pub fn save_capture_sessions_file(app_handle: &tauri::AppHandle, sessions: &[CaptureSession]) -> Result<(), String> {
     let path = get_app_config_dir(app_handle).join("capture_sessions.json");
-    if let Ok(json) = serde_json::to_string_pretty(sessions) {
-        if let Err(e) = fs::write(&path, json) {
-            eprintln!("[capture_sessions] 写入失败 {}: {}", path.display(), e);
-        }
-    }
+    crate::persistence::write_json(&path, sessions)
 }
 
 fn load_capture_sessions_file(app_handle: &tauri::AppHandle) -> Vec<CaptureSession> {
@@ -425,6 +415,20 @@ pub fn apply_settings_side_effects(
     // 应用网络配置（三态代理模式 system/direct/manual + 国内直连分流 + 重试预设）
     crate::translator::set_network_config_from_settings(settings);
 
+    // 实时热同步在线翻译凭据（百度/DeepL/火山/Yandex）至底层全局管线
+    let creds = crate::translator::OnlineCredentials {
+        baidu_app_id: settings.baidu_app_id.clone(),
+        baidu_secret: settings.baidu_secret.clone(),
+        baidu_llm_api_key: settings.baidu_llm_api_key.clone(),
+        deepl_api_key: settings.deepl_api_key.clone(),
+        deepl_custom_url: settings.deepl_custom_url.clone(),
+        volcengine_access_key: settings.volcengine_access_key.clone(),
+        volcengine_secret_key: settings.volcengine_secret_key.clone(),
+        yandex_api_key: settings.yandex_api_key.clone(),
+        yandex_folder_id: settings.yandex_folder_id.clone(),
+    };
+    crate::translator::shared_pipeline().update_credentials(creds);
+
     // 主窗口置顶跟随设置
     if let Some(win) = window {
         let _ = win.set_always_on_top(settings.always_on_top.unwrap_or(false));
@@ -447,26 +451,12 @@ pub async fn cmd_save_settings(
         .lock()
         .map_err(|e| format!("Failed to lock settings: {}", e))?;
 
+    save_settings_file(&app_handle, &settings)?;
+    *lock = settings.clone();
+    drop(lock);
     let main_window = app_handle.get_webview_window("main");
     apply_settings_side_effects(&app_handle, main_window.as_ref(), &settings);
-
-    *lock = settings.clone();
-    save_settings_file(&app_handle, &settings);
     let _ = app_handle.emit("settings-updated", ());
-
-    // 实时热同步在线翻译凭据（百度/DeepL/火山/Yandex）至底层全局管线
-    let creds = crate::translator::OnlineCredentials {
-        baidu_app_id: settings.baidu_app_id.clone(),
-        baidu_secret: settings.baidu_secret.clone(),
-        baidu_llm_api_key: settings.baidu_llm_api_key.clone(),
-        deepl_api_key: settings.deepl_api_key.clone(),
-        deepl_custom_url: settings.deepl_custom_url.clone(),
-        volcengine_access_key: settings.volcengine_access_key.clone(),
-        volcengine_secret_key: settings.volcengine_secret_key.clone(),
-        yandex_api_key: settings.yandex_api_key.clone(),
-        yandex_folder_id: settings.yandex_folder_id.clone(),
-    };
-    crate::translator::shared_pipeline().update_credentials(creds);
 
     eprintln!(">>> Settings saved successfully to disk and credentials synced.");
     Ok(())

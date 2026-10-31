@@ -141,6 +141,42 @@ describe('M4 overlay and sampler coverage', () => {
     expect(dy).toBe(40);
   });
 
+  it('connects the real translation lifecycle to card loading feedback and original view', async () => {
+    const oldSettings = useSettingsStore.getState().settings;
+    useSettingsStore.setState({ settings: { ...oldSettings, captureReleaseAction: 'auto', overlayViewMode: 'cover', enableLlmProgressiveRefine: false } });
+    const result = [{ original: 'Pending layout check', translated: '显示状态检查', sourceTier: 'Online' }];
+    let finish!: (value: typeof result) => void;
+    const pending = new Promise<typeof result>((resolve) => { finish = resolve; });
+    createMockIpcHarness();
+    wireMock((cmd) => {
+      if (cmd === 'cmd_region_ocr_layout') return Promise.resolve({
+        blocks: [{ original: result[0].original, translated: '', sourceTier: 'OCR', logicalX: 100, logicalY: 100, logicalW: 240, logicalH: 24, bgCss: '#0c0c0c', fgCss: '#ffffff' }],
+        selectionX: 100, selectionY: 100, selectionW: 300, selectionH: 100,
+      });
+      if (cmd === 'cmd_translate_phrases_styled' || cmd === 'cmd_translate_phrases') return pending;
+      return Promise.resolve(undefined);
+    });
+    (window as any).__TAURI_INTERNALS__ = {};
+    try {
+      const { container } = render(<CaptureOverlay isOpen onClose={vi.fn()} />);
+      await waitFor(() => expect(container.querySelector<HTMLElement>('.fixed.inset-0')?.style.cursor).toBe('crosshair'));
+      await mouseSelection();
+      await waitFor(() => expect(container.querySelector('.overlay-shimmer')).not.toBeNull());
+      fireEvent.click(screen.getByTestId('view-mode-original'));
+      expect(container.querySelector('.overlay-shimmer')).toBeNull();
+      expect(container.querySelector('[data-overlay-main-text]')).not.toHaveClass('opacity-80');
+      fireEvent.click(screen.getByTestId('view-mode-translated'));
+      expect(container.querySelector('.overlay-shimmer')).not.toBeNull();
+      await act(async () => { finish(result); await pending; });
+      await screen.findByText('显示状态检查');
+      expect(container.querySelector('.overlay-shimmer')).toBeNull();
+      expect(container.querySelector('[data-overlay-main-text]')).not.toHaveClass('opacity-80');
+    } finally {
+      finish(result);
+      useSettingsStore.setState({ settings: oldSettings });
+    }
+  });
+
   it('shows empty notice when OCR returns no blocks and returns to selecting', async () => {
     createMockIpcHarness();
     wireMock(() => Promise.resolve({

@@ -33,6 +33,7 @@ interface SettingsState {
   isLoading: boolean;
   isSaving: boolean;
   toastMessage: string | null;
+  toastKind: 'success' | 'error';
 
   // Actions
   fetchSettings: () => Promise<void>;
@@ -136,36 +137,20 @@ function checkIsDirty(current: AppSettings, initial: AppSettings): boolean {
 
 let saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-const debouncedSaveSettings = (
-  get: () => SettingsState,
-  set: (partial: Partial<SettingsState> | ((state: SettingsState) => Partial<SettingsState>)) => void
-) => {
+const debouncedSaveSettings = (get: () => SettingsState) => {
   if (saveDebounceTimer) {
     clearTimeout(saveDebounceTimer);
   }
   saveDebounceTimer = setTimeout(async () => {
-    const { settings } = get();
-    set({ isSaving: true });
-    try {
-      const savePromise = cmdSaveSettings(settings);
-      const timeoutPromise = new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error('Save settings timeout')), 4000)
-      );
-      await Promise.race([savePromise, timeoutPromise]);
-      set({
-        initialSettings: settings,
-        isDirty: false,
-      });
-    } catch (err) {
-      console.error('Failed to save settings (debounced):', err);
-    } finally {
-      set({ isSaving: false });
-      saveDebounceTimer = null;
-    }
+    saveDebounceTimer = null;
+    await get().saveSettings();
   }, 300);
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => {
+  let saveInFlight: Promise<void> | null = null;
+  let saveRequested = false;
+  let fetchEpoch = 0;
   /**
    * 内部通用 patch:合并字段 → 重算 isDirty → 按模式持久化。
    * 'now' 立即保存(离散开关/选择);'debounced' 300ms 防抖(滑杆/连续输入);
@@ -182,7 +167,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       isDirty: checkIsDirty(updated, initialSettings),
     });
     if (mode === 'now') get().saveSettings();
-    else if (mode === 'debounced') debouncedSaveSettings(get, set);
+    else if (mode === 'debounced') debouncedSaveSettings(get);
   };
 
   return {
@@ -192,11 +177,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   isLoading: false,
   isSaving: false,
   toastMessage: null,
+  toastKind: 'success',
 
   fetchSettings: async () => {
+    const epoch = ++fetchEpoch;
+    const settingsAtStart = get().settings;
     set({ isLoading: true });
     try {
       const fetched = await cmdGetSettings();
+      if (epoch !== fetchEpoch) return;
+      if (get().settings !== settingsAtStart) {
+        set({ isLoading: false });
+        return;
+      }
       const rawPool = fetched.llmConfigs && fetched.llmConfigs.length > 0
         ? fetched.llmConfigs
         : (fetched.llmConfig ? [fetched.llmConfig] : []);
@@ -205,7 +198,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       const rawTheme = fetched.appearance?.theme || fetched.theme || 'system';
       const normalizedTheme: ThemeMode = (rawTheme === 'fluent-dark' ? 'dark' : rawTheme) as ThemeMode;
       const initialAppearance: AppearanceSettings = {
-        ...(fetched.appearance || DEFAULT_APPEARANCE),
+        ...DEFAULT_APPEARANCE,
+        ...fetched.appearance,
         theme: normalizedTheme,
       };
       // 确保历史配置或未显式设为 'adjust' 的用户均默认采用 'auto'（松手即译）
@@ -215,6 +209,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       }
 
       const settingsWithAppearance: AppSettings = {
+        ...DEFAULT_SETTINGS,
         ...fetched,
         hotkey: fetched.hotkey || 'F4',
         theme: normalizedTheme,
@@ -239,7 +234,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         watchIntervalMs: fetched.watchIntervalMs ?? 3000,
         clipboardWatchEnabled: fetched.clipboardWatchEnabled ?? false,
         ocrEngine: fetched.ocrEngine || 'auto',
-        ocrVersion: fetched.ocrVersion === 'v6m' ? 'v6m' : fetched.ocrVersion === 'v6' ? 'v6' : 'v6t',
+        ocrVersion: fetched.ocrVersion === 'v6m' || fetched.ocrVersion === 'v6t'
+          ? fetched.ocrVersion : 'v6',
         ocrFilterEnabled: fetched.ocrFilterEnabled ?? false,
         ocrFilterRules: fetched.ocrFilterRules ?? [],
         selectionLookupEnabled: fetched.selectionLookupEnabled ?? false,
@@ -275,36 +271,44 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       });
     } catch (err) {
       console.error('Failed to fetch settings:', err);
-      set({ isLoading: false });
+      if (epoch === fetchEpoch) set({ isLoading: false });
     }
   },
 
-  saveSettings: async () => {
+  saveSettings: () => {
     if (saveDebounceTimer) {
       clearTimeout(saveDebounceTimer);
       saveDebounceTimer = null;
     }
-    const { settings } = get();
-    set({ isSaving: true });
-    try {
-      const savePromise = cmdSaveSettings(settings);
-      const timeoutPromise = new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error('Save settings timeout')), 4000)
-      );
-      await Promise.race([savePromise, timeoutPromise]);
-      set({
-        initialSettings: settings,
-        isDirty: false,
-        toastMessage: 'Settings saved successfully!',
-      });
-    } catch (err) {
-      console.error('Failed to save settings:', err);
-      set({
-        toastMessage: 'Failed to save settings',
-      });
-    } finally {
-      set({ isSaving: false });
-    }
+    saveRequested = true;
+    if (saveInFlight) return saveInFlight;
+    const drain = async () => {
+      set({ isSaving: true });
+      try {
+        while (saveRequested) {
+          saveRequested = false;
+          const snapshot = get().settings;
+          try {
+            // IPC writes cannot be cancelled. Serialize them so an older
+            // request cannot replace newer settings on disk.
+            await cmdSaveSettings(snapshot);
+            set((state) => ({
+              initialSettings: snapshot,
+              isDirty: checkIsDirty(state.settings, snapshot),
+              toastMessage: checkIsDirty(state.settings, snapshot) ? null : '设置已保存',
+              toastKind: 'success',
+            }));
+          } catch (err) {
+            console.error('Failed to save settings:', err);
+            set({ isDirty: true, toastMessage: '设置保存失败，请重试', toastKind: 'error' });
+          }
+        }
+      } finally {
+        set({ isSaving: false });
+      }
+    };
+    saveInFlight = drain().finally(() => { saveInFlight = null; });
+    return saveInFlight;
   },
 
   setHotkey: (hotkey: string) => applyPatch({ hotkey }),
@@ -466,7 +470,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   updateAiProvider: (providerId: string, updates: Partial<AiProviderConfig>) => {
@@ -506,7 +510,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   addAiProvider: (provider: Partial<AiProviderConfig>) => {
@@ -538,7 +542,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   deleteAiProvider: (providerId: string) => {
@@ -564,7 +568,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   addModelToProvider: (providerId: string, model: { modelId: string; displayName?: string; enabled?: boolean }) => {
@@ -603,7 +607,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   removeModelFromProvider: (providerId: string, modelId: string) => {
@@ -637,7 +641,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   toggleModelEnabled: (providerId: string, modelId: string) => {
@@ -685,7 +689,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   setDefaultModelForProvider: (providerId: string, modelId: string) => {
@@ -709,7 +713,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   setDefaultPreset: (preset: string) => applyPatch({ defaultPreset: preset }, 'none'),
@@ -741,7 +745,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   setAllOnlineEngines: (mode: 'all' | 'recommended' | 'domestic' | 'none') => {
@@ -801,7 +805,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       settings: updated,
       isDirty: checkIsDirty(updated, initialSettings),
     });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   setBaiduConfig: (appId: string, secret: string, llmApiKey?: string, useSameSecret?: boolean) => {
@@ -814,28 +818,28 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       ...(useSameSecret !== undefined ? { useBaiduSameSecret: useSameSecret } : {}),
     };
     set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   setDeeplConfig: (apiKey: string, customUrl: string) => {
     const { settings, initialSettings } = get();
     const updated = { ...settings, deeplApiKey: apiKey, deeplCustomUrl: customUrl };
     set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   setVolcengineConfig: (accessKey: string, secretKey: string) => {
     const { settings, initialSettings } = get();
     const updated = { ...settings, volcengineAccessKey: accessKey, volcengineSecretKey: secretKey };
     set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   setYandexConfig: (apiKey: string, folderId: string) => {
     const { settings, initialSettings } = get();
     const updated = { ...settings, yandexApiKey: apiKey, yandexFolderId: folderId };
     set({ settings: updated, isDirty: checkIsDirty(updated, initialSettings) });
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
 
   setTranslationTiers: (tiers: string[]) => applyPatch({ translationTiers: tiers }, 'none'),
@@ -883,7 +887,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       isDirty: checkIsDirty(updated, initialSettings),
     });
     // 300ms 防抖持久化写盘，防止用户快速滑动滑杆时密集 I/O 导致卡顿掉帧
-    debouncedSaveSettings(get, set);
+    debouncedSaveSettings(get);
   },
   updateAppearance: (updates: Partial<AppearanceSettings>) => {
     get().setAppearance(updates);

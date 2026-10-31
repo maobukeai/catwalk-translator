@@ -279,10 +279,33 @@ impl WordMerger {
             - run.first().unwrap().box_rect.x;
         let punctuated_sentence = run.len() >= 3 && total >= 14 && span >= 250
             && run.iter().any(|block| block.text.chars().any(|c| matches!(c, '。' | '，' | '；')));
-        let prose = run.len() >= 2 && total >= 26
+        let cjk_prose = run.len() >= 2 && total >= 26
             && (substantial >= 2
-                || (run.len() >= 4 && total >= 34 && total / run.len() >= 4))
-            || punctuated_sentence;
+                || (run.len() >= 4 && total >= 34 && total / run.len() >= 4));
+        // A pure-Latin sentence is cut by the detector at *word* boundaries, not
+        // at Han-character boundaries, so the CJK counters above stay at zero and
+        // every word used to become its own overlay card (the user's MIT-license
+        // row arrived as 12 cards). Treat a wide run of many Latin word fragments
+        // as prose too, but only when it really is running text: several entirely
+        // lowercase words (which Title-Case UI menus, button labels and table
+        // cells never contain) plus a wide, densely packed span.
+        let latin_letters: usize = run.iter()
+            .map(|block| block.text.chars().filter(|c| c.is_ascii_alphabetic()).count())
+            .sum();
+        let latin_blocks = run.iter()
+            .filter(|block| block.text.chars().any(|c| c.is_ascii_alphabetic()))
+            .count();
+        let lowercase_words = run.iter()
+            .flat_map(|block| block.text.split_whitespace())
+            .filter(|word| word.chars().count() >= 2
+                && word.chars().all(|c| c.is_ascii_lowercase()))
+            .count();
+        let latin_prose = run.len() >= 4
+            && latin_blocks * 4 >= run.len() * 3
+            && latin_letters >= 20
+            && lowercase_words >= 3
+            && span >= 150;
+        let prose = cjk_prose || punctuated_sentence || latin_prose;
         if !prose {
             output.append(run);
             return;
@@ -432,12 +455,20 @@ impl WordMerger {
                         .is_some_and(|ch| ch.is_ascii_alphabetic())
                         && b.text.trim_start().chars().next()
                             .is_some_and(is_cjk_or_fullwidth);
+                    // The compact CJK threshold below assumes two *adjacent* CJK
+                    // labels ("添加" / "物体"). When the next fragment starts with
+                    // a non-CJK glyph it is the same sentence continuing across a
+                    // script boundary -- e.g. "后端热重载" + "[CargoWatch]:修改..."
+                    // where the detector left a normal inter-word gutter. Using the
+                    // compact threshold there split the status line into two cards.
+                    let next_starts_cjk = b.text.trim_start().chars().next()
+                        .is_some_and(is_cjk_or_fullwidth);
                     let max_gap = if sentence_script_transition {
                         // "修改 Rust 代码" is one sentence even when a font
                         // leaves a slightly wider Latin→CJK gutter. Do not
                         // apply the compact CJK-menu threshold to this case.
                         (median_h * 0.85).clamp(10.0, 14.0)
-                    } else if last_cjk >= 2 && next_cjk >= 2 {
+                    } else if last_cjk >= 2 && next_cjk >= 2 && next_starts_cjk {
                         (median_h * 0.20).clamp(2.0, 4.0)
                     } else {
                         gap_threshold.min(median_h * 0.55).max(4.0)
@@ -951,5 +982,32 @@ mod tests {
         assert_eq!(merged.len(), 3);
         assert!(merged.iter().all(|block| block.box_rect.height <= 21));
     }
+    #[test]
+    fn english_prose_fragments_rejoin_after_toolbar_refine_guard() {
+        // User capture sess_1791282850811: the MIT-license line was detected as
+        // 14 word-level fragments with 6-10px gaps at h=14. Chinese prose rejoins;
+        // English must too, or the sentence becomes 14 separate overlay cards.
+        let block = |text: &str, x, width| TextBlock {
+            text: text.into(),
+            confidence: 1.0,
+            box_rect: BoundingBox { x, y: 759, width, height: 14 },
+        };
+        let blocks = vec![
+            block("The", 380, 17),
+            block("above", 405, 31),
+            block("copyi ight", 444, 56),
+            block("not ice", 510, 38),
+            block("and", 557, 18),
+            block("this", 584, 23),
+            block("permission not ice", 616, 110),
+            block("shall", 735, 30),
+            block("be", 774, 12),
+            block("ind Luded", 796, 49),
+            block("in", 855, 12),
+            block("all", 873, 17),
+        ];
+        let merged = WordMerger::merge_prose_rows(blocks);
+        assert_eq!(merged.len(), 1,
+            "English prose fragments must rejoin into one row: {merged:?}");
+    }
 }
-

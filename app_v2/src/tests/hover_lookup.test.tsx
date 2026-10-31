@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
 import { CaptureOverlay } from '../components/Overlay/CaptureOverlay';
 import { createMockIpcHarness, getActiveHarness } from './harness/tauriIpcMock';
 
@@ -116,5 +116,34 @@ describe('frozen-frame hover lookup (H / Ctrl+Alt+H)', () => {
     (window as any).__TAURI_INTERNALS__ = {};
     render(<CaptureOverlay isOpen={true} onClose={vi.fn()} openInHoverMode={true} />);
     expect(await screen.findByTestId('hover-hint')).toBeInTheDocument();
+  });
+
+  it('does not block a reopened capture or publish the previous frame late', async () => {
+    wireHoverHarness();
+    const fallback = getActiveHarness()!.invokeMock.getMockImplementation()!;
+    let resolveOld!: (value: any) => void;
+    const oldFrame = new Promise((resolve) => { resolveOld = resolve; });
+    let lookups = 0;
+    getActiveHarness()!.invokeMock.mockImplementation((cmd: string, args?: any): any => {
+      if (cmd === 'cmd_hover_lookup') {
+        lookups += 1;
+        return lookups === 1 ? oldFrame : Promise.resolve({ text: 'New frame', x: 200, y: 300, width: 120, height: 20 });
+      }
+      return fallback(cmd, args);
+    });
+    (window as any).__TAURI_INTERNALS__ = {};
+    const onClose = vi.fn();
+    const { rerender } = render(<CaptureOverlay isOpen onClose={onClose} openInHoverMode />);
+    await screen.findByTestId('hover-hint');
+    fireEvent.mouseMove(container(), { clientX: 260, clientY: 310 });
+    await waitFor(() => expect(lookups).toBe(1));
+    rerender(<CaptureOverlay isOpen={false} onClose={onClose} openInHoverMode />);
+    rerender(<CaptureOverlay isOpen onClose={onClose} openInHoverMode />);
+    await screen.findByTestId('hover-hint');
+    fireEvent.mouseMove(container(), { clientX: 280, clientY: 310 });
+    expect(await screen.findByTestId('hover-bubble')).toHaveTextContent('New frame');
+    await act(async () => { resolveOld({ text: 'Old frame', x: 200, y: 300, width: 120, height: 20 }); await oldFrame; });
+    expect(screen.getByTestId('hover-bubble')).toHaveTextContent('New frame');
+    expect(screen.getByTestId('hover-bubble')).not.toHaveTextContent('Old frame');
   });
 });

@@ -12,6 +12,8 @@ use app_v2_lib::{
     translator::{CgDictionaryEngine, MultiTierPipeline},
 };
 use std::collections::HashMap;
+mod common;
+use common::{assert_online_fallback_or_retry, read_http_request};
 
 // ============================================================================
 // Category 1: Empty & Text/Dict Boundary Extremes (5 Tests)
@@ -352,26 +354,36 @@ mod category_3_network_api_failure_fallbacks {
     fn test_12_http_429_rate_limit_fallback() {
         tauri::async_runtime::block_on(async {
             let pipeline = MultiTierPipeline::new();
-
-            // Test LLM translation request with invalid endpoint that fails
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                while let Ok((mut socket, _)) = listener.accept().await {
+                    if read_http_request(&mut socket).await.is_err() { continue; }
+                    let response = b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = socket.write_all(response).await;
+                    let _ = socket.shutdown().await;
+                }
+            });
             let config = LlmConfig {
                 id: Some("test".to_string()),
                 provider: "TestProvider".to_string(),
                 api_key: "sk-fake".to_string(),
                 model: "test-model".to_string(),
-                endpoint: "http://127.0.0.1:9999/v1".to_string(),
+                endpoint: format!("http://{addr}/v1"),
                 enabled: Some(true),
             };
 
             let err = pipeline
                 .translate_via_llm(&["UnknownTerm".to_string()], &config, &[])
                 .await;
-            assert!(err.is_err(), "Invalid endpoint must return error");
+            let error = err.unwrap_err();
+            assert!(error.contains("429"), "Unexpected rate-limit error: {error}");
 
             // Verify cascade handling when LLM fails: unmatched phrase falls back to online API or fallback string
             let phrases = vec![
                 "AO Mixing Mode".to_string(),
-                "RandomUnknownTermXYZ".to_string(),
+                "Unmatched rate limited phrase".to_string(),
             ];
             let results = pipeline
                 .translate_phrases(&phrases, "substance", Some(&config), &[])
@@ -383,11 +395,8 @@ mod category_3_network_api_failure_fallbacks {
             assert_eq!(results[0].source_tier, "substance");
 
             // Unknown term falls back to Fallback API without breaking the pipeline
-            assert_eq!(results[1].original, "RandomUnknownTermXYZ");
-            assert!(
-                results[1].source_tier.contains("Fallback")
-                    || results[1].source_tier.contains("Online")
-            );
+            assert_eq!(results[1].original, "Unmatched rate limited phrase");
+            assert_online_fallback_or_retry(&pipeline, &results[1]);
         });
     }
 
@@ -433,7 +442,7 @@ mod category_3_network_api_failure_fallbacks {
             let phrases = vec![
                 "Subsurface Scattering".to_string(),
                 "NavMesh Surface".to_string(),
-                "NonExistentFeatureString999".to_string(),
+                "Nonexistent feature test phrase 999".to_string(),
             ];
 
             let results = pipeline
@@ -453,11 +462,8 @@ mod category_3_network_api_failure_fallbacks {
             assert_eq!(results[1].source_tier, "unity");
 
             // Phrase 3: Dict miss + Network fail -> Online Fallback or Fallback API
-            assert_eq!(results[2].original, "NonExistentFeatureString999");
-            assert!(
-                results[2].source_tier.contains("Fallback")
-                    || results[2].source_tier.contains("Online")
-            );
+            assert_eq!(results[2].original, "Nonexistent feature test phrase 999");
+            assert_online_fallback_or_retry(&pipeline, &results[2]);
             assert!(!results[2].translated.is_empty());
         });
     }

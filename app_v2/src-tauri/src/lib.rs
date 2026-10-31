@@ -15,6 +15,7 @@ pub mod models;
 pub mod ocr;
 pub mod offline;
 pub mod pin;
+pub mod persistence;
 pub mod offline_models;
 pub mod onnx_ocr;
 pub mod reconstruction;
@@ -26,6 +27,7 @@ pub mod webdav;
 pub mod anki;
 pub mod glossary;
 pub mod autostart;
+mod window_state;
 
 use commands::AppState;
 use std::str::FromStr;
@@ -497,9 +499,14 @@ pub fn run() {
         )
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                commands::set_was_main_window_visible(false);
-                let _ = window.hide();
+                if window.label() == "main" {
+                    api.prevent_close();
+                    commands::set_was_main_window_visible(false);
+                    let _ = window.hide();
+                } else if window.label() == pin::PIN_QUICK_LABEL {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .setup(|app| {
@@ -584,7 +591,9 @@ pub fn run() {
                     if let Some(state) = app.try_state::<AppState>() {
                         if let Ok(mut settings) = state.settings.lock() {
                             settings.ocr_version = Some(effective);
-                            commands::save_settings_file(app.handle(), &settings);
+                            if let Err(e) = commands::save_settings_file(app.handle(), &settings) {
+                                eprintln!("[OCR] 保存恢复后的模型设置失败: {e}");
+                            }
                         }
                     }
                 }
@@ -592,10 +601,11 @@ pub fn run() {
 
             // System Tray setup
             let show_item = MenuItemBuilder::with_id("show_settings", "显示界面").build(app)?;
+            let reset_size_item = MenuItemBuilder::with_id("reset_size", "重置默认窗口大小 (960×720)").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
 
             let tray_menu = MenuBuilder::new(app)
-                .items(&[&show_item, &quit_item])
+                .items(&[&show_item, &reset_size_item, &quit_item])
                 .build()?;
 
             let mut tray_builder = TrayIconBuilder::new()
@@ -635,6 +645,13 @@ pub fn run() {
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
+                        }
+                    }
+                    "reset_size" => {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            tauri::async_runtime::spawn(async move {
+                                let _ = commands::cmd_reset_window_size(window).await;
+                            });
                         }
                     }
                     "quit" => {
@@ -730,6 +747,7 @@ pub fn run() {
             commands::cmd_begin_capture,
             commands::cmd_show_overlay,
             commands::cmd_close_overlay,
+            commands::cmd_reset_window_size,
             commands::cmd_capture_and_ocr,
             commands::cmd_region_ocr_layout,
             commands::cmd_region_ocr_translate,

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { OverlayBlock } from '../../services/types';
+import { getOverlayCardMaxWidth } from '../../services/overlayLayout';
 
 // ── OverlayBlockCard: a single translated text block rendered in-place ─────────
 export type CardViewMode = 'translated' | 'original' | 'bilingual';
@@ -68,6 +69,8 @@ interface OverlayBlockCardProps {
   onCardContextMenu?: (e: React.MouseEvent) => void;
   /** Present when this block's translation failed — shows an inline retry. */
   onRetry?: () => void;
+  /** Explicit pipeline state: empty translated text alone does not mean loading. */
+  translationPending?: boolean;
   /** 译文 / 原文 / 双语对照 (global O key cycles). */
   viewMode?: CardViewMode;
   /** Per-card zoom multiplier (Ctrl+wheel / A± buttons), clamped 0.6–2.0. */
@@ -174,17 +177,20 @@ export function toTranslucentBg(bgCss?: string, alpha = 0.78): string {
   return str;
 }
 
-function cssLuminance(color?: string): number | null {
+/** OCR samples are RGB; also support the hex and named neutral fallbacks. */
+function parseSampledColor(color?: string): [number, number, number, number] | null {
   if (!color || color === 'transparent') return null;
   const value = color.trim().toLowerCase();
-  if (value === 'black') return 0;
-  if (value === 'white') return 255;
-  const rgbMatch = value.match(/^rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (value === 'black') return [0, 0, 0, 1];
+  if (value === 'white') return [255, 255, 255, 1];
+  const rgbMatch = value.match(/^rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*(\d*\.?\d+)(%)?)?\s*\)$/i);
   if (rgbMatch) {
-    const r = parseInt(rgbMatch[1], 10);
-    const g = parseInt(rgbMatch[2], 10);
-    const b = parseInt(rgbMatch[3], 10);
-    return 0.299 * r + 0.587 * g + 0.114 * b;
+    const r = Math.min(255, Number(rgbMatch[1]));
+    const g = Math.min(255, Number(rgbMatch[2]));
+    const b = Math.min(255, Number(rgbMatch[3]));
+    const alpha = rgbMatch[4] === undefined ? 1
+      : Math.min(1, Number(rgbMatch[4]) / (rgbMatch[5] ? 100 : 1));
+    return [r, g, b, alpha];
   }
   if (value.startsWith('#')) {
     let hex = value.slice(1);
@@ -195,10 +201,26 @@ function cssLuminance(color?: string): number | null {
       const r = parseInt(hex.slice(0, 2), 16);
       const g = parseInt(hex.slice(2, 4), 16);
       const b = parseInt(hex.slice(4, 6), 16);
-      return 0.299 * r + 0.587 * g + 0.114 * b;
+      const alpha = hex.length === 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1;
+      return [r, g, b, alpha];
     }
   }
   return null;
+}
+
+function cssLuminance(color?: string): number | null {
+  const rgb = parseSampledColor(color);
+  return rgb ? 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2] : null;
+}
+
+// sRGB relative luminance, not the legacy brightness cutoff used for borders.
+// https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html
+function relativeLuminance(rgb: number[]): number {
+  const linear = rgb.slice(0, 3).map((channel) => {
+    const c = channel / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
 }
 
 /** Shared source layer: every erase plate sits below every translated card. */
@@ -237,22 +259,26 @@ export function isLightBg(bgCss?: string, fgCss?: string): boolean {
   return foreground !== null && foreground < 140;
 }
 
-/**
- * 智能计算高清晰度文字颜色：
- * 浅色/中浅色背景下：强制使用纯黑 (#000000) 确保极致深邃与清晰度，消除发灰发虚；
- * 深色背景下：若采样前景过暗或发灰，拉升至纯白 (#ffffff)，确保强对比度。
- */
+/** Preserve readable sampled ink; repair low contrast against the actual erase
+ * background. An absolute brightness cutoff incorrectly whitened green logs
+ * and blackened blue links even when their source colors were legible. */
 export function getCardTextColor(bgCss?: string, fgCss?: string): string {
-  const isLight = isLightBg(bgCss, fgCss);
-  if (isLight) {
-    return '#000000';
+  const background = parseSampledColor(toSolidBg(bgCss, fgCss));
+  if (!background) return isLightBg(bgCss, fgCss) ? '#000000' : '#ffffff';
+  const backgroundLuminance = relativeLuminance(background);
+  const foreground = parseSampledColor(fgCss);
+  if (foreground) {
+    const alpha = foreground[3];
+    const composited = foreground.slice(0, 3).map((channel, i) =>
+      channel * alpha + background[i] * (1 - alpha));
+    const foregroundLuminance = relativeLuminance(composited);
+    const contrast = (Math.max(backgroundLuminance, foregroundLuminance) + 0.05)
+      / (Math.min(backgroundLuminance, foregroundLuminance) + 0.05);
+    if (contrast >= 4.5) return fgCss!.trim();
   }
-  if (fgCss && fgCss !== 'transparent') {
-    const foreground = cssLuminance(fgCss);
-    if (foreground !== null && foreground < 160) return '#ffffff';
-    return fgCss;
-  }
-  return '#ffffff';
+  const blackContrast = (backgroundLuminance + 0.05) / 0.05;
+  const whiteContrast = 1.05 / (backgroundLuminance + 0.05);
+  return blackContrast >= whiteContrast ? '#000000' : '#ffffff';
 }
 
 
@@ -264,6 +290,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   onCopySingle,
   onCardContextMenu,
   onRetry,
+  translationPending = false,
   viewMode = 'translated',
   scale = 1,
   fontLineHeight,
@@ -285,16 +312,30 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
   const userDraggedRef = useRef(false);
+  const wasAutoPositionedRef = useRef(false);
 
   // Follow external re-layout (AABB push after rendered-height reports, watch
   // refreshes) unless the user manually dragged this card somewhere.
   useEffect(() => {
     if (userDraggedRef.current) return;
-    // 2px 死区：跟随重排纠偏，同时避免 watch 刷新时的轻微抖动
-    if (Math.abs(pos.x - block.logicalX) > 2 || Math.abs(pos.y - block.logicalY) > 2) {
+    // Keep the watch-jitter dead zone in the interior, but never discard a
+    // 1–2px edge correction: that would leave a feasible card clipped even
+    // after its parent had computed a valid position.
+    const crossesEdge = (Number.isFinite(block.layoutTop) && pos.y < block.layoutTop!)
+      || (Number.isFinite(block.layoutBottom) && pos.y + Math.max(block.logicalH, block.aabbH ?? 0) > block.layoutBottom!)
+      || (Number.isFinite(block.layoutRight) && pos.x + Math.max(block.logicalW, block.aabbW ?? 0) > block.layoutRight!);
+    // A correction can propagate to an interior predecessor as well. Follow
+    // computed positions (and the later return to the source) precisely while
+    // retaining the jitter tolerance for unadjusted OCR/watch coordinates.
+    const autoPositioned = (block.sourceY !== undefined && Math.abs(block.logicalY - block.sourceY) > 0.1)
+      || (block.sourceX !== undefined && Math.abs(block.logicalX - block.sourceX) > 0.1);
+    const threshold = crossesEdge || autoPositioned || wasAutoPositionedRef.current ? 0.1 : 2;
+    wasAutoPositionedRef.current = autoPositioned;
+    if (Math.abs(pos.x - block.logicalX) > threshold || Math.abs(pos.y - block.logicalY) > threshold) {
       setPos({ x: block.logicalX, y: block.logicalY });
     }
-  }, [block.logicalX, block.logicalY, pos.x, pos.y]);
+  }, [block.logicalX, block.logicalY, block.logicalW, block.logicalH, block.aabbW, block.aabbH,
+    block.layoutTop, block.layoutBottom, block.layoutRight, block.sourceX, block.sourceY, pos.x, pos.y]);
 
   // Real rendered size feeds the parent's AABB collision avoidance so wrapped
   // (multi-line/taller) cards push neighbours down instead of covering them.
@@ -302,6 +343,8 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   // plates may reach back to the source box after a collision shift and must
   // never be mistaken for translated ink width (which causes feedback drift).
   const lastReportedSizeRef = useRef({ w: 0, h: 0 });
+  const layoutBoundsRef = useRef({ ...pos, right: block.layoutRight, bottom: block.layoutBottom });
+  layoutBoundsRef.current = { ...pos, right: block.layoutRight, bottom: block.layoutBottom };
   const reportRenderedSize = React.useCallback((fallback?: { width?: number; height?: number }) => {
     const el = cardRef.current;
     if (!el || !onRenderedSize) return;
@@ -315,7 +358,11 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
       fallback?.width ?? 0,
     );
     const last = lastReportedSizeRef.current;
-    if (h > 0 && (Math.abs(h - last.h) > 2 || Math.abs(w - last.w) > 2)) {
+    const bounds = layoutBoundsRef.current;
+    const crossesEdge = (Number.isFinite(bounds.bottom) && bounds.y + h > bounds.bottom! + 0.1)
+      || (Number.isFinite(bounds.right) && bounds.x + w > bounds.right! + 0.1);
+    const threshold = crossesEdge ? 0.5 : 2;
+    if (h > 0 && (Math.abs(h - last.h) > threshold || Math.abs(w - last.w) > threshold)) {
       lastReportedSizeRef.current = { w, h };
       onRenderedSize(blockIndex, { width: w, height: h });
     }
@@ -355,7 +402,8 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   // 1. 根据原文与译文长度/字符集，计算理想贴合字号，使得译文在原文位置区域内自然缩放对齐；
   // 2. 避免译文较长时产生巨大字号导致多行膨胀与错位。
   const vw = viewportWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1920);
-  const isPending = !block.translated;
+  const isPending = translationPending && !block.translated && !block.translationFailed
+    && viewMode !== 'original';
   const displayText = block.translated || block.original;
   const primaryText = viewMode === 'original' ? block.original : displayText;
   // A source bullet can remain visibly outside the OCR erasure patch even
@@ -392,10 +440,8 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
   // 若不收缩会把卡片撑高、经 AABB 连锁推挤邻居，表现为「识别阶段排布凌乱」。
   // 多行块（original 含 \n）按最长一行估宽，避免按总长度过度缩小字号。
   // 卡片宽度允许适度扩展，并始终钳制在当前视口内。
-  const cardMaxWidth = Math.max(40, Math.min(
-    Math.max(40, vw - pos.x - 20),
-    Math.max(Math.round(block.logicalW * 1.6 + 16), 120)
-  ));
+  const manuallyMoved = dragging || userDraggedRef.current;
+  const cardMaxWidth = getOverlayCardMaxWidth(block, vw, pos.x, manuallyMoved);
   let targetFontSize = baseFontSize;
   // 原文单行 → 无条件锁定单行渲染(nowrap),不只限于触发了字号收缩的情况:
   // 未收缩分支下 canvas 度量稍有偏差也会在 maxWidth 处折行
@@ -454,11 +500,24 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
       singleLineLock = false;
     }
   }
+  // A fixed column boundary still applies after font rounding or user zoom.
+  // Let the browser wrap at that boundary instead of nowrap ink leaking into
+  // the next column and moving its cards through the AABB feedback loop.
+  if (block.layoutMaxWidth !== undefined
+    || (Number.isFinite(block.layoutRight) && !manuallyMoved)) singleLineLock = false;
 
   // 所有模式统一保持 9px 可读下限；放不下时改为换行。
-  const fontSize = Math.max(9, Math.round(
-    Math.min(64, Math.max(9, targetFontSize)) * scale
-  ));
+  const scaledFontSize = Math.min(64, Math.max(9, targetFontSize)) * scale;
+  // A common fitted paragraph size such as 11.5px must not round back up to
+  // 12px: that can turn one nearly-fitting word into a whole extra line. Keep
+  // the same fractional size for every line, including short continuations.
+  const fontSize = Math.max(9, proseFontSize !== undefined
+    ? Math.round(scaledFontSize * 10) / 10 : Math.round(scaledFontSize));
+  // Font fitting used the unrounded, unzoomed size. Recheck the final ink
+  // budget so rounding or Ctrl+wheel cannot leave an overflowing nowrap row.
+  if (baseFontSize > 0 && estimatedWidth * fontSize / baseFontSize > cardMaxWidth - 4) {
+    singleLineLock = false;
+  }
   // 使用前面计算出的视口安全宽度。
   const maxWidth = cardMaxWidth;
   const isLight = isLightBg(block.bgCss, block.fgCss);
@@ -579,7 +638,7 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
         // 仅保留侧边余量，左/上 padding 为 0：文字与 OCR 框逐像素对齐
         padding: isMoved ? '3px 8px' : '0 2px 0 0',
       }}
-      title={`${block.original} → ${block.translated || '翻译中…'} [${block.sourceTier}]`}
+      title={`${block.original} → ${block.translated || (block.translationFailed ? '翻译失败' : translationPending ? '翻译中…' : '暂无译文')} [${block.sourceTier}]`}
       onPointerDown={onDragStart}
       onPointerMove={onDragMove}
       onPointerUp={onDragEnd}

@@ -365,9 +365,11 @@ fn update_webdav_state(
         .settings
         .lock()
         .map_err(|e| format!("锁定 settings 失败：{e}"))?;
-    let cfg = settings.webdav_config.get_or_insert_with(Default::default);
+    let mut updated = settings.clone();
+    let cfg = updated.webdav_config.get_or_insert_with(Default::default);
     mutate(cfg);
-    commands::save_settings_file(app_handle, &settings);
+    commands::save_settings_file(app_handle, &updated)?;
+    *settings = updated;
     Ok(())
 }
 

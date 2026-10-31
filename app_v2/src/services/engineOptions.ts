@@ -35,6 +35,19 @@ export function isLlmChannelReady(cfg: LlmConfig): boolean {
   );
 }
 
+/** Resolve a selected model by identity, without empty strings matching every model. */
+export function resolveCaptureLlmConfig(settings: AppSettings, engine: string): LlmConfig | null {
+  const pool = [...(settings.llmConfigs || []), ...(settings.llmConfig ? [settings.llmConfig] : [])];
+  if (engine === 'auto' || engine === 'llm' || engine === 'ai') {
+    return (settings.llmConfig && isLlmChannelReady(settings.llmConfig) ? settings.llmConfig : null)
+      || pool.find(isLlmChannelReady) || null;
+  }
+  const identity = (engine.startsWith('llm:') ? engine.slice(4) : engine).trim().toLowerCase();
+  if (!identity) return null;
+  return pool.find((cfg) => cfg.enabled !== false && [cfg.id, cfg.model, cfg.provider]
+    .some((value) => !!value?.trim() && value.trim().toLowerCase() === identity)) || null;
+}
+
 const AUTO_OPTION: EngineOption = {
   value: 'auto',
   label: '🤖 默认智能极速并发 (词库 ➔ AI ➔ 在线竞速)',
@@ -56,6 +69,10 @@ const ONLINE_ENGINE_META: Array<{ key: keyof OnlineEngines; label: string; defau
   { key: 'lingva', label: '🕊️ Lingva (免翻 Google 镜像)', defaultOn: false },
   { key: 'myMemory', label: '📚 MyMemory 记忆库', defaultOn: false },
 ];
+
+export function isCaptureOnlineEngine(engine: string): boolean {
+  return ONLINE_ENGINE_META.some(({ key }) => String(key).toLowerCase() === engine.toLowerCase());
+}
 
 const PRESET_DICT_META: Array<{ key: keyof PresetDicts; label: string }> = [
   { key: 'blender', label: '🧊 Blender CG 词库' },

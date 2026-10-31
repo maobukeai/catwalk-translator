@@ -51,5 +51,10 @@ export default defineConfig(async () => ({
     environment: "jsdom",
     setupFiles: ["./src/tests/harness/setup.ts"],
     include: ["src/tests/**/*.test.{ts,tsx}"],
+    // Full-suite parallelism (61 files) makes wall-clock per test far longer than
+    // when a file runs alone. These budgets cover CPU contention only; a test that
+    // is genuinely broken still fails well inside them.
+    testTimeout: 15000,
+    hookTimeout: 15000,
   },
 }));

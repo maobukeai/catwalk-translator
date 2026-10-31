@@ -10,6 +10,8 @@
 - **Backup & Sync**: `backup.rs` zips settings/history/capture-sessions with a manifest (local auto-backup thread + retention); `webdav.rs` syncs them to any WebDAV service (坚果云 et al.) with PROPFIND/MKCOL/PUT/GET/DELETE and cloud retention cleanup.
 - **Auto Update**: GitHub Releases checker + downloader (`updater.rs`).
 - **Persistence**: `%APPDATA%\com.maobukeai.catwalk\` — `settings.json` / `history.json` / `capture_sessions.json` / `backups/` / `models/` / `offline_models/`. All writes go through in-memory `AppState` (Mutex) + immediate full-file rewrite.
+`version.json` and `app_v2/public/version.json` are byte-identical copies, both rewritten by
+`scripts/bump_version.py`; neither may carry a UTF-8 BOM (the release tooling reads them as `utf-8-sig`).
 
 ## Feature Inventory
 Every feature from requirements and existing codebase analysis is assigned to a milestone below:
@@ -33,7 +35,7 @@ Every feature from requirements and existing codebase analysis is assigned to a 
 | 2 | M2: High-DPI Capture & RapidOCR ONNX Engine | Implement Rust multi-monitor capture, DPI scale factor coordinate mapper, ONNX `ort` RapidOCR engine & line reconstructor | M1 | DONE |
 | 3 | M3: Multi-Tier Translation Pipeline & Dictionaries | Implement CG dicts (Blender/Substance/Unity JSONs), LLM APIs bridge, Online API fallbacks, tier selector | M1 | DONE |
 | 4 | M4: Color Sampler & Interactive Canvas/Web Overlay | Rust background color sampler & contrast calculator, React 19 Canvas 2D + DOM overlay card component | M2, M3 | DONE |
-| 5 | M5: E2E Testing, Adversarial Hardening & Portable Build | 100% E2E test pass (cargo test + npm test), Tier 5 adversarial hardening, portable EXE build <40MB, startup <500ms | M1, M2, M3, M4 | IN_PROGRESS (S1 portable PASSED: 39.8MB, 151.5ms cold-start; S2 E2E + S3 hardening pending) |
+| 5 | M5: E2E Testing, Adversarial Hardening & Portable Build | 100% E2E test pass (cargo test + npm test), Tier 5 adversarial hardening, portable EXE build <40MB, startup <500ms | M1, M2, M3, M4 | DONE (portable 39.8MB / 151.5ms cold-start; cargo test 232 passed, vitest 527 passed) |
 
 ## Interface Contracts
 ### Rust Backend ↔ React Frontend (Tauri IPC)
@@ -83,7 +85,7 @@ app_v2/
     ├── services/            # tauri.ts(IPC 封装)、types.ts、defaultSettings.ts(单一来源)、
     │                        # hotkeys、tts、langDetect、overlayLayout(AABB)、exportImage
     ├── hooks/               # useAppTheme、useOcrStatus
-    └── tests/               # 27 个 vitest 文件(~221 用例)+ harness/tauriIpcMock.ts
+    └── tests/               # 61 个 vitest 文件(~527 用例)+ harness/tauriIpcMock.ts
 ```
 
 ## Extension Guide

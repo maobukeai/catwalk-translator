@@ -617,9 +617,9 @@ fn dump_ocr_pipeline_for_image() {
                 let merged = merge_for_diagnostics(res.blocks.clone());
                 assert!(merged.len() <= 12,
                     "Chinese prose must not remain dozens of independently translated OCR fragments: {merged:?}");
-                assert!(merged.iter().any(|block| block.text.starts_with("翻译结果的原位显示：")
+                assert!(merged.iter().any(|block| block.text.contains("翻译结果的原位显示：")
                     && block.text.contains("背景擦除和滚动后的对齐")),
-                    "the first paragraph line should be reconstructed as one block: {merged:?}");
+                    "the wrapped paragraph should be reconstructed as one block: {merged:?}");
                 assert!(merged.iter().any(|block| block.text.contains("写进文档。目前README仍是Tauri模板内容。")),
                     "wrapped prose tail should not have isolated fragments: {merged:?}");
             }

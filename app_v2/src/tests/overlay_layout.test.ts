@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateDenseProseFontSizes, estimateDenseRowFontHeights, estimateSafeErasePadding, resolveAABBCollisions } from '../services/overlayLayout';
+import { estimateDenseProseColumnWidths, estimateDenseProseFontSizes, estimateDenseRowFontHeights, estimateSafeErasePadding, getOverlayCardMaxWidth, resolveAABBCollisions } from '../services/overlayLayout';
 import { OverlayBlock } from '../services/types';
 import { toTranslucentBg, toSolidBg, isLightBg, getCardTextColor } from '../components/Overlay/OverlayBlockCard';
 
@@ -14,6 +14,39 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
     logicalH: h,
     bgCss: 'rgba(0, 0, 0, 0.8)',
     fgCss: '#ffffff',
+  });
+
+  describe('selection width budget', () => {
+    it('bounds a bubble by its selection rather than the whole desktop', () => {
+      expect(getOverlayCardMaxWidth({ logicalX: 41, logicalW: 355, layoutRight: 417 }, 1920)).toBe(376);
+    });
+
+    it('uses absolute CSS coordinates at a nonzero capture origin', () => {
+      expect(getOverlayCardMaxWidth({ logicalX: 641, logicalW: 355, layoutRight: 1017 }, 1920)).toBe(376);
+    });
+
+    it('keeps a narrower column boundary and the current viewport limit', () => {
+      const block = { logicalX: 41, logicalW: 355, layoutRight: 417, layoutMaxWidth: 260 };
+      expect(getOverlayCardMaxWidth(block, 1920)).toBe(260);
+      expect(getOverlayCardMaxWidth(block, 250)).toBe(189);
+    });
+
+    it('recomputes remaining width after automatic positioning but allows an explicit drag out', () => {
+      const block = { logicalX: 41, logicalW: 355, layoutRight: 417 };
+      expect(getOverlayCardMaxWidth(block, 1920, 81)).toBe(336);
+      expect(getOverlayCardMaxWidth(block, 1920, 450, true)).toBe(584);
+      expect(getOverlayCardMaxWidth({ ...block, layoutMaxWidth: 260 }, 1920, 450, true)).toBe(260);
+    });
+
+    it('does not replace a narrow remaining selection with the old 40px minimum', () => {
+      expect(getOverlayCardMaxWidth({ logicalX: 405, logicalW: 12, layoutRight: 417 }, 1920)).toBe(12);
+    });
+
+    it('leaves callers without a valid selection boundary on the existing path', () => {
+      for (const layoutRight of [undefined, NaN, Infinity]) {
+        expect(getOverlayCardMaxWidth({ logicalX: 41, logicalW: 355, layoutRight }, 1920)).toBe(584);
+      }
+    });
   });
 
   describe('estimateDenseRowFontHeights', () => {
@@ -65,6 +98,36 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
       ])).toEqual([30]);
     });
 
+    it('preserves a heading beside a separate toolbar at the same vertical position', () => {
+      const blocks = [
+        { original: 'Document settings', logicalX: 24, logicalY: 20, logicalW: 360, logicalH: 42 },
+        { original: 'Save', logicalX: 720, logicalY: 20, logicalW: 40, logicalH: 15 },
+        { original: 'Share', logicalX: 780, logicalY: 21, logicalW: 46, logicalH: 16 },
+      ];
+      expect(estimateDenseRowFontHeights(blocks)).toEqual([42, 15, 16]);
+    });
+
+    it('does not let a distant panel resize compact labels in another region', () => {
+      const blocks = [
+        { original: '账户设置', logicalX: 24, logicalY: 20, logicalW: 110, logicalH: 28 },
+        { original: '确定', logicalX: 740, logicalY: 20, logicalW: 40, logicalH: 14 },
+        { original: '取消', logicalX: 800, logicalY: 21, logicalW: 40, logicalH: 14 },
+      ];
+      expect(estimateDenseRowFontHeights(blocks)).toEqual([28, 14, 14]);
+    });
+
+    it('still normalizes a shuffled toolbar through adjacent peers with small top-edge jitter', () => {
+      const blocks = [
+        { original: '文件', logicalX: 20, logicalY: 20, logicalW: 32, logicalH: 12 },
+        { original: '编辑', logicalX: 65, logicalY: 24, logicalW: 32, logicalH: 12 },
+        { original: '渲染', logicalX: 110, logicalY: 21, logicalW: 32, logicalH: 21 },
+        { original: '窗口', logicalX: 155, logicalY: 23, logicalW: 32, logicalH: 12 },
+      ];
+      const heights = estimateDenseRowFontHeights([blocks[3], blocks[0], blocks[2], blocks[1]]);
+      expect([heights[0], heights[1], heights[3]]).toEqual([12, 12, 12]);
+      expect(heights[2]).toBeCloseTo(14.4);
+    });
+
     it('keeps neighbouring lines of one paragraph at a consistent font height', () => {
       const heights = estimateDenseRowFontHeights([
         { original: '我继续处理上轮留下的可复现问题，先从英文标题和工具栏入手。', logicalX: 51, logicalY: 146, logicalW: 732, logicalH: 15 },
@@ -78,6 +141,54 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
   });
 
   describe('estimateDenseProseFontSizes', () => {
+    it('keeps paragraph membership after noisy source heights are normalized', () => {
+      const input = [
+        { ...createMockBlock('a', 30, 80, 410, 18), original: '这是一段较长的中文正文第一行，应该和下面的同栏文字使用相同字号', translated: 'A long translation '.repeat(10) },
+        { ...createMockBlock('b', 30, 111, 400, 23), original: '这是同一段正文的下一行，识别框稍高也不应让它在归一后脱离段落', translated: 'The next line.' },
+      ];
+      const heights = estimateDenseRowFontHeights(input);
+      expect(heights).toEqual([20.5, 20.5]);
+      const sizes = estimateDenseProseFontSizes(input, heights, 1100, (text, font) => text.length * font * 0.55);
+      expect(sizes[0]).toBeDefined();
+      expect(sizes[1]).toBe(sizes[0]);
+    });
+
+    it('keeps interleaved columns internally consistent without sharing font fits', () => {
+      const blocks = [
+        { ...createMockBlock('left-a', 30, 80, 410, 18), original: '左侧第一行是一段较长的中文正文，原位显示应保持本栏的字号和行距', translated: 'Long translated text '.repeat(12) },
+        { ...createMockBlock('right-a', 570, 82, 440, 25), original: '右侧第一行属于另一栏的中文正文，应保持独立的文字大小和布局', translated: 'A short right-column translation.' },
+        { ...createMockBlock('left-b', 31, 105, 390, 20), original: '左侧第二行继续上面的正文内容，不能因为右侧插入文字就失去分组', translated: 'The left paragraph continues.' },
+        { ...createMockBlock('right-b', 570, 116, 440, 27), original: '右侧第二行应当与同栏第一行使用相同字号，同时保留左右两栏差异', translated: 'The right paragraph continues.' },
+      ];
+      const verify = (input: OverlayBlock[]) => {
+        const heights = estimateDenseRowFontHeights(input);
+        const sizes = estimateDenseProseFontSizes(input, heights, 1100, (text, font) => text.length * font * 0.55);
+        const byText = new Map(input.map((block, i) => [block.original, { height: heights[i], size: sizes[i] }]));
+        const [a, b, c, d] = blocks.map((block) => byText.get(block.original)!);
+        expect([a.height, c.height]).toEqual([19, 19]);
+        expect([b.height, d.height]).toEqual([26, 26]);
+        expect(a.size).toBeDefined();
+        expect(a.size).toBe(c.size);
+        expect(b.size).toBe(d.size);
+        expect(b.size).toBeGreaterThan(a.size!);
+      };
+      verify(blocks);
+      verify([blocks[3], blocks[1], blocks[2], blocks[0]]);
+    });
+
+    it('allows another column between paragraph lines but respects an intervening same-column control', () => {
+      const first = { ...createMockBlock('first', 30, 40, 430, 22), original: '这是一段较长正文的第一行，需要继续和下面的同栏正文共享字号', translated: 'A long first line '.repeat(8) };
+      const last = { ...createMockBlock('last', 30, 68, 410, 22), original: '这是同一个段落的第二行正文，应该按本栏的位置找到它的上一行', translated: 'The paragraph continues.' };
+      const control = createMockBlock('control', 570, 54, 100, 16);
+      const unrelated = [first, control, last];
+      const unrelatedSizes = estimateDenseProseFontSizes(unrelated, estimateDenseRowFontHeights(unrelated), 1100, (text, font) => text.length * font * 0.55);
+      expect(unrelatedSizes[0]).toBeDefined();
+      expect(unrelatedSizes[0]).toBe(unrelatedSizes[2]);
+      const interrupted = [first, { ...control, logicalX: 30 }, last];
+      expect(estimateDenseProseFontSizes(interrupted, estimateDenseRowFontHeights(interrupted), 1100, () => 200))
+        .toEqual([undefined, undefined, undefined]);
+    });
+
     it('does not flatten a two-line display heading to paragraph size', () => {
       const blocks = [
         { ...createMockBlock('title-a', 35, 58, 949, 54), original: "You'll stay signed in on these devices after", translated: '更改密码后，你仍会在这些设备上保持登录状态' },
@@ -172,6 +283,59 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
       ];
       const sizes = estimateDenseProseFontSizes(blocks, [23, 22], 1200, (text, font) => text.length * font);
       expect(sizes).toEqual([undefined, undefined]);
+    });
+
+    it('keeps the paragraph font when a capture edge requires wrapping', () => {
+      const blocks = [
+        { ...createMockBlock('bubble-a', 38, 19, 365, 23), original: '我们将 Gemini Omni 1.1 Flash 和一套全新的创意控制工', translated: 'We are bringing Gemini Omni 1.1 Flash and a new suite of creative tools' },
+        { ...createMockBlock('bubble-b', 38, 42, 171, 22), original: '具集成到 vids.new 中', translated: 'to vids.new.' },
+      ];
+      const heights = estimateDenseRowFontHeights(blocks);
+      const measure = (text: string, font: number) => text.length * font * 0.5;
+      expect(estimateDenseProseFontSizes(blocks.map(block => ({ ...block, layoutRight: 280 })), heights, 1200, measure))
+        .toEqual(estimateDenseProseFontSizes(blocks, heights, 1200, measure));
+    });
+  });
+
+  describe('estimateDenseProseColumnWidths', () => {
+    const paragraph = (id: string, x: number, y: number) => [
+      { ...createMockBlock(`${id}-a`, x, y, 410, 22), original: '这是正文段落的第一行，需要保留本栏宽度并且避免挤走另一栏文字' },
+      { ...createMockBlock(`${id}-b`, x + 1, y + 28, 390, 22), original: '这是正文段落的第二行，应当与上一行使用同样的栏宽进行换行' },
+    ];
+
+    it('constrains concurrent columns to their own source envelope regardless of OCR order', () => {
+      const [a, b] = paragraph('left', 30, 80);
+      const [c, d] = paragraph('right', 570, 82);
+      const input = [d, a, c, b];
+      expect(estimateDenseProseColumnWidths(input, estimateDenseRowFontHeights(input)))
+        .toEqual([409, 410, 410, 409]);
+      expect(input.map((block) => block.logicalW)).toEqual([390, 410, 410, 390]);
+    });
+
+    it('does not treat vertically separate paragraphs or wide overlapping text as columns', () => {
+      for (const right of [paragraph('lower', 570, 200), paragraph('indented', 60, 82)]) {
+        const input = [...paragraph('left', 30, 80), ...right];
+        expect(estimateDenseProseColumnWidths(input, estimateDenseRowFontHeights(input)))
+          .toEqual([undefined, undefined, undefined, undefined]);
+      }
+    });
+
+    it('leaves single-column paragraphs and sparse toolbars on the existing width path', () => {
+      const input = [...paragraph('single', 30, 80), createMockBlock('save', 600, 82, 40, 16), createMockBlock('share', 670, 82, 40, 16)];
+      expect(estimateDenseProseColumnWidths(input, estimateDenseRowFontHeights(input)))
+        .toEqual([undefined, undefined, undefined, undefined]);
+    });
+
+    it('moves only the next line in the same column when the constrained card wraps', () => {
+      const input = [...paragraph('left', 30, 80), ...paragraph('right', 570, 82)];
+      const widths = estimateDenseProseColumnWidths(input, estimateDenseRowFontHeights(input));
+      const resolved = resolveAABBCollisions(input.map((block, i) => ({
+        ...block, layoutMaxWidth: widths[i], aabbW: widths[i], aabbH: i === 0 ? 55 : block.logicalH,
+      })), 1100, 300);
+      const byText = new Map(resolved.map((block) => [block.translated, block]));
+      expect(byText.get(input[1].translated)?.logicalY).toBe(139);
+      expect(byText.get(input[2].translated)?.logicalY).toBe(82);
+      expect(byText.get(input[3].translated)?.logicalY).toBe(110);
     });
   });
 

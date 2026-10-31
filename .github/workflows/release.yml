@@ -27,14 +27,63 @@ jobs:
 
       - name: Resolve Version
         shell: bash
+        env:
+          RELEASE_INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            RAW_VER="${{ github.event.inputs.version }}"
+          if [ -n "$RELEASE_INPUT_VERSION" ]; then
+            RAW_VER="$RELEASE_INPUT_VERSION"
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             RAW_VER="${GITHUB_REF_NAME#v}"
           else
             RAW_VER=$(node -p "require('./app_v2/package.json').version")
           fi
+          if ! [[ "$RAW_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid release version"
+            exit 1
+          fi
+          export RAW_VER
+          node <<'NODE'
+          const fs = require('node:fs');
+          const versions = [
+            ['app_v2/package.json', JSON.parse(fs.readFileSync('app_v2/package.json', 'utf8')).version],
+            ['app_v2/src-tauri/tauri.conf.json', JSON.parse(fs.readFileSync('app_v2/src-tauri/tauri.conf.json', 'utf8')).version],
+            ['app_v2/src-tauri/Cargo.toml', fs.readFileSync('app_v2/src-tauri/Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1]],
+          ];
+          for (const [file, version] of versions) {
+            if (version !== process.env.RAW_VER) {
+              console.error(`::error::${file} has version ${version}; run scripts/bump_version.py before releasing ${process.env.RAW_VER}`);
+              process.exit(1);
+            }
+          }
+          // The manifest must be release-ready: both copies present, byte-identical,
+          // and carrying NO placeholder digests. A leftover/partial manifest silently
+          // yields a release the in-app updater can never install.
+          const manifestPaths = ["version.json", "app_v2/public/version.json"];
+          const manifests = manifestPaths.map((file) => {
+            if (!fs.existsSync(file)) {
+              console.error(`::error::missing manifest ${file}`);
+              process.exit(1);
+            }
+            return fs.readFileSync(file, "utf8");
+          });
+          if (manifests[0] !== manifests[1]) {
+            console.error("::error::version.json and app_v2/public/version.json have diverged");
+            process.exit(1);
+          }
+          if (manifests[0].charCodeAt(0) === 0xFEFF) {
+            console.error("::error::version.json must not contain a UTF-8 BOM");
+            process.exit(1);
+          }
+          const manifest = JSON.parse(manifests[0]);
+          if (manifest.version !== process.env.RAW_VER) {
+            console.error(`::error::version.json has version ${manifest.version}; expected ${process.env.RAW_VER}`);
+            process.exit(1);
+          }
+          if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) {
+            console.error("::error::version.json has no assets array");
+            process.exit(1);
+          }
+          NODE
           TAG_VER="v${RAW_VER}"
           echo "RAW_VER=${RAW_VER}" >> $GITHUB_ENV
           echo "TAG_VER=${TAG_VER}" >> $GITHUB_ENV
@@ -69,16 +118,16 @@ jobs:
       - name: TypeScript & Frontend Vitest
         working-directory: app_v2
         run: |
-          npx tsc --noEmit
-          npx vitest run
+          pnpm check
+          pnpm test
 
       - name: Build Frontend Assets (dist)
         working-directory: app_v2
-        run: npx vite build
+        run: pnpm exec vite build
 
-      - name: Backend Rust Tests (cargo test --lib)
+      - name: Backend Rust Tests (cargo test --locked)
         working-directory: app_v2/src-tauri
-        run: cargo test --lib
+        run: cargo test --locked
 
       - name: Build Tauri Production App
         working-directory: app_v2
@@ -119,48 +168,73 @@ jobs:
           "ZH_EXE=$zhExe" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ZH_MSI=$zhMsi" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Update version.json with Release SHA256 & Size
+      - name: Write Release Manifest (version.json)
         shell: pwsh
         run: |
-          $jsonPath = "version.json"
-          $ver = "$env:RAW_VER"
+          # The manifest is rebuilt from the artefacts we just produced, never from a
+          # CDN-cached copy. Reading a cached file and stamping it with the new version is
+          # what previously published a mirror HTML-page hash as the installer digest.
+          $ver  = "$env:RAW_VER"
           $hash = "$env:EXE_HASH"
           $size = [int64]"$env:EXE_SIZE"
+          $jsonPath = "version.json"
+
+          if ($hash -notmatch "^[0-9a-f]{64}$") { throw "EXE_HASH is not a SHA-256: $hash" }
+          if ($size -le 0) { throw "EXE_SIZE is not positive: $size" }
 
           $json = Get-Content $jsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
           $json.version = $ver
           $json.release_date = (Get-Date).ToString("yyyy-MM-dd")
+          $json.download_url = "https://github.com/maobukeai/catwalk-translator/releases"
 
-          foreach ($asset in $json.assets) {
-              if ($asset.name -like "MaobuTranslator_*") {
-                  $asset.name = "MaobuTranslator_${ver}_x64-setup.exe"
-                  $asset.url = "https://github.com/maobukeai/catwalk-translator/releases/download/v${ver}/MaobuTranslator_${ver}_x64-setup.exe"
-                  $asset.size = $size
-                  $asset.sha256 = $hash
-              } elseif ($asset.name -like "猫步翻译_*") {
-                  $asset.name = "猫步翻译_${ver}_x64-setup.exe"
-                  $asset.url = "https://github.com/maobukeai/catwalk-translator/releases/download/v${ver}/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_${ver}_x64-setup.exe"
-                  $asset.size = $size
-                  $asset.sha256 = $hash
+          # NOTE: use an index loop, not foreach. ConvertFrom-Json yields a non-
+          # enumerable array in Windows PowerShell 5.1, so `foreach` silently skips it.
+          # Also match on the ASCII-stable prefix set: CJK literals inside a .ps1 are
+          # mangled unless the script carries a UTF-8 BOM, which workflow steps do not.
+          for ($i = 0; $i -lt $json.assets.Count; $i++) {
+              $asset = $json.assets[$i]
+              if ($asset.name -match "^MaobuTranslator_") {
+                  $asset.name = "MaobuTranslator_" + $ver + "_x64-setup.exe"
+                  $asset.url = "https://github.com/maobukeai/catwalk-translator/releases/download/v" + $ver + "/MaobuTranslator_" + $ver + "_x64-setup.exe"
+              } elseif ($asset.name -match "^[^A-Za-z]") {
+                  $asset.name = "猫步翻译_" + $ver + "_x64-setup.exe"
+                  $asset.url = "https://github.com/maobukeai/catwalk-translator/releases/download/v" + $ver + "/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_" + $ver + "_x64-setup.exe"
+              } else {
+                  continue
               }
+              $asset.size = $size
+              $asset.sha256 = $hash
           }
 
+          # Every published asset must carry the real digest of the file we just built.
+          $manifestOk = $true
+          for ($i = 0; $i -lt $json.assets.Count; $i++) {
+              $asset = $json.assets[$i]
+              if ($asset.sha256 -ne $hash -or [int64]$asset.size -ne $size) {
+                  Write-Host "::error::Asset manifest mismatch for $($asset.name)"
+                  $manifestOk = $false
+              }
+          }
+          if (-not $manifestOk) { throw "Release manifest is inconsistent" }
+
           $json | ConvertTo-Json -Depth 10 | Set-Content $jsonPath -Encoding UTF8
-          Write-Host "Updated version.json:"
+          Write-Host "Release manifest written:"
           Get-Content $jsonPath
 
       - name: Extract Release Notes
         id: notes
         shell: pwsh
         run: |
+          # Index loop: ConvertFrom-Json yields a non-enumerable array in PS 5.1.
           $json = Get-Content "version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
           $notes = $json.release_notes
           if (-not $notes) {
-              $notes = "猫步翻译 $env:TAG_VER 发布"
+              $notes = "Release " + $env:TAG_VER
           }
           $notesFile = "release_notes_generated.txt"
           Set-Content -Path $notesFile -Value $notes -Encoding UTF8
           "NOTES_FILE=$notesFile" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Release notes written to $notesFile"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -175,12 +249,50 @@ jobs:
             ${{ env.ZH_EXE }}
             ${{ env.ZH_MSI }}
 
-      - name: Commit and Push version.json to main
+      - name: Verify Published Release Integrity
+        shell: pwsh
+        run: |
+          # Public index: same content as the repo manifest, consumed by the in-app updater.
+          Copy-Item -LiteralPath "version.json" -Destination "app_v2/public/version.json" -Force
+
+          # Gate: the digest we published must match the digest of the asset GitHub actually
+          # serves. This catches an asset/manifest mismatch before users are ever offered it.
+          $manifest = Get-Content "version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+          # Index loop: ConvertFrom-Json yields a non-enumerable array in
+          # Windows PowerShell 5.1, so `foreach` would silently skip every asset.
+          $integrityOk = $true
+          for ($i = 0; $i -lt $manifest.assets.Count; $i++) {
+              $asset = $manifest.assets[$i]
+              if ($asset.name -notlike "*_x64-setup.exe") { continue }
+              $url = $asset.url
+              $dest = Join-Path $env:RUNNER_TEMP $asset.name
+              Write-Host "Downloading $url"
+              Invoke-WebRequest -Uri $url -OutFile $dest -MaximumRetryCount 5 -RetryIntervalSec 10
+              $liveHash = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
+              $liveSize = (Get-Item -Path $dest).Length
+              if ($liveHash -ne $asset.sha256) {
+                  Write-Host "::error::Published digest mismatch for $($asset.name): live=$liveHash manifest=$($asset.sha256)"
+                  $integrityOk = $false
+              } elseif ($liveSize -ne [int64]$asset.size) {
+                  Write-Host "::error::Published size mismatch for $($asset.name): live=$liveSize manifest=$($asset.size)"
+                  $integrityOk = $false
+              } else {
+                  Write-Host "OK $($asset.name) $liveHash"
+              }
+          }
+          if (-not $integrityOk) { throw "Published release failed digest verification" }
+
+          Write-Host "Published release verified against manifest."
+
+      - name: Commit and Push Version Manifests to main
         shell: bash
         run: |
+          # Persist the verified manifest back to main so the next CDN read is correct.
+          # This runs AFTER the digest gate, so a manifest that failed verification is
+          # never committed.
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add version.json
+          git add version.json app_v2/public/version.json
           if ! git diff --staged --quiet; then
             git commit -m "chore(release): update version.json hashes for ${TAG_VER} [skip ci]"
             git push origin HEAD:main

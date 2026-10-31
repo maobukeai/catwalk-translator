@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::time::Duration;
 use tauri::Emitter;
+use sha2::{Digest, Sha256};
+use tauri_plugin_opener::OpenerExt;
 
 pub const GITHUB_OWNER: &str = "maobukeai";
 pub const GITHUB_REPO: &str = "catwalk-translator";
@@ -158,7 +160,7 @@ pub fn parse_cdn_version_info(body: &str, current: &str) -> Option<UpdateCheckRe
             version,
             release_date,
             download_url,
-            sha256: None,
+            sha256: json.get("sha256").and_then(|value| value.as_str()).and_then(normalize_sha256),
             release_notes: notes,
             assets,
         }),
@@ -453,6 +455,7 @@ fn parse_assets(value: Option<&serde_json::Value>) -> Vec<UpdateAssetInfo> {
             let name = entry.get("name")?.as_str()?.to_owned();
             let url = entry
                 .get("browser_download_url")
+                .or_else(|| entry.get("url"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_owned();
@@ -463,7 +466,8 @@ fn parse_assets(value: Option<&serde_json::Value>) -> Vec<UpdateAssetInfo> {
             let sha256 = entry
                 .get("digest")
                 .and_then(|v| v.as_str())
-                .and_then(parse_digest_sha256);
+                .and_then(parse_digest_sha256)
+                .or_else(|| entry.get("sha256").and_then(|v| v.as_str()).and_then(normalize_sha256));
             Some(UpdateAssetInfo {
                 name,
                 url,
@@ -476,6 +480,10 @@ fn parse_assets(value: Option<&serde_json::Value>) -> Vec<UpdateAssetInfo> {
 
 fn parse_digest_sha256(digest: &str) -> Option<String> {
     let hex = digest.strip_prefix("sha256:")?;
+    normalize_sha256(hex)
+}
+
+fn normalize_sha256(hex: &str) -> Option<String> {
     if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
         Some(hex.to_ascii_lowercase())
     } else {
@@ -553,18 +561,12 @@ pub async fn cmd_get_app_info() -> Result<AppInfo, String> {
 }
 
 #[tauri::command]
-pub fn cmd_open_external_url(url: String) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("rundll32")
-            .args(["url.dll,FileProtocolHandler", &url])
-            .spawn();
+pub fn cmd_open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "链接地址无效")?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("仅允许打开 HTTP/HTTPS 网页链接".to_string());
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = std::process::Command::new("open").arg(&url).spawn();
-    }
-    Ok(())
+    app.opener().open_url(url, None::<&str>).map_err(|e| format!("打开浏览器失败: {e}"))
 }
 
 pub fn build_candidate_download_urls(raw_url: &str) -> Vec<String> {
@@ -654,15 +656,200 @@ pub fn build_candidate_download_urls(raw_url: &str) -> Vec<String> {
     urls
 }
 
+const MAX_INSTALLER_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Hosts we are willing to download an installer from. Every candidate URL
+/// (the direct GitHub link *and* each CDN mirror) must pass through here,
+/// otherwise a mirror returning attacker-controlled content could be executed.
+const TRUSTED_INSTALLER_HOSTS: &[&str] = &[
+    "github.com",
+    "objects.githubusercontent.com",
+    "ghfast.top",
+    "ghproxy.net",
+    "mirror.ghproxy.com",
+    "hub.gitmirror.com",
+    "gh-proxy.com",
+];
+
+/// GitHub hosts that serve the installer directly (never as an inline HTML page).
+const ALLOWED_DIRECT_HOSTS: &[&str] = &["github.com", "objects.githubusercontent.com"];
+
+/// Validate a *direct* GitHub Releases installer URL (no mirror wrapper).
+fn validate_direct_installer_url(url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "更新包下载地址无效")?;
+    // Accept any host we declared as a direct GitHub content host. Hard-coding
+    // "github.com" here previously made the other ALLOWED_DIRECT_HOSTS entries
+    // unreachable, so a legitimate GitHub content URL was always rejected.
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    if parsed.scheme() != "https"
+        || !ALLOWED_DIRECT_HOSTS.contains(&host.as_str())
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !parsed.path().starts_with("/maobukeai/catwalk-translator/releases/download/")
+        || !parsed.path().to_ascii_lowercase().ends_with("-setup.exe")
+    {
+        return Err("仅允许安装本项目 GitHub Releases 的 Windows 安装包".to_string());
+    }
+    Ok(())
+}
+
+/// Validate a mirror-wrapped URL such as `https://ghfast.top/https://github.com/...`.
+/// The mirror may prefix its own host, but the remainder must itself be a direct
+/// GitHub Releases URL. This stops a mirror from pointing the download elsewhere.
+fn validate_mirror_installer_url(url: &str) -> Result<(), String> {
+    let trimmed = url.trim();
+    let parsed = reqwest::Url::parse(trimmed).map_err(|_| "更新包下载地址无效")?;
+    if parsed.scheme() != "https" {
+        return Err("更新包下载地址必须使用 HTTPS".to_string());
+    }
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    if !TRUSTED_INSTALLER_HOSTS.contains(&host.as_str()) {
+        return Err(format!("不受信任的更新包下载来源: {host}"));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("更新包下载地址不允许携带凭据".to_string());
+    }
+    if ALLOWED_DIRECT_HOSTS.contains(&host.as_str()) {
+        return validate_direct_installer_url(trimmed);
+    }
+    // Mirror form: strip the leading "https://<host>/" and re-inspect the payload.
+    let marker = format!("https://{host}/");
+    let inner = trimmed
+        .strip_prefix(&marker)
+        .ok_or_else(|| "更新包镜像地址格式无效".to_string())?;
+    if !inner.starts_with("https://") {
+        return Err("更新包镜像必须转发 HTTPS 地址".to_string());
+    }
+    validate_direct_installer_url(inner)
+}
+
+/// Screen a URL coming from the frontend or from our own candidate list.
+/// Extract the release tag from an installer download URL, e.g.
+/// `.../releases/download/v0.3.38/MaobuTranslator_....exe` -> `v0.3.38`.
+/// `extract_tag_from_location` is written for `/releases/tag/<tag>` redirect
+/// locations and would otherwise fall back to returning the file name.
+fn extract_release_tag_from_download_url(url: &str) -> Option<String> {
+    let clean = url.trim();
+    let marker = "/releases/download/";
+    let pos = clean.find(marker)?;
+    let rest = &clean[pos + marker.len()..];
+    let tag = rest.split('/').next()?;
+    let tag = tag.split('?').next()?.split('#').next()?.trim();
+    if tag.is_empty() {
+        return None;
+    }
+    Some(tag.to_string())
+}
+
+/// Recover the SHA-256 (and size, when GitHub reports one) for an installer straight
+/// from the GitHub release it belongs to. Used only when the CDN manifest has not yet
+/// published a digest, which is the normal state between `bump_version.py` running
+/// and the release job finishing.
+async fn fetch_release_digest(installer_url: &str) -> Option<(String, Option<u64>)> {
+    let tag = extract_release_tag_from_download_url(installer_url)?;
+    let api = format!(
+        "https://api.github.com/repos/{}/{}/releases/tags/{}",
+        GITHUB_OWNER, GITHUB_REPO, tag
+    );
+    let client = build_download_client().ok()?;
+    let resp = client
+        .get(&api)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        eprintln!("[Updater] GitHub Release 查询失败: HTTP {}", resp.status().as_u16());
+        return None;
+    }
+    let body = resp.text().await.ok()?;
+    let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let assets = json.get("assets")?.as_array()?;
+    // Prefer the ASCII-named installer so we do not depend on URL-decoded CJK names.
+    let mut chosen: Option<&serde_json::Value> = None;
+    for asset in assets {
+        let name = asset.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if name.to_ascii_lowercase().ends_with("-setup.exe") {
+            chosen = Some(asset);
+            if name.starts_with("MaobuTranslator_") {
+                break;
+            }
+        }
+    }
+    let asset = chosen?;
+    let digest = asset
+        .get("digest")
+        .and_then(|v| v.as_str())
+        .and_then(parse_digest_sha256)?;
+    let size = asset.get("size").and_then(|v| v.as_u64());
+    Some((digest, size))
+}
+
+fn validate_installer_url(url: &str) -> Result<(), String> {
+    let lower = url.trim().to_ascii_lowercase();
+    if lower.starts_with("https://github.com/")
+        || lower.starts_with("https://objects.githubusercontent.com/")
+    {
+        validate_direct_installer_url(url)
+    } else {
+        validate_mirror_installer_url(url)
+    }
+}
+
+fn verify_installer(downloaded: u64, content_length: u64, expected_size: Option<u64>, actual_hash: &str, expected_hash: &str) -> Result<(), String> {
+    if downloaded <= 512 * 1024 || downloaded > MAX_INSTALLER_BYTES {
+        return Err("下载的安装包体积无效".to_string());
+    }
+    if (content_length > 0 && downloaded != content_length)
+        || expected_size.filter(|size| *size > 0).is_some_and(|size| downloaded != size) {
+        return Err("安装包下载不完整或体积与发布信息不符".to_string());
+    }
+    if actual_hash != expected_hash {
+        return Err("安装包 SHA-256 校验失败，已取消安装".to_string());
+    }
+    Ok(())
+}
+
+fn escape_powershell_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
 #[tauri::command]
 pub async fn cmd_download_and_install_update(
     app: tauri::AppHandle,
     url: String,
     silent: Option<bool>,
+    sha256: Option<String>,
+    expected_size: Option<u64>,
 ) -> Result<String, String> {
-    if url.trim().is_empty() {
-        return Err("下载地址为空".to_string());
+    validate_installer_url(&url)?;
+    let mut expected_hash = sha256.as_deref().and_then(normalize_sha256);
+    let mut expected_size = expected_size;
+    if expected_size.unwrap_or(0) > MAX_INSTALLER_BYTES {
+        return Err("更新包体积超过允许的上限".to_string());
     }
+
+    // A manifest freshly produced by `bump_version.py` intentionally carries no digest
+    // (the binary does not exist yet), and the CDN may briefly serve that placeholder
+    // state after a release. Recover the real digest from the GitHub release itself so
+    // the user is not dead-ended by a transient publishing window.
+    if expected_hash.is_none() || expected_size.is_none() {
+        if let Some((recovered_hash, recovered_size)) = fetch_release_digest(&url).await {
+            if expected_hash.is_none() {
+                eprintln!("[Updater] 清单缺少校验值，已从 GitHub Release 恢复");
+                expected_hash = Some(recovered_hash);
+            }
+            if expected_size.is_none() {
+                expected_size = recovered_size;
+            }
+        }
+    }
+
+    let expected_hash = expected_hash
+        .ok_or("更新包缺少有效的 SHA-256 校验值，请前往发布页面手动下载")?;
 
     let client = build_download_client()?;
     let candidate_urls = build_candidate_download_urls(&url);
@@ -672,11 +859,22 @@ pub async fn cmd_download_and_install_update(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let temp_installer = std::env::temp_dir().join(format!("MaobuTranslator_Setup_Update_{timestamp}.exe"));
+    let (reserved, temp_installer) = tempfile::Builder::new()
+        .prefix("MaobuTranslator_Update_").suffix(".exe").tempfile()
+        .map_err(|e| format!("创建临时安装包失败: {e}"))?
+        .keep().map_err(|e| format!("保留临时安装包失败: {e}"))?;
+    drop(reserved);
 
     let mut download_succeeded = false;
 
     for target_url in candidate_urls {
+        // Candidates may be synthesised locally (mirror/variant), so each one is
+        // re-screened here rather than trusted because it came from our own list.
+        if let Err(reason) = validate_installer_url(&target_url) {
+            eprintln!("[Updater] 跳过不受信任的更新源 {}: {}", target_url, reason);
+            last_error = reason;
+            continue;
+        }
         eprintln!("[Updater] 尝试下载更新包: {}", target_url);
         match client.get(&target_url).send().await {
             Ok(resp) => {
@@ -686,6 +884,10 @@ pub async fn cmd_download_and_install_update(
                 }
 
                 let total_bytes = resp.content_length().unwrap_or(0);
+                if total_bytes > MAX_INSTALLER_BYTES {
+                    last_error = "更新包体积超过允许的上限".to_string();
+                    continue;
+                }
                 let mut stream = resp.bytes_stream();
 
                 let mut file = match std::fs::File::create(&temp_installer) {
@@ -701,6 +903,7 @@ pub async fn cmd_download_and_install_update(
                 let mut last_emit_time = std::time::Instant::now();
                 let mut last_emit_bytes: u64 = 0;
                 let mut chunk_error = false;
+                let mut hasher = Sha256::new();
 
                 // 首次广播：开始连接/下载
                 let _ = app.emit(
@@ -717,12 +920,18 @@ pub async fn cmd_download_and_install_update(
                 while let Some(chunk_res) = stream.next().await {
                     match chunk_res {
                         Ok(chunk) => {
+                            if downloaded_bytes.saturating_add(chunk.len() as u64) > MAX_INSTALLER_BYTES {
+                                last_error = "更新包体积超过允许的上限".to_string();
+                                chunk_error = true;
+                                break;
+                            }
                             if let Err(e) = file.write_all(&chunk) {
                                 last_error = format!("写入安装包数据失败: {e}");
                                 chunk_error = true;
                                 break;
                             }
                             downloaded_bytes += chunk.len() as u64;
+                            hasher.update(&chunk);
 
                             let now = std::time::Instant::now();
                             let elapsed = now.duration_since(last_emit_time).as_secs_f64();
@@ -759,7 +968,10 @@ pub async fn cmd_download_and_install_update(
                     }
                 }
 
-                let _ = file.flush();
+                if let Err(e) = file.flush().and_then(|_| file.sync_all()) {
+                    last_error = format!("保存安装包失败: {e}");
+                    chunk_error = true;
+                }
                 drop(file);
 
                 if chunk_error {
@@ -767,8 +979,11 @@ pub async fn cmd_download_and_install_update(
                     continue;
                 }
 
-                // 确保安装包体积正常（> 512KB），不是 404 HTML
-                if downloaded_bytes > 1024 * 512 {
+                let actual_hash = format!("{:x}", hasher.finalize());
+                if let Err(error) = verify_installer(downloaded_bytes, total_bytes, expected_size, &actual_hash, &expected_hash) {
+                    last_error = error;
+                    let _ = std::fs::remove_file(&temp_installer);
+                } else {
                     download_succeeded = true;
                     // 发送 100% 下载完成通知
                     let _ = app.emit(
@@ -782,9 +997,6 @@ pub async fn cmd_download_and_install_update(
                         },
                     );
                     break;
-                } else {
-                    last_error = format!("下载的文件过小 ({} 字节)，可能非有效安装包", downloaded_bytes);
-                    let _ = std::fs::remove_file(&temp_installer);
                 }
             }
             Err(e) => {
@@ -794,6 +1006,7 @@ pub async fn cmd_download_and_install_update(
     }
 
     if !download_succeeded {
+        let _ = std::fs::remove_file(&temp_installer);
         let err_msg = format!(
             "自动下载失败（已尝试直连及多条国内 CDN 加速源）：{}",
             if last_error.is_empty() { "未获取到有效安装包数据" } else { &last_error }
@@ -839,15 +1052,15 @@ pub async fn cmd_download_and_install_update(
                  Start-Sleep -Seconds 1;\r\n\
                  Start-Process -FilePath '{}';\r\n\
                  Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue;\r\n",
-                temp_installer.to_string_lossy(),
-                target_exe
+                escape_powershell_literal(&temp_installer.to_string_lossy()),
+                escape_powershell_literal(&target_exe)
             )
         } else {
             format!(
                 "Start-Sleep -Seconds 2;\r\n\
                  Start-Process -FilePath '{}';\r\n\
                  Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue;\r\n",
-                temp_installer.to_string_lossy()
+                escape_powershell_literal(&temp_installer.to_string_lossy())
             )
         };
 
@@ -857,7 +1070,9 @@ pub async fn cmd_download_and_install_update(
 
         if let Err(e) = std::fs::write(&ps_script_path, ps_bytes) {
             eprintln!("[Updater] 写入 PowerShell 升级脚本失败: {e}，回退直接启动安装包");
-            let _ = std::process::Command::new(&temp_installer).spawn();
+            let mut command = std::process::Command::new(&temp_installer);
+            if is_silent { command.arg("/S"); }
+            command.spawn().map_err(|e| format!("启动安装包失败: {e}"))?;
         } else {
             std::process::Command::new("powershell")
                 .args([
@@ -893,6 +1108,33 @@ pub async fn cmd_download_and_install_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cdn_assets_preserve_download_urls_and_checksums() {
+        let hash = "a".repeat(64);
+        let url = "https://github.com/maobukeai/catwalk-translator/releases/download/v0.4.0/MaobuTranslator_0.4.0_x64-setup.exe";
+        let body = serde_json::json!({"version": "0.4.0", "assets": [{"name": "setup.exe", "url": url, "size": 1000000, "sha256": hash}]}).to_string();
+        let info = parse_cdn_version_info(&body, "0.3.38").unwrap().latest.unwrap();
+        assert_eq!(info.assets[0].url, url);
+        assert_eq!(info.assets[0].sha256.as_deref(), Some(hash.as_str()));
+        assert_eq!(info.assets[0].size, 1000000);
+    }
+
+    #[test]
+    fn rejects_untrusted_installers_and_incomplete_or_corrupt_downloads() {
+        let valid = "https://github.com/maobukeai/catwalk-translator/releases/download/v0.4.0/MaobuTranslator_0.4.0_x64-setup.exe";
+        assert!(validate_installer_url(valid).is_ok());
+        for url in [valid.replace("github.com", "github.com.attacker.test"), valid.replace("https:", "http:"), valid.replace("maobukeai", "other"), valid.replace("-setup.exe", "_portable.exe"), format!("{valid}?unexpected=1")] {
+            assert!(validate_installer_url(&url).is_err());
+        }
+        let hash = "b".repeat(64);
+        assert!(verify_installer(1000000, 1000000, Some(1000000), &hash, &hash).is_ok());
+        assert!(verify_installer(1000000, 2000000, None, &hash, &hash).is_err());
+        assert!(verify_installer(1000000, 0, Some(2000000), &hash, &hash).is_err());
+        assert!(verify_installer(1000000, 0, None, &"c".repeat(64), &hash).is_err());
+        assert!(verify_installer(12, 12, None, &hash, &hash).is_err());
+        assert_eq!(escape_powershell_literal("C:\\O'Brien\\猫步.exe"), "C:\\O''Brien\\猫步.exe");
+    }
 
     #[test]
     fn test_extract_tag_from_location() {
@@ -984,5 +1226,121 @@ mod tests {
         assert!(candidates.iter().any(|c| c.contains("ghfast.top")));
         assert!(candidates.iter().any(|c| c.contains("ghproxy.net")));
         assert!(candidates.iter().any(|c| c.contains("_0.3.1_x64-setup.exe")));
+    }
+
+    /// 回归：`build_candidate_download_urls` 生成的镜像候选必须同样能通过校验，
+    /// 否则受信任的加速镜像会被误杀，导致所有加速下载静默失败。
+    #[test]
+    fn every_generated_candidate_passes_url_screening() {
+        let url = "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.38/MaobuTranslator_0.3.38_x64-setup.exe";
+        for candidate in build_candidate_download_urls(url) {
+            assert!(
+                validate_installer_url(&candidate).is_ok(),
+                "合法候选地址被误判为不可信: {candidate}"
+            );
+        }
+    }
+
+    /// 回归：镜像不得把安装包重定向到本项目 GitHub Releases 之外的地址。
+    #[test]
+    fn mirror_pointing_elsewhere_is_rejected() {
+        let evil = [
+            "https://ghfast.top/https://evil.example.com/MaobuTranslator_1.0.0_x64-setup.exe",
+            "https://ghfast.top/https://github.com/attacker/repo/releases/download/v1.0.0/MaobuTranslator_1.0.0_x64-setup.exe",
+            "https://ghfast.top/http://github.com/maobukeai/catwalk-translator/releases/download/v1.0.0/MaobuTranslator_1.0.0_x64-setup.exe",
+            "https://evil-mirror.example.com/https://github.com/maobukeai/catwalk-translator/releases/download/v1.0.0/MaobuTranslator_1.0.0_x64-setup.exe",
+            "https://ghfast.top/https://github.com/maobukeai/catwalk-translator/releases/download/v1.0.0/payload.zip",
+        ];
+        for url in evil {
+            assert!(validate_installer_url(url).is_err(), "恶意镜像未被拦截: {url}");
+        }
+    }
+
+    /// 回归：安装包绝不能来自非 HTTPS 或携带凭据的来源。
+    #[test]
+    fn insecure_installer_urls_are_rejected() {
+        for url in [
+            "http://github.com/maobukeai/catwalk-translator/releases/download/v1.0.0/MaobuTranslator_1.0.0_x64-setup.exe",
+            "https://user:pass@github.com/maobukeai/catwalk-translator/releases/download/v1.0.0/MaobuTranslator_1.0.0_x64-setup.exe",
+            "https://github.com:8443/maobukeai/catwalk-translator/releases/download/v1.0.0/MaobuTranslator_1.0.0_x64-setup.exe?x=1",
+        ] {
+            assert!(validate_installer_url(url).is_err(), "不安全地址未被拦截: {url}");
+        }
+    }
+
+    /// 回归：直连主机白名单必须是受信任白名单的子集，且每个受信任直连主机都真的
+    /// 能通过校验。两份清单若各自漂移，就会出现"声明受信任却永远被拒"的死分支。
+    #[test]
+    fn allow_lists_stay_consistent() {
+        for host in ALLOWED_DIRECT_HOSTS {
+            assert!(
+                TRUSTED_INSTALLER_HOSTS.contains(host),
+                "直连主机 {host} 未出现在受信任清单中"
+            );
+        }
+        for host in ALLOWED_DIRECT_HOSTS {
+            let url = format!(
+                "https://{host}/maobukeai/catwalk-translator/releases/download/v0.3.38/MaobuTranslator_0.3.38_x64-setup.exe"
+            );
+            assert!(
+                validate_installer_url(&url).is_ok(),
+                "受信任直连主机 {host} 实际被拒绝"
+            );
+        }
+    }
+
+    /// 回归：objects.githubusercontent.com 是 GitHub 的直链/重定向主机，声明为受信任
+    /// 直连主机后就必须真的能通过校验；否则该分支形同虚设（永远返回错误）。
+    #[test]
+    fn trusted_github_content_host_is_actually_usable() {
+        assert!(
+            ALLOWED_DIRECT_HOSTS.contains(&"objects.githubusercontent.com"),
+            "该主机若不受信任，就不应出现在白名单里"
+        );
+        let url = "https://objects.githubusercontent.com/maobukeai/catwalk-translator/releases/download/v0.3.38/MaobuTranslator_0.3.38_x64-setup.exe";
+        assert!(
+            validate_installer_url(url).is_ok(),
+            "受信任直连主机被错误拒绝: {url}"
+        );
+        // A non-project path on that host must still be rejected.
+        let evil = "https://objects.githubusercontent.com/attacker/repo/releases/download/v1/MaobuTranslator_1.0.0_x64-setup.exe";
+        assert!(validate_installer_url(evil).is_err(), "非本项目路径未被拦截");
+    }
+
+    /// 真正的 GitHub 直连地址必须继续被接受。
+    #[test]
+    fn legitimate_direct_installer_url_is_accepted() {
+        let url = "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.38/MaobuTranslator_0.3.38_x64-setup.exe";
+        assert!(validate_installer_url(url).is_ok());
+    }
+
+    /// 回归：当 CDN 清单尚未写入校验值（bump 之后、发布完成之前）时，
+    /// 回退逻辑依赖从安装包 URL 反推出 GitHub Release tag。
+    #[test]
+    fn installer_url_yields_release_tag_for_digest_recovery() {
+        let url = "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.38/MaobuTranslator_0.3.38_x64-setup.exe";
+        let tag = extract_release_tag_from_download_url(url).expect("tag");
+        assert_eq!(tag, "v0.3.38");
+        // A mirror-wrapped URL must resolve to the same tag.
+        let mirrored = format!("https://ghfast.top/{url}");
+        assert_eq!(extract_release_tag_from_download_url(&mirrored).as_deref(), Some("v0.3.38"));
+        // The redirect-oriented helper must NOT be used for download URLs: it would
+        // silently return the file name and query the wrong release.
+        assert_eq!(
+            extract_tag_from_location(url).as_deref(),
+            Some("MaobuTranslator_0.3.38_x64-setup.exe")
+        );
+    }
+
+    /// 回归：占位清单（sha256=null, size=0）必须能被解析出来，而不是被当成损坏数据丢弃，
+    /// 否则更新器无法察觉"需要回退取摘要"这一状态。
+    #[test]
+    fn placeholder_manifest_is_parsed_and_flagged_as_missing_digest() {
+        let body = r#"{"version":"0.3.39","assets":[{"name":"MaobuTranslator_0.3.39_x64-setup.exe","url":"https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.39/MaobuTranslator_0.3.39_x64-setup.exe","size":0,"sha256":null}]}"#;
+        let res = parse_cdn_version_info(body, "0.3.38").expect("parses");
+        assert!(res.has_update);
+        let asset = &res.latest.unwrap().assets[0];
+        assert!(asset.sha256.is_none(), "占位清单不应携带摘要");
+        assert_eq!(asset.size, 0);
     }
 }

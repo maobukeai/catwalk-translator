@@ -1,8 +1,10 @@
 //! Challenger M3 Empirical Edge Cases & Fallback Transition Tests
 
 use app_v2_lib::{models::LlmConfig, translator::MultiTierPipeline};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
+mod common;
+use common::{assert_online_fallback_or_retry, read_http_request};
 
 #[test]
 fn test_challenger_case_insensitivity_and_mixed_case() {
@@ -126,9 +128,7 @@ fn test_challenger_4tier_fallback_transitions() {
         tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
                 tokio::spawn(async move {
-                    let mut buf = [0u8; 4096];
-                    // Read request
-                    let _ = socket.read(&mut buf).await;
+                    if read_http_request(&mut socket).await.is_err() { return; }
                     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
                     let body = serde_json::json!({
@@ -179,10 +179,6 @@ fn test_challenger_4tier_fallback_transitions() {
             .translate_phrases(&["Unmatched XYZ Term 12345".to_string()], "blender", None, &[])
             .await;
         assert_eq!(t4_res[0].original, "Unmatched XYZ Term 12345");
-        assert!(
-            t4_res[0].source_tier == "Online Fallback" || t4_res[0].source_tier == "Fallback API",
-            "Expected Online Fallback or Fallback API tier, got: '{}'",
-            t4_res[0].source_tier
-        );
+        assert_online_fallback_or_retry(&pipeline, &t4_res[0]);
     });
 }

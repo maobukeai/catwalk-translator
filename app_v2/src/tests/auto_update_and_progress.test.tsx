@@ -88,7 +88,8 @@ describe('Auto Update and Progress Suite', () => {
     await waitFor(() => {
       expect(downloadSpy).toHaveBeenCalledWith(
         mockUpdateInfo.assets[0].url,
-        false
+        false,
+        { sha256: null, expectedSize: mockUpdateInfo.assets[0].size },
       );
     });
   });

@@ -38,6 +38,28 @@ fn default_true_opt() -> Option<bool> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AiModelItem {
+    pub id: String,
+    pub model_id: String,
+    pub display_name: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProviderConfig {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String,
+    pub endpoint: String,
+    pub api_key: String,
+    pub enabled: bool,
+    pub models: Vec<AiModelItem>,
+    pub default_model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LlmConfig {
     /// Unique identifier for this model entry in the multi-model pool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -565,6 +587,9 @@ pub struct AppSettings {
     /// Multi-model configuration pool. The active model is mirrored in `llm_config`.
     #[serde(default)]
     pub llm_configs: Vec<LlmConfig>,
+    /// Preserve the provider/model hierarchy used by the frontend settings UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_providers: Option<Vec<AiProviderConfig>>,
     pub translation_tiers: Vec<String>,
     pub preset_dicts: PresetDicts,
     pub online_engines: Option<OnlineEngines>,
@@ -726,6 +751,7 @@ impl Default for AppSettings {
             hover_lookup_modifier: Some("ctrl".to_string()),
             llm_config: None,
             llm_configs: vec![],
+            ai_providers: None,
             translation_tiers: vec![
                 "Preset Dictionary".to_string(),
                 "LLM API".to_string(),

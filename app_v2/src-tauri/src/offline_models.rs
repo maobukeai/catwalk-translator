@@ -222,12 +222,23 @@ pub fn cmd_switch_ocr_version(
         }
         return Err(format!("加载 PP-OCR{} 失败: {}", version, e));
     }
-    if let Ok(mut lock) = state.settings.lock() {
-        lock.ocr_version = Some(version);
+    let persist = (|| -> Result<(), String> {
+        let mut lock = state.settings.lock().map_err(|e| e.to_string())?;
+        let mut updated = lock.clone();
+        updated.ocr_version = Some(version.clone());
         // Selecting a default model must actually route OCR to the ONNX-first
         // path, even if the user previously forced the WinRT engine.
-        lock.ocr_engine = Some("auto".to_string());
-        crate::commands::save_settings_file(&app_handle, &lock);
+        updated.ocr_engine = Some("auto".to_string());
+        crate::commands::save_settings_file(&app_handle, &updated)?;
+        *lock = updated;
+        Ok(())
+    })();
+    if let Err(e) = persist {
+        crate::onnx_ocr::set_active_version(&previous_version);
+        engine.unload();
+        if engine.ensure_loaded().is_ok() { crate::ocr::mark_onnx_ready(); }
+        else { crate::ocr::mark_onnx_failed(); }
+        return Err(e);
     }
     crate::ocr::mark_onnx_ready();
     Ok(true)

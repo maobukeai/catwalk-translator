@@ -27,6 +27,7 @@ PACKAGE_JSON_PATH = os.path.join(PROJECT_ROOT, "app_v2", "package.json")
 TAURI_CONF_PATH = os.path.join(PROJECT_ROOT, "app_v2", "src-tauri", "tauri.conf.json")
 CARGO_TOML_PATH = os.path.join(PROJECT_ROOT, "app_v2", "src-tauri", "Cargo.toml")
 VERSION_JSON_PATH = os.path.join(PROJECT_ROOT, "version.json")
+PUBLIC_VERSION_JSON_PATH = os.path.join(PROJECT_ROOT, "app_v2", "public", "version.json")
 
 
 def validate_version(ver: str) -> str:
@@ -39,25 +40,25 @@ def validate_version(ver: str) -> str:
 def get_current_versions():
     versions = {}
     if os.path.exists(PACKAGE_JSON_PATH):
-        with open(PACKAGE_JSON_PATH, "r", encoding="utf-8") as f:
+        with open(PACKAGE_JSON_PATH, "r", encoding="utf-8-sig") as f:
             versions["package.json"] = json.load(f).get("version")
     if os.path.exists(TAURI_CONF_PATH):
-        with open(TAURI_CONF_PATH, "r", encoding="utf-8") as f:
+        with open(TAURI_CONF_PATH, "r", encoding="utf-8-sig") as f:
             versions["tauri.conf.json"] = json.load(f).get("version")
     if os.path.exists(CARGO_TOML_PATH):
-        with open(CARGO_TOML_PATH, "r", encoding="utf-8") as f:
+        with open(CARGO_TOML_PATH, "r", encoding="utf-8-sig") as f:
             content = f.read()
             m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', content)
             if m:
                 versions["Cargo.toml"] = m.group(1)
     if os.path.exists(VERSION_JSON_PATH):
-        with open(VERSION_JSON_PATH, "r", encoding="utf-8") as f:
+        with open(VERSION_JSON_PATH, "r", encoding="utf-8-sig") as f:
             versions["version.json"] = json.load(f).get("version")
     return versions
 
 
 def update_package_json(new_ver: str, dry_run: bool):
-    with open(PACKAGE_JSON_PATH, "r", encoding="utf-8") as f:
+    with open(PACKAGE_JSON_PATH, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     old_ver = data.get("version")
     data["version"] = new_ver
@@ -69,7 +70,7 @@ def update_package_json(new_ver: str, dry_run: bool):
 
 
 def update_tauri_conf(new_ver: str, dry_run: bool):
-    with open(TAURI_CONF_PATH, "r", encoding="utf-8") as f:
+    with open(TAURI_CONF_PATH, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     old_ver = data.get("version")
     data["version"] = new_ver
@@ -81,7 +82,7 @@ def update_tauri_conf(new_ver: str, dry_run: bool):
 
 
 def update_cargo_toml(new_ver: str, dry_run: bool):
-    with open(CARGO_TOML_PATH, "r", encoding="utf-8") as f:
+    with open(CARGO_TOML_PATH, "r", encoding="utf-8-sig") as f:
         content = f.read()
     old_ver_match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', content)
     old_ver = old_ver_match.group(1) if old_ver_match else "unknown"
@@ -93,18 +94,29 @@ def update_cargo_toml(new_ver: str, dry_run: bool):
 
 
 def update_version_json(new_ver: str, notes: str | None, dry_run: bool):
-    with open(VERSION_JSON_PATH, "r", encoding="utf-8") as f:
+    """Advance the release manifest to `new_ver`.
+
+    The digest/size of a freshly built binary are genuinely unknown at bump time, so
+    they are cleared to `None`/`0` rather than left pointing at the previous release.
+    `release.yml` fills them in from the artefact it just built, and refuses to
+    publish if any asset still carries a placeholder. The same content is written to
+    both manifest copies so the repo and the shipped `public/version.json` stay aligned.
+    """
+    with open(VERSION_JSON_PATH, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     old_ver = data.get("version")
     today_str = datetime.date.today().strftime("%Y-%m-%d")
 
     data["version"] = new_ver
     data["release_date"] = today_str
+    data["download_url"] = "https://github.com/maobukeai/catwalk-translator/releases"
     if notes:
         data["release_notes"] = notes
 
     # 更新 assets 列表中的文件名与下载地址
     assets = data.get("assets", [])
+    if not assets:
+        raise ValueError("version.json 缺少 assets 列表，无法生成发布清单")
     for asset in assets:
         old_name = asset.get("name", "")
         if "MaobuTranslator_" in old_name:
@@ -113,12 +125,23 @@ def update_version_json(new_ver: str, notes: str | None, dry_run: bool):
         elif "猫步翻译_" in old_name:
             asset["name"] = f"猫步翻译_{new_ver}_x64-setup.exe"
             asset["url"] = f"https://github.com/maobukeai/catwalk-translator/releases/download/v{new_ver}/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_{new_ver}_x64-setup.exe"
+        else:
+            continue
+
+        # A new binary must get its own digest during release packaging.
+        # Reusing the previous version's hash makes verified updates fail.
+        if old_ver != new_ver:
+            asset["sha256"] = None
+            asset["size"] = 0
+
+    rendered = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
     if not dry_run:
-        with open(VERSION_JSON_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
+        for path in (VERSION_JSON_PATH, PUBLIC_VERSION_JSON_PATH):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(rendered)
     print(f"  [version.json] {old_ver} -> {new_ver} (date: {today_str})")
+    print(f"  [public/version.json] 同步写入 {os.path.relpath(PUBLIC_VERSION_JSON_PATH, PROJECT_ROOT)}")
 
 
 def sync_cargo_lock(dry_run: bool):
@@ -178,7 +201,7 @@ def main():
     if args.push:
         print("\n[*] 检测到 --push 参数，正在执行 Git 提交与推送...")
         commands = [
-            'git add app_v2/package.json app_v2/src-tauri/Cargo.lock app_v2/src-tauri/Cargo.toml app_v2/src-tauri/tauri.conf.json version.json',
+            'git add app_v2/package.json app_v2/src-tauri/Cargo.lock app_v2/src-tauri/Cargo.toml app_v2/src-tauri/tauri.conf.json version.json app_v2/public/version.json',
             f'git commit -m "{commit_msg}"',
             f'git tag -a {tag_name} -m "Release {tag_name}"',
             'git push origin main --follow-tags'
@@ -192,7 +215,7 @@ def main():
         print(f"\n🚀 已成功推送 {tag_name} 标签至 GitHub！将自动触发 GitHub Actions 云端打包发布。")
     else:
         print("\n💡 接下来您可运行以下命令提交并推送以触发云端打包:")
-        print(f"   git add app_v2/package.json app_v2/src-tauri/Cargo.lock app_v2/src-tauri/Cargo.toml app_v2/src-tauri/tauri.conf.json version.json")
+        print("   git add app_v2/package.json app_v2/src-tauri/Cargo.lock app_v2/src-tauri/Cargo.toml app_v2/src-tauri/tauri.conf.json version.json app_v2/public/version.json")
         print(f'   git commit -m "{commit_msg}"')
         print(f'   git tag -a {tag_name} -m "Release {tag_name}"')
         print(f"   git push origin main --follow-tags")

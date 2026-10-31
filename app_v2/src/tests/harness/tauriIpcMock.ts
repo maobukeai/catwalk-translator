@@ -58,6 +58,8 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
       return [];
     case 'cmd_clear_clipboard_history':
       return null;
+    case 'cmd_reset_window_size':
+      return null;
     // ── 无感查词浮窗 ──
     case 'cmd_get_lookup_payload':
       return null;

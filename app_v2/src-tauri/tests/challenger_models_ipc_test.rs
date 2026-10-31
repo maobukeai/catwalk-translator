@@ -1,4 +1,4 @@
-//! Empirical Challenger Stress Tests for Rust Models, Serde camelCase Mappings, Mutex Thread Safety, and IPC Command Stubs
+//! Models, Serde mappings, thread safety, and IPC input/error contracts.
 
 use app_v2_lib::{
     commands::{cmd_capture_and_ocr, cmd_sample_colors, AppState},
@@ -198,7 +198,7 @@ fn test_app_state_mutex_poison_resilience_check() {
 // 3. Async IPC Command Signature & Behavior Tests
 // ============================================================================
 #[test]
-fn test_ipc_cmd_capture_and_ocr_stub() {
+fn test_ipc_cmd_capture_and_ocr_requires_capture() {
     tauri::async_runtime::block_on(async {
         let selection = PhysicalRect {
             x: 0,
@@ -207,10 +207,12 @@ fn test_ipc_cmd_capture_and_ocr_stub() {
             height: 100,
         };
         let result = cmd_capture_and_ocr(selection, None, None, None).await;
-        assert!(result.is_ok());
-        let ocr = result.unwrap();
-        assert!(!ocr.blocks.is_empty());
-        assert_eq!(ocr.blocks[0].text, "Artificial Intelligence");
+        assert_eq!(result.unwrap_err(), "No desktop capture available in memory");
+
+        // Empty selections are valid even before a desktop frame is captured.
+        let empty = cmd_capture_and_ocr(PhysicalRect { width: 0, ..selection }, None, None, None)
+            .await.unwrap();
+        assert!(empty.blocks.is_empty());
     });
 }
 
@@ -266,11 +268,13 @@ fn test_async_tokio_concurrency_stress_test() {
                     height: 100,
                 };
                 let ocr_res = cmd_capture_and_ocr(rect, None, None, None).await;
-                assert!(ocr_res.is_ok());
+                assert_eq!(ocr_res.unwrap_err(), "No desktop capture available in memory");
 
-                let phrases = vec![format!("Phrase {}", i)];
+                // Exercise the shared dictionary/cache without requiring the
+                // network or a native OCR model on the test machine.
+                let phrases = vec!["Roughness".to_string()];
                 let trans_res = Ok::<_, String>(app_v2_lib::translator::shared_pipeline().translate_phrases(&phrases, "blender", None, &[]).await);
-                assert!(trans_res.is_ok());
+                assert_eq!(trans_res.unwrap()[0].translated, "粗糙度");
 
                 let boxes = vec![BoundingBox {
                     x: i,

@@ -3,15 +3,91 @@
 
 use crate::models::{BoundingBox, PhysicalRect, TextBlock};
 
+#[cfg(any(target_os = "windows", test))]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+/// UIA providers live in other processes. A traversal budget checked between
+/// COM calls cannot bound one unresponsive provider call, so the screenshot
+/// path waits on a dedicated worker for at most this long.
+#[cfg(target_os = "windows")]
+const UIA_WAIT_BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
+
+#[cfg(target_os = "windows")]
+static UIA_WORKER_BUSY: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+
+#[cfg(any(target_os = "windows", test))]
+fn read_with_deadline(
+    busy: Arc<AtomicBool>,
+    budget: std::time::Duration,
+    read: impl FnOnce() -> Vec<TextBlock> + Send + 'static,
+) -> Vec<TextBlock> {
+    if busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        // A timed-out call is still running. Do not create more stuck threads
+        // when the user retries a screenshot against that same application.
+        return Vec::new();
+    }
+
+    struct WorkerGuard(Arc<AtomicBool>);
+    impl Drop for WorkerGuard {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let worker_busy = Arc::clone(&busy);
+    if std::thread::Builder::new()
+        .name("catwalk-uia".into())
+        .spawn(move || {
+            let guard = WorkerGuard(worker_busy);
+            let blocks = read();
+            drop(guard);
+            // After a timeout the receiver is gone; discard the stale text.
+            let _ = tx.send(blocks);
+        })
+        .is_err()
+    {
+        busy.store(false, Ordering::Release);
+        return Vec::new();
+    }
+
+    match rx.recv_timeout(budget) {
+        Ok(blocks) => blocks,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!("[OCR] UIA 读取超过 {}ms，继续使用图像识别结果", budget.as_millis());
+            Vec::new()
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Vec::new(),
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn read_region_text(
     hwnd_raw: isize,
     capture_origin: (i32, i32),
     region: PhysicalRect,
 ) -> Vec<TextBlock> {
+    if hwnd_raw == 0 || region.width == 0 || region.height == 0 {
+        return Vec::new();
+    }
+    let busy = UIA_WORKER_BUSY.get_or_init(|| Arc::new(AtomicBool::new(false)));
+    read_with_deadline(Arc::clone(busy), UIA_WAIT_BUDGET, move || {
+        read_region_text_on_worker(hwnd_raw, capture_origin, region)
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn read_region_text_on_worker(
+    hwnd_raw: isize,
+    capture_origin: (i32, i32),
+    region: PhysicalRect,
+) -> Vec<TextBlock> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER,
         COINIT_MULTITHREADED,
     };
     use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
@@ -21,26 +97,31 @@ pub fn read_region_text(
     }
 
     // UIA is an out-of-process COM client for many applications. Keep all calls
-    // on this blocking worker, never the Tauri/UI thread. If this worker has an
-    // incompatible COM apartment, gracefully fall back to image OCR.
+    // on this dedicated worker, never the Tauri/UI thread. If initialization
+    // fails, gracefully fall back to image OCR. COM interfaces stay on this
+    // thread and are released before its apartment is uninitialized.
     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
     if !initialized {
         return Vec::new();
     }
+    struct ComApartment;
+    impl Drop for ComApartment {
+        fn drop(&mut self) {
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+    }
+    let _apartment = ComApartment;
 
     let blocks = unsafe {
         let Ok(automation) =
             CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
         else {
-            CoUninitialize();
             return Vec::new();
         };
         let Ok(root) = automation.ElementFromHandle(HWND(hwnd_raw as *mut _)) else {
-            CoUninitialize();
             return Vec::new();
         };
         let Ok(walker) = automation.ControlViewWalker() else {
-            CoUninitialize();
             return Vec::new();
         };
 
@@ -57,7 +138,6 @@ pub fn read_region_text(
             capture_origin,
             region,
         );
-        CoUninitialize();
         collected
     };
 
@@ -523,6 +603,43 @@ mod tests {
                 height: 16,
             },
         }
+    }
+
+    #[test]
+    fn stalled_provider_times_out_and_retries_do_not_start_more_workers() {
+        let busy = Arc::new(AtomicBool::new(false));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let result = read_with_deadline(
+            Arc::clone(&busy),
+            std::time::Duration::from_millis(20),
+            move || {
+                // Simulate a provider stuck inside a COM call, ignoring the
+                // traversal's cooperative time checks.
+                release_rx.recv().unwrap();
+                vec![block("stale result", 10, 10)]
+            },
+        );
+        assert!(result.is_empty());
+        assert!(busy.load(Ordering::Acquire));
+        assert!(read_with_deadline(
+            Arc::clone(&busy),
+            std::time::Duration::from_secs(1),
+            || panic!("a stalled UIA worker must prevent additional workers"),
+        ).is_empty());
+
+        release_tx.send(()).unwrap();
+        let recovery_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while busy.load(Ordering::Acquire) {
+            assert!(std::time::Instant::now() < recovery_deadline, "UIA worker did not recover");
+            std::thread::yield_now();
+        }
+        let recovered = read_with_deadline(
+            busy,
+            std::time::Duration::from_secs(1),
+            || vec![block("fresh result", 60, 10)],
+        );
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].text, "fresh result");
     }
 
     #[test]

@@ -92,8 +92,17 @@ fn load_installed_override() -> Option<OfflineDict> {
     Some(OfflineDict { zh_to_en, en_to_zh })
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_MODELS_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 /// App-data dir for offline models. Order: env → config dir → fallback CWD.
 pub fn models_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = TEST_MODELS_DIR.with(|value| value.borrow().clone()) {
+        return Some(dir);
+    }
     if let Ok(dir) = std::env::var("CATWALK_OFFLINE_MODELS_DIR") {
         if !dir.trim().is_empty() {
             return Some(PathBuf::from(dir));
@@ -294,10 +303,16 @@ mod tests {
     use super::*;
 
     fn with_clean_dir(f: impl FnOnce()) {
-        let dir = models_dir().unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        TEST_MODELS_DIR.with(|value| *value.borrow_mut() = Some(dir.path().to_path_buf()));
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                TEST_MODELS_DIR.with(|value| *value.borrow_mut() = None);
+            }
+        }
+        let _reset = Reset;
         f();
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

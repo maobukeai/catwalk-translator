@@ -204,7 +204,7 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
       const state = useSettingsStore.getState();
       expect(state.isDirty).toBe(false);
       expect(state.initialSettings.hotkey).toBe('Ctrl+Alt+S');
-      expect(state.toastMessage).toBe('Settings saved successfully!');
+      expect(state.toastMessage).toBe('设置已保存');
 
       // Clear toast
       act(() => {
@@ -493,7 +493,7 @@ describe('Empirical Validation Test Suite for Milestone 1', () => {
         fireEvent.click(saveBtn);
       });
 
-      expect(screen.getByText('Settings saved successfully!')).toBeInTheDocument();
+      expect(screen.getByText('设置已保存')).toBeInTheDocument();
       expect(useSettingsStore.getState().isDirty).toBe(false);
     });
   });

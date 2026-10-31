@@ -724,7 +724,7 @@ export function PinWindowApp() {
 
       const scale = monitor.scaleFactor || 1.0;
       const currentPos = await win.outerPosition();
-      const currentSize = await win.outerSize();
+      const currentSize = await win.innerSize();
 
       // 记录正常模式时的视口尺寸
       if (currentSize.width > 100 * scale) {

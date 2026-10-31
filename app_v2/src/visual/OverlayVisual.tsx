@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import '../index.css';
 import { OverlayBlockCard, OverlayErasePlate, measureTextWidth } from '../components/Overlay/OverlayBlockCard';
 import { YoudaoResultPanel } from '../components/Overlay/YoudaoResultPanel';
-import { estimateDenseProseFontSizes, estimateDenseRowFontHeights, estimateSafeErasePadding, resolveAABBCollisions } from '../services/overlayLayout';
+import { estimateDenseProseColumnWidths, estimateDenseProseFontSizes, estimateDenseRowFontHeights, estimateSafeErasePadding, resolveAABBCollisions } from '../services/overlayLayout';
 import type { OverlayBlock } from '../services/types';
 import heading from '../../src-tauri/tests/fixtures/password_heading_crop.png';
 import dialog from '../../src-tauri/tests/fixtures/password_dialog_dense.png';
@@ -18,6 +18,8 @@ import dialogRealOcr from './generated/dialog_real_ocr.json';
 import bubbleRealOcr from './generated/bubble_real_ocr.json';
 import denseRealOcr from './generated/dense_real_ocr.json';
 import blenderRealOcr from './generated/blender_real_ocr.json';
+import { OverlayLayoutScenarios } from './OverlayLayoutScenarios';
+import { OverlaySnapshotPreview } from './OverlaySnapshotPreview';
 
 // Development-only page: pnpm dev, then open /overlay-visual.html and inspect
 // the exact-size source screenshot with rendered OCR/translation cards. Keep
@@ -49,7 +51,7 @@ const cases: Array<{ name: string; image: string; width: number; height: number;
     collision: true, blocks: dialogRealOcr as OverlayBlock[],
   },
   {
-    name: '真实 OCR · 气泡中译英与实际擦除补丁', image: bubble, width: 429, height: 82,
+    name: '真实 OCR · 气泡中译英与实际擦除补丁', image: bubble, width: 417, height: 85,
     collision: true, blocks: (bubbleRealOcr as OverlayBlock[]).map((block, index) => ({
       ...block, translated: index === 0
         ? 'We are bringing Gemini Omni 1.1 Flash and a new suite of creative tools'
@@ -126,7 +128,7 @@ const cases: Array<{ name: string; image: string; width: number; height: number;
     ],
   },
   {
-    name: '绿色聊天气泡 · 中英混排与尖角', image: bubble, width: 429, height: 82,
+    name: '绿色聊天气泡 · 中英混排与尖角', image: bubble, width: 417, height: 85,
     collision: true, expandedIndex: 0, expandedHeight: 31,
     blocks: [
       make('我们将 Gemini Omni 1.1 Flash 和一套全新的创意控制工', 'We are bringing Gemini Omni 1.1 Flash and a new suite of creative tools', 38, 19, 365, 23, '#9cf09f'),
@@ -168,43 +170,68 @@ const cases: Array<{ name: string; image: string; width: number; height: number;
   },
 ];
 
+const VisualOverlayScene: React.FC<{ item: typeof cases[number] }> = ({ item }) => {
+  const [sizes, setSizes] = React.useState<Record<number, { width: number; height: number }>>({});
+  const [scale, setScale] = React.useState(1);
+  const reportSize = React.useCallback((index: number, size: { width: number; height: number }) => {
+    setSizes((current) => {
+      const previous = current[index];
+      if (previous && Math.abs(previous.width - size.width) <= 0.5 && Math.abs(previous.height - size.height) <= 0.5) return current;
+      return { ...current, [index]: size };
+    });
+  }, []);
+  const viewportWidth = Math.max(1200, item.width);
+  const heights = estimateDenseRowFontHeights(item.blocks);
+  const columnWidths = estimateDenseProseColumnWidths(item.blocks, heights);
+  const layoutBlocks = item.blocks.map((block, i) => ({
+    ...block, layoutMaxWidth: columnWidths[i], layoutRight: item.width, layoutTop: 0, layoutBottom: item.height,
+  }));
+  const fontSizes = estimateDenseProseFontSizes(layoutBlocks, heights, viewportWidth, measureTextWidth);
+  const erasePadding = estimateSafeErasePadding(item.blocks);
+  const sourceBlocks = layoutBlocks.map((block, i) => ({
+    ...block, __i: i, erasePadding: erasePadding[i],
+    sourceX: block.logicalX, sourceY: block.logicalY, sourceW: block.logicalW, sourceH: block.logicalH,
+    fontLineHeight: heights[i], proseFontSize: fontSizes[i],
+    aabbW: sizes[i]?.width,
+    aabbH: sizes[i]?.height ?? (item.collision && i === item.expandedIndex ? item.expandedHeight : block.logicalH),
+  }));
+  // Exercise the production selection bounds and real height feedback. A
+  // physically oversized chain stays readable and may overflow; it must not
+  // be stacked at the top edge just to make the crop look contained.
+  const visibleBlocks = item.collision
+    ? resolveAABBCollisions(sourceBlocks, viewportWidth, Math.max(800, item.height), 4, { top: 0, bottom: item.height })
+    : sourceBlocks;
+  return <>
+    <label style={{ display: 'block', fontSize: 12 }}>覆盖文字倍率：
+      <select aria-label="覆盖文字倍率" value={scale} onChange={(event) => setScale(Number(event.target.value))} style={{ color: '#111', background: '#fff', marginLeft: 8 }}>
+        <option value={1}>100%</option><option value={1.25}>125%</option><option value={1.5}>150%</option>
+      </select>
+    </label>
+    <OverlaySnapshotPreview image={item.image} width={item.width} height={item.height} blocks={item.blocks}>
+      {visibleBlocks.map((block) => <OverlayErasePlate key={`erase:${block.__i}`} block={block} />)}
+      {visibleBlocks.map((block) => <OverlayBlockCard key={block.__i} block={block} blockIndex={block.__i}
+        fontLineHeight={block.fontLineHeight} proseFontSize={block.proseFontSize}
+        viewportWidth={viewportWidth} scale={scale} externalErase
+        onRenderedSize={item.collision ? reportSize : undefined}
+        isPinned={false} onClose={() => {}} onTogglePin={() => {}} />)}
+    </OverlaySnapshotPreview>
+  </>;
+};
+
 createRoot(document.getElementById('root')!).render(
   <main style={{ padding: 20, height: '100vh', boxSizing: 'border-box', overflowY: 'auto', background: '#18202b', color: '#f5f6f8', fontFamily: 'Segoe UI, Microsoft YaHei UI, sans-serif' }}>
     <h1 style={{ fontSize: 18, margin: '0 0 12px' }}>原位覆盖视觉验收 · 真实截图 1:1</h1>
     <p style={{ fontSize: 12, color: '#bfc8d4' }}>每组先显示原图，再在同一截图上绘制译文。重点检查字号、换行、残留原文与相邻控件遮挡。</p>
-    {cases.map((item) => {
-      const heights = estimateDenseRowFontHeights(item.blocks);
-      const fontSizes = estimateDenseProseFontSizes(item.blocks, heights, 1200, measureTextWidth);
-      const erasePadding = estimateSafeErasePadding(item.blocks);
-      const sourceBlocks = item.blocks.map((block, i) => ({
-        ...block, erasePadding: erasePadding[i],
-        sourceX: block.logicalX, sourceY: block.logicalY, sourceW: block.logicalW, sourceH: block.logicalH,
-        fontLineHeight: heights[i], proseFontSize: fontSizes[i],
-        aabbH: item.collision && i === item.expandedIndex ? item.expandedHeight : block.logicalH,
-      }));
-      const visibleBlocks = item.collision
-        ? resolveAABBCollisions(sourceBlocks, 1200, item.height)
-        : sourceBlocks;
-      return (
+    <OverlayLayoutScenarios />
+    {cases.map((item) => (
       <section key={item.name} style={{ marginBottom: 28 }}>
         <h2 style={{ fontSize: 14, margin: '0 0 8px' }}>{item.name}</h2>
         <div style={{ display: 'grid', gap: 6, overflowX: 'auto' }}>
-          <img src={item.image} width={item.width} height={item.height} alt={`${item.name} 原图`} />
-          <div style={{ position: 'relative', width: item.width, height: item.height, flex: `0 0 ${item.width}px`, backgroundImage: `url(${item.image})` }}>
-            {visibleBlocks.map((block, index) => <OverlayErasePlate key={`erase:${index}`} block={block} />)}
-            {visibleBlocks.map((block, index) => (
-              <OverlayBlockCard key={index} block={block} blockIndex={index}
-                fontLineHeight={block.fontLineHeight}
-                proseFontSize={block.proseFontSize}
-                viewportWidth={Math.max(1200, item.width)}
-                externalErase
-                isPinned={false} onClose={() => {}} onTogglePin={() => {}} />
-            ))}
-          </div>
+          <img src={item.image} width={item.width} height={item.height} style={{ width: item.width, height: item.height, maxWidth: 'none' }} alt={`${item.name} 原图`} />
+          <VisualOverlayScene item={item} />
         </div>
       </section>
-      );
-    })}
+      ))}
     <section style={{ marginBottom: 28 }}>
       <h2 style={{ fontSize: 14, margin: '0 0 8px' }}>密集中文段落 · 手动面板对照（非默认）</h2>
       <div style={{ display: 'flex', gap: 12, alignItems: 'start', marginBottom: 12 }}>

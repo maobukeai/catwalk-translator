@@ -64,6 +64,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     isLoading,
     isSaving,
     toastMessage,
+    toastKind,
     fetchSettings,
     saveSettings,
     resetSettings,
@@ -152,12 +153,14 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     <div className="mx-auto max-w-4xl space-y-5 text-zinc-200 font-sans pb-10">
       {/* Toast 操作通知 */}
       {toastMessage && (
-        <div className={`fixed bottom-6 right-6 z-50 flex items-center space-x-2.5 rounded-xl px-4 py-3 text-xs shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-3 duration-200 ${
+        <div role={toastKind === 'error' ? 'alert' : 'status'} className={`fixed bottom-6 right-6 z-50 flex items-center space-x-2.5 rounded-xl px-4 py-3 text-xs shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-3 duration-200 border ${toastKind === 'error' ? 'border-rose-500/60' : 'border-emerald-500/40'} ${
           isLight
-            ? 'bg-white/95 border border-emerald-500/40 text-slate-800'
-            : 'bg-zinc-900/90 border border-emerald-500/40 text-zinc-100'
+            ? 'bg-white/95 text-slate-800'
+            : 'bg-zinc-900/90 text-zinc-100'
         }`}>
-          <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+          {toastKind === 'error'
+            ? <AlertCircle className="h-4 w-4 text-rose-500 shrink-0" />
+            : <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />}
           <span className="font-medium">{toastMessage}</span>
         </div>
       )}

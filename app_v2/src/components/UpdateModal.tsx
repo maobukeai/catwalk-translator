@@ -46,6 +46,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ isOpen, onClose, updat
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     if (isOpen) {
       onUpdateDownloadProgress((p) => {
         setProgress(p);
@@ -54,10 +55,12 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ isOpen, onClose, updat
           setDownloading(false);
         }
       }).then((u) => {
-        unlisten = u;
+        if (disposed) u();
+        else unlisten = u;
       }).catch(() => {});
     }
     return () => {
+      disposed = true;
       if (unlisten) unlisten();
     };
   }, [isOpen]);
@@ -68,7 +71,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ isOpen, onClose, updat
 
   // 优先选取 setup.exe 安装包直链，未找到则回退默认 download_url
   const preferredAsset = (updateInfo.assets || []).find(
-    (a: { name: string; url: string }) => a.name.toLowerCase().endsWith('.exe') && !a.name.toLowerCase().includes('blockmap')
+    (a: { name: string; url: string }) => a.name.toLowerCase().endsWith('-setup.exe')
   );
   const targetDownloadUrl = preferredAsset?.url || updateInfo.download_url;
 
@@ -84,7 +87,10 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ isOpen, onClose, updat
     });
 
     try {
-      await cmdDownloadAndInstallUpdate(targetDownloadUrl, useSilent);
+      await cmdDownloadAndInstallUpdate(targetDownloadUrl, useSilent, {
+        sha256: preferredAsset?.sha256 ?? updateInfo.sha256,
+        expectedSize: preferredAsset?.size,
+      });
     } catch (err: any) {
       setError(err?.message || String(err));
       setDownloading(false);

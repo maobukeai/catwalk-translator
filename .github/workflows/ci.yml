@@ -31,16 +31,26 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
 
+      # 发布流程的结构化校验：防止再次出现「发布清单错误/步骤被误删」这类只在
+      # 真实发版时才暴露、且会直接导致自动更新失败的回归。
+      - name: 发布工作流结构校验
+        run: python scripts/check_release_workflow.py
+        working-directory: .
+        shell: pwsh
+
       - name: TypeScript 类型检查
-        run: npx tsc --noEmit
+        run: pnpm check
+
+      - name: 前端依赖安全审计
+        run: pnpm audit --audit-level=moderate --registry=https://registry.npmjs.org
 
       - name: 前端测试 (vitest)
-        run: npx vitest run
+        run: pnpm test
 
       # Tauri 的 generate_context! 宏在编译期需要 frontendDist(../dist) 存在，
       # 因此 cargo test 之前必须先产出前端构建
       - name: 构建前端产物 (dist)
-        run: npx vite build
+        run: pnpm build
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
@@ -51,5 +61,5 @@ jobs:
           workspaces: app_v2/src-tauri
 
       - name: Rust 测试 (cargo test)
-        run: cargo test
+        run: cargo test --locked
         working-directory: app_v2/src-tauri

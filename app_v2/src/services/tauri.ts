@@ -104,6 +104,13 @@ export async function cmdCloseOverlay(restoreMain?: boolean): Promise<void> {
   }
 }
 
+/// Reset the main window to standard 960x720 default size and center it
+export async function cmdResetWindowSize(): Promise<void> {
+  if (isTauri()) {
+    await invoke('cmd_reset_window_size');
+  }
+}
+
 export async function cmdCaptureAndOcr(
   selection: PhysicalRect,
   scaleFactor?: number,
@@ -698,18 +705,25 @@ export async function cmdImageOcrTranslate(
 }
 
 export function detectLanguage(text: string): { detected: import('./types').LanguageCode; suggestedTarget: import('./types').LanguageCode } {
-  const hasChinese = /[\u4e00-\u9fa5]/.test(text);
+  // Kana must be checked before Han: Japanese commonly contains both.
   const hasJapanese = /[\u3040-\u30ff]/.test(text);
   const hasKorean = /[\uac00-\ud7af]/.test(text);
-
-  if (hasChinese) {
-    return { detected: 'zh-CN', suggestedTarget: 'en' };
-  }
   if (hasJapanese) {
     return { detected: 'ja', suggestedTarget: 'zh-CN' };
   }
   if (hasKorean) {
     return { detected: 'ko', suggestedTarget: 'zh-CN' };
+  }
+  // A Chinese caption in an otherwise English screenshot must not flip the
+  // whole transferred document into English. Count the dominant script.
+  const hanCount = (text.match(/[\u3400-\u4dbf\u4e00-\u9fff]/g) || []).length;
+  const latinCount = (text.match(/[A-Za-z\u00c0-\u024f]/g) || []).length;
+  const cyrillicCount = (text.match(/[\u0400-\u04ff]/g) || []).length;
+  if (cyrillicCount > Math.max(hanCount, latinCount)) {
+    return { detected: 'ru', suggestedTarget: 'zh-CN' };
+  }
+  if (hanCount > 0 && hanCount >= latinCount) {
+    return { detected: 'zh-CN', suggestedTarget: 'en' };
   }
   return { detected: 'en', suggestedTarget: 'zh-CN' };
 }
@@ -2286,9 +2300,14 @@ export async function cmdOpenExternalUrl(url: string): Promise<void> {
   }
 }
 
-export async function cmdDownloadAndInstallUpdate(url: string, silent?: boolean): Promise<string> {
+export async function cmdDownloadAndInstallUpdate(
+  url: string, silent?: boolean,
+  integrity?: { sha256?: string | null; expectedSize?: number },
+): Promise<string> {
   if (isTauri()) {
-    return await invoke<string>('cmd_download_and_install_update', { url, silent });
+    return await invoke<string>('cmd_download_and_install_update', {
+      url, silent, sha256: integrity?.sha256 ?? null, expectedSize: integrity?.expectedSize ?? null,
+    });
   }
   console.log('[Browser Mode] cmdDownloadAndInstallUpdate:', url, silent);
   return 'mock_installer.exe';

@@ -935,6 +935,7 @@ impl OnnxOcrEngine {
             });
         }
 
+
         // A dense toolbar is refined only after its first recognition. This is
         // important: a window title such as "Blender 5.2.1 LTS" is also wide
         // and shallow, but must remain intact; a dense CJK menu string such as
@@ -1154,6 +1155,21 @@ fn should_refine_dense_toolbar(block: &TextBlock, _version: &str) -> bool {
     let prose_like = cjk_count > 24
         || text.chars().any(|c| "，。；：！？《》、,;:!?".contains(c));
     if prose_like {
+        return false;
+    }
+    // An English *sentence* is not a menu row. Menu labels are conventionally
+    // capitalised, so a long Latin row made mostly of lowercase words is running
+    // prose and must never be re-cut at ink valleys. Splitting it produced
+    // "copyi ight" / "not ice" / "ind Luded" on the user's MIT-license capture
+    // (and the same shape on the gray_line_* fixtures), where the whole line had
+    // already been recognized correctly. Restrict this to Latin-only rows so the
+    // validated compact mixed CJK/Latin chat-bubble split path is untouched.
+    let latin_only = cjk_count == 0
+        && text.chars().all(|c| c.is_ascii() || c.is_whitespace());
+    let lowercase_words = words.iter()
+        .filter(|w| w.chars().count() >= 2 && w.chars().all(|c| c.is_ascii_lowercase()))
+        .count();
+    if latin_only && words.len() >= 6 && lowercase_words * 2 >= words.len() {
         return false;
     }
     let short_word_row = words.len() >= 3
@@ -2548,6 +2564,17 @@ mod tests {
         heading.box_rect.height = 50;
         assert!(!should_refine_dense_toolbar(&heading, "v6"));
         assert!(!should_refine_dense_toolbar(&heading, "v6t"));
+        // A wide lowercase Latin sentence (MIT-license row) had already been
+        // recognized correctly; re-cutting it at ink valleys produced
+        // "copyi ight" / "not ice" / "ind Luded". It must never be refined.
+        let mut sentence = make(
+            "The above copyright notice and this permission notice shall be included in all",
+        );
+        sentence.box_rect.width = 520;
+        assert!(
+            !should_refine_dense_toolbar(&sentence, "v6"),
+            "a lowercase English prose row must stay intact"
+        );
     }
 
     #[test]
@@ -3106,3 +3133,4 @@ fn merge_group_rect(group: &[&TextBlock], img_w: u32) -> Option<(u32, u32, u32, 
     x1 = (x1 + pad).min(img_w as i32);
     Some((x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32))
 }
+
