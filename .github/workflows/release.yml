@@ -263,7 +263,7 @@ jobs:
           $integrityOk = $true
           for ($i = 0; $i -lt $manifest.assets.Count; $i++) {
               $asset = $manifest.assets[$i]
-              if ($asset.name -notlike "*_x64-setup.exe") { continue }
+              if ($asset.name -notlike "MaobuTranslator_*_x64-setup.exe") { continue }
               $url = $asset.url
               $dest = Join-Path $env:RUNNER_TEMP $asset.name
               Write-Host "Downloading $url"
