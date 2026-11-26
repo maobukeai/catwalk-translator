@@ -74,10 +74,8 @@ export const NetworkSettingsCard: React.FC = () => {
 
   return (
     <div
-      className={`rounded-2xl border p-4 space-y-4 transition-colors ${
-        isLight
-          ? 'bg-white/75 border-slate-200 text-slate-800 shadow-xs'
-          : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+      className={`settings-glass-card p-4 sm:p-5 space-y-4 ${
+        isLight ? 'text-slate-800' : 'text-zinc-100'
       }`}
       data-testid="network-settings-card"
     >

@@ -242,6 +242,16 @@ describe('capture progressive phrase batches', () => {
     await translatePhrasesProgressively(['a', 'b'], { preset: 'auto', request, batchSize: -1 });
     expect(request.mock.calls.map(([batch]) => batch)).toEqual([['a'], ['b']]);
   });
+
+  it('chunks dense LLM captures into batches of at most 24 phrases so tail blocks are not dropped', async () => {
+    const phrases = Array.from({ length: 50 }, (_, i) => `Text block ${i + 1}`);
+    const request = vi.fn(async (batch: string[]) => translations(batch));
+    const llmConfig = { provider: 'test', endpoint: 'https://example.com', apiKey: 'k', model: 'm' };
+    const result = await translatePhrasesProgressively(phrases, { preset: 'auto', llmConfig, request });
+    expect(result).toHaveLength(50);
+    expect(result.every((r) => r.translated.startsWith('译:'))).toBe(true);
+    expect(request.mock.calls.map(([batch]) => batch.length)).toEqual([24, 24, 2]);
+  });
 });
 
 describe('IPC operation deadline', () => {

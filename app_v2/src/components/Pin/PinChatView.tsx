@@ -3,6 +3,9 @@ import { cmdChatLlm, cmdChatLlmStream, cmdShowMainWindow } from "../../services/
 import type { ChatMessage, LlmConfig } from "../../services/types";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppTheme } from "../../hooks/useAppTheme";
+import { GlassSelect } from "../Common/GlassSelect";
+import { useSlidingIndicator } from "../../hooks/useSlidingIndicator";
+import { SlidingHighlight } from "../Common/SlidingHighlight";
 
 export const PIN_CHAT_SESSION_KEY = "maobu_pin_chat_session_v1";
 
@@ -129,6 +132,7 @@ export function PinChatView({
   const [isLoading, setIsLoading] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const pinPresetSlider = useSlidingIndicator<HTMLDivElement>(activePresetId);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [collapsedReasoning, setCollapsedReasoning] = useState<Record<string, boolean>>({});
 
@@ -413,10 +417,8 @@ export function PinChatView({
     <div className="flex flex-1 flex-col overflow-hidden text-xs" data-testid="pin-chat-view">
       {/* 顶部状态与工具条：当前模型选择 + 快捷设置 + 清空操作 */}
       <div
-        className={`flex flex-wrap items-center justify-between gap-1.5 border-b px-2.5 py-1.5 text-[10.5px] transition-colors ${
-          isLight
-            ? "border-slate-200/80 bg-slate-50/80 text-slate-700"
-            : "border-white/[0.06] bg-black/25 text-zinc-200"
+        className={`pin-vision-header flex flex-wrap items-center justify-between gap-1.5 px-2.5 py-1.5 text-[10.5px] transition-colors ${
+          isLight ? "text-slate-700" : "text-zinc-200"
         }`}
       >
         {/* 当前模型选择下拉 / 徽标 */}
@@ -430,39 +432,32 @@ export function PinChatView({
             title={isCurrentConfigured ? "当前模型已配置有效 API Key" : "当前模型缺少 API Key"}
           />
           {enabledPool.length > 1 ? (
-            <select
+            <GlassSelect
               value={activeLlm ? (activeLlm.id || `${activeLlm.provider}-${activeLlm.model}`) : ""}
-              onChange={(e) => {
+              options={enabledPool.map((cfg) => {
+                const val = cfg.id || `${cfg.provider}-${cfg.model}`;
+                const hasKey = isModelConfigured(cfg);
+                return {
+                  value: val,
+                  label: `${cfg.provider}: ${cfg.model || "默认"}${hasKey ? "" : " (未配Key)"}`,
+                };
+              })}
+              onChange={(val) => {
                 const target = enabledPool.find(
-                  (c) => (c.id || `${c.provider}-${c.model}`) === e.target.value
+                  (c) => (c.id || `${c.provider}-${c.model}`) === val
                 );
                 if (target) {
                   setSelectedModelId(target.id || `${target.provider}-${target.model}`);
                   setLlmConfig(target);
                 }
               }}
-              className={`rounded-lg px-2 py-0.5 outline-none font-sans text-[10.5px] cursor-pointer transition max-w-[200px] truncate ${
-                isLight
-                  ? "bg-white hover:bg-slate-50 text-slate-800 border border-slate-200/90 shadow-xs"
-                  : "bg-white/[0.08] hover:bg-white/[0.12] text-zinc-200 border border-white/10"
-              }`}
               title="切换当前使用的大模型"
-              data-testid="pin-chat-model-select"
-            >
-              {enabledPool.map((cfg) => {
-                const val = cfg.id || `${cfg.provider}-${cfg.model}`;
-                const hasKey = isModelConfigured(cfg);
-                return (
-                  <option
-                    key={val}
-                    value={val}
-                    className={isLight ? "bg-white text-slate-800" : "bg-[#181a20] text-zinc-200"}
-                  >
-                    {cfg.provider}: {cfg.model || "默认"} {hasKey ? "" : "(未配Key)"}
-                  </option>
-                );
-              })}
-            </select>
+              selectTestId="pin-chat-model-select"
+              size="xs"
+              variant="rounded"
+              menuMinWidth={220}
+              triggerClassName="max-w-[200px]"
+            />
           ) : activeLlm ? (
             <span
               className={`font-semibold font-mono truncate max-w-[170px] ${
@@ -482,9 +477,9 @@ export function PinChatView({
             <button
               type="button"
               onClick={() => void cmdShowMainWindow()}
-              className={`rounded-md px-1.5 py-0.5 text-[10px] flex items-center gap-1 shrink-0 transition cursor-pointer font-medium ${
+              className={`rounded-full px-2 py-0.5 text-[10px] flex items-center gap-1 shrink-0 transition cursor-pointer font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                 isLight
-                  ? "bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100 shadow-xs"
+                  ? "bg-amber-50/90 border border-amber-200 text-amber-700 hover:bg-amber-100 shadow-2xs"
                   : "bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25"
               }`}
               title="未检测到 API 密钥，点击打开主窗口配置"
@@ -499,9 +494,9 @@ export function PinChatView({
           <button
             type="button"
             onClick={() => void cmdShowMainWindow()}
-            className={`rounded-md px-1.5 py-0.5 cursor-pointer text-[10.5px] transition ${
+            className={`rounded-lg px-2 py-0.5 cursor-pointer text-[10.5px] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               isLight
-                ? "text-slate-500 hover:bg-slate-200/60 hover:text-slate-900"
+                ? "text-slate-500 hover:bg-[var(--accent-soft)] hover:text-[var(--accent-text)]"
                 : "text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
             }`}
             title="打开主窗口配置模型"
@@ -513,10 +508,10 @@ export function PinChatView({
             type="button"
             onClick={handleClear}
             disabled={messages.length === 0 && !contextTerm}
-            className={`rounded-md px-1.5 py-0.5 transition disabled:opacity-30 disabled:hover:bg-transparent cursor-pointer text-[10.5px] ${
+            className={`rounded-lg px-2 py-0.5 transition disabled:opacity-30 disabled:hover:bg-transparent cursor-pointer text-[10.5px] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               isLight
-                ? "text-slate-500 hover:bg-red-50 hover:text-red-600"
-                : "text-zinc-400 hover:bg-white/10 hover:text-rose-300"
+                ? "text-slate-500 hover:bg-rose-500/10 hover:text-rose-600"
+                : "text-zinc-400 hover:bg-rose-500/15 hover:text-rose-300"
             }`}
             title="清空对话记录"
             data-testid="pin-chat-clear"
@@ -526,15 +521,21 @@ export function PinChatView({
         </div>
       </div>
 
-      {/* 快捷提示词预设 Chips */}
+      {/* 快捷提示词预设 Chips（带弹性滑动高亮） */}
       <div
-        className={`scrollbar-none flex items-center gap-1.5 overflow-x-auto border-b px-3 py-1.5 text-[10.5px] transition-colors ${
-          isLight
-            ? "border-slate-200/70 bg-slate-50/40 text-slate-500"
-            : "border-white/[0.04] bg-white/[0.01] text-zinc-500"
+        ref={pinPresetSlider.containerRef}
+        className={`relative scrollbar-none flex items-center gap-1.5 overflow-x-auto border-b border-[var(--g-hairline)] px-3 py-1.5 text-[10.5px] transition-colors ${
+          isLight ? "bg-white/30 text-slate-500" : "bg-white/[0.015] text-zinc-500"
         }`}
       >
-        <span className={`shrink-0 font-medium ${isLight ? "text-slate-400" : "text-zinc-500"}`}>
+        <SlidingHighlight
+          rect={pinPresetSlider.rect}
+          isReady={pinPresetSlider.isReady}
+          variant="solid"
+          radiusClass="rounded-full"
+          testId="pin-preset-slider"
+        />
+        <span className={`relative z-10 shrink-0 font-medium ${isLight ? "text-slate-400" : "text-zinc-500"}`}>
           预设:
         </span>
         {PIN_PROMPT_PRESETS.map((p) => {
@@ -542,14 +543,17 @@ export function PinChatView({
           return (
             <button
               key={p.id}
+              ref={pinPresetSlider.registerItem(p.id)}
               type="button"
               onClick={() => setActivePresetId(isSelected ? null : p.id)}
-              className={`shrink-0 rounded-full px-2.5 py-0.5 transition cursor-pointer ${
+              className={`relative z-10 shrink-0 rounded-full px-2.5 py-0.5 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                 isSelected
-                  ? "bg-indigo-600/90 font-medium text-white shadow-xs"
+                  ? pinPresetSlider.isReady
+                    ? "font-medium text-white"
+                    : "bg-indigo-600/90 font-medium text-white shadow-xs"
                   : isLight
-                    ? "bg-slate-100/90 text-slate-600 hover:bg-slate-200/80 hover:text-slate-900 border border-slate-200/60"
-                    : "bg-white/[0.04] text-zinc-400 hover:bg-white/10 hover:text-zinc-200 border border-white/[0.06]"
+                    ? "bg-white/70 text-slate-600 hover:bg-white hover:text-slate-900 border border-slate-200/70"
+                    : "bg-white/[0.05] text-zinc-400 hover:bg-white/10 hover:text-zinc-200 border border-white/[0.08]"
               }`}
               title={p.promptPrefix}
               data-testid={`pin-preset-${p.id}`}
@@ -563,25 +567,21 @@ export function PinChatView({
       {/* 翻译术语引流胶囊（当从翻译卡片点击「💬 追问」跳转来时展示） */}
       {contextTerm && (
         <div
-          className={`flex flex-col gap-1 border-b px-3 py-1.5 transition-colors ${
-            isLight
-              ? "border-indigo-100 bg-indigo-50/80 text-indigo-950"
-              : "border-indigo-500/20 bg-indigo-950/20 text-indigo-200"
-          }`}
+          className="flex flex-col gap-1 border-b border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1.5 transition-colors"
           data-testid="context-term-banner"
         >
           <div className="flex items-center justify-between text-[11px]">
-            <span className={isLight ? "text-indigo-900" : "text-indigo-300"}>
-              💬 针对当前术语追问：<strong className={isLight ? "text-indigo-700 font-bold" : "text-white font-bold"}>「{contextTerm}」</strong>
+            <span className="text-[var(--accent-text)]">
+              💬 针对当前术语追问：<strong className={isLight ? "text-[var(--accent-text)] font-bold" : "text-white font-bold"}>「{contextTerm}」</strong>
             </span>
             {onClearContextTerm && (
               <button
                 type="button"
                 onClick={onClearContextTerm}
-                className={`cursor-pointer text-[10px] p-0.5 rounded ${
+                className={`cursor-pointer text-[10px] p-0.5 rounded transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                   isLight
-                    ? "text-slate-400 hover:text-slate-700 hover:bg-indigo-100"
-                    : "text-zinc-400 hover:text-zinc-200 hover:bg-white/10"
+                    ? "text-slate-500 hover:text-slate-800 hover:bg-white/60"
+                    : "text-zinc-400 hover:text-zinc-100 hover:bg-white/10"
                 }`}
                 title="关闭术语提示"
               >
@@ -596,10 +596,10 @@ export function PinChatView({
                 type="button"
                 onClick={() => void handleSend(act.getPrompt(contextTerm))}
                 disabled={isLoading}
-                className={`rounded-md border px-2 py-0.5 text-[10.5px] transition disabled:opacity-40 cursor-pointer font-medium ${
+                className={`rounded-full border px-2.5 py-0.5 text-[10.5px] transition disabled:opacity-40 cursor-pointer font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                   isLight
-                    ? "border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-50 shadow-xs"
-                    : "border-indigo-500/30 bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/30 hover:text-white"
+                    ? "border-white/90 bg-white/85 text-[var(--accent-text)] hover:bg-white shadow-2xs"
+                    : "border-white/15 bg-white/10 text-sky-200 hover:bg-white/20 hover:text-white"
                 }`}
                 data-testid={`context-action-${act.id}`}
               >
@@ -618,12 +618,12 @@ export function PinChatView({
       >
         {messages.length === 0 && !contextTerm && (
           <div className="relative flex h-full flex-col items-center justify-center py-10 text-center select-none overflow-hidden">
-            <div className="pointer-events-none absolute -top-4 h-40 w-40 rounded-full bg-gradient-to-tr from-indigo-500/10 via-purple-500/10 to-transparent blur-2xl" />
+            <div className="pointer-events-none absolute -top-4 h-40 w-40 rounded-full bg-gradient-to-tr from-sky-500/12 via-indigo-500/12 to-transparent blur-2xl" />
             <div
-              className={`relative flex h-12 w-12 items-center justify-center rounded-2xl mb-2.5 shadow-sm transition-transform duration-300 hover:scale-105 ${
+              className={`relative flex h-12 w-12 items-center justify-center rounded-2xl mb-2.5 shadow-sm transition-transform duration-300 hover:scale-105 border ${
                 isLight
-                  ? "bg-gradient-to-br from-indigo-50 to-white text-indigo-600 border border-indigo-200/60 shadow-indigo-500/10"
-                  : "bg-gradient-to-br from-indigo-500/20 to-purple-900/20 text-indigo-300 border border-indigo-500/25 shadow-black/40"
+                  ? "bg-gradient-to-br from-sky-50 to-white text-[var(--accent-text)] border-white/90 shadow-sky-500/10"
+                  : "bg-gradient-to-br from-sky-500/20 to-indigo-900/20 text-sky-300 border-white/15 shadow-black/40"
               }`}
             >
               <span className="text-xl">💬</span>
@@ -667,13 +667,7 @@ export function PinChatView({
                   {isUser ? "👤 我" : `🤖 ${m.model || activeLlm?.model || "AI"}`}
                 </span>
                 {m.mode && (
-                  <span
-                    className={`rounded px-1.5 py-0.2 text-[9px] font-medium ${
-                      isLight
-                        ? "bg-indigo-50 border border-indigo-200/60 text-indigo-600"
-                        : "bg-indigo-500/20 text-indigo-300"
-                    }`}
-                  >
+                  <span className="rounded-full px-1.5 py-0.2 text-[9px] font-medium bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-text)]">
                     {m.mode}
                   </span>
                 )}
@@ -683,19 +677,19 @@ export function PinChatView({
               {/* 思考过程（DeepSeek R1 等） */}
               {m.reasoning && (
                 <div
-                  className={`mb-1 max-w-[92%] rounded-xl p-2 text-[10px] transition-colors ${
+                  className={`mb-1 max-w-[92%] rounded-xl p-2 text-[10px] border transition-colors ${
                     isLight
-                      ? "border border-purple-200 bg-purple-50/80 text-purple-900"
-                      : "border border-purple-500/20 bg-purple-950/20 text-purple-300"
+                      ? "border-purple-200/80 bg-purple-50/75 text-purple-900"
+                      : "border-purple-400/20 bg-purple-950/25 text-purple-200"
                   }`}
                 >
                   <button
                     type="button"
                     onClick={() => toggleReasoning(m.id)}
-                    className={`flex items-center gap-1 font-mono font-medium cursor-pointer ${
+                    className={`flex items-center gap-1 font-mono font-medium cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] rounded ${
                       isLight
                         ? "text-purple-700 hover:text-purple-900"
-                        : "text-purple-400 hover:text-purple-200"
+                        : "text-purple-300 hover:text-purple-100"
                     }`}
                   >
                     <span>💭 深度思考</span>
@@ -706,7 +700,7 @@ export function PinChatView({
                       className={`mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap font-sans leading-relaxed border-t pt-1 ${
                         isLight
                           ? "border-purple-200/80 text-purple-900/80"
-                          : "border-purple-500/10 text-purple-200/80"
+                          : "border-purple-500/15 text-purple-200/80"
                       }`}
                     >
                       {m.reasoning}
@@ -719,31 +713,25 @@ export function PinChatView({
               <div
                 className={`relative max-w-[92%] rounded-2xl px-3 py-2 leading-relaxed break-words select-text transition-colors ${
                   isUser
-                    ? "bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-tr-xs shadow-md shadow-indigo-500/15"
-                    : isLight
-                      ? "bg-white border border-slate-200/85 text-slate-800 rounded-tl-xs shadow-xs"
-                      : "bg-white/[0.05] border border-white/10 text-zinc-100 rounded-tl-xs shadow"
+                    ? "pin-vision-bubble-user rounded-tr-xs"
+                    : `pin-vision-bubble-ai rounded-tl-xs ${isLight ? "text-slate-800" : "text-zinc-100"}`
                 }`}
               >
                 {/* 纯文本与粗体解析渲染 */}
                 <div className="whitespace-pre-wrap">
                   {renderMarkdownContent(m.content, isLight)}
                   {isStreamingMsg && (
-                    <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-indigo-500 animate-pulse align-middle" />
+                    <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--accent)] animate-pulse align-middle" />
                   )}
                 </div>
 
                 {/* 提示缺少 Key 时的直达按钮 */}
                 {!isUser && m.content.includes("未检测到") && (
-                  <div
-                    className={`mt-2 pt-2 border-t flex items-center gap-2 ${
-                      isLight ? "border-slate-100" : "border-white/10"
-                    }`}
-                  >
+                  <div className="mt-2 pt-2 border-t border-[var(--g-hairline)] flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => void cmdShowMainWindow()}
-                      className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-2.5 py-1 text-[10.5px] text-white font-medium cursor-pointer transition shadow-xs flex items-center gap-1"
+                      className="rounded-lg bg-[var(--accent)] hover:brightness-110 px-2.5 py-1 text-[10.5px] text-white font-medium cursor-pointer transition shadow-xs flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]"
                     >
                       <span>⚙️ 前往主窗口配置 Key</span>
                     </button>
@@ -754,10 +742,10 @@ export function PinChatView({
                 <div
                   className={`absolute -bottom-2.5 ${
                     isUser ? "left-1" : "right-1"
-                  } flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] opacity-0 shadow transition group-hover:opacity-100 ${
+                  } flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] opacity-0 shadow-md transition group-hover:opacity-100 border ${
                     isLight
-                      ? "bg-white border border-slate-200 text-slate-600 shadow-md"
-                      : "bg-black/80 border border-white/10 text-zinc-400 backdrop-blur"
+                      ? "bg-white/95 border-slate-200 text-slate-600"
+                      : "bg-slate-900/90 border-white/15 text-zinc-300 backdrop-blur"
                   }`}
                 >
                   <button
@@ -786,12 +774,8 @@ export function PinChatView({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 底部输入与操作条：浮岛式晶体输入框 */}
-      <div
-        className={`shrink-0 border-t px-3 py-2.5 transition-colors ${
-          isLight ? "border-slate-200/70 bg-slate-50/75 backdrop-blur-md" : "border-white/[0.06] bg-black/30 backdrop-blur-md"
-        }`}
-      >
+      {/* 底部输入与操作条：Vision 液态玻璃输入舱 */}
+      <div className="shrink-0 border-t border-[var(--g-hairline)] px-3 py-2.5 transition-colors">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -801,7 +785,7 @@ export function PinChatView({
           }}
           className="flex items-end gap-2"
         >
-          <div className="relative flex flex-1 items-center">
+          <div className="pin-vision-composer relative flex flex-1 items-center rounded-2xl">
             <textarea
               ref={textareaRef}
               rows={1}
@@ -820,10 +804,10 @@ export function PinChatView({
                   ? `[${PIN_PROMPT_PRESETS.find((p) => p.id === activePresetId)?.label}] 输入内容，Enter 发送...`
                   : "输入问题或指令，按 Enter 发送 (Shift+Enter 换行)..."
               }
-              className={`scrollbar-none w-full resize-none rounded-xl px-3 py-2 text-xs outline-none transition-all ${
+              className={`scrollbar-none w-full resize-none bg-transparent px-3 py-2 text-xs outline-none ${
                 isLight
-                  ? "border border-slate-200/90 bg-white text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 shadow-2xs"
-                  : "border border-white/10 bg-white/[0.04] text-zinc-100 placeholder-zinc-500 focus:border-indigo-500/60 focus:bg-white/[0.08] focus:ring-2 focus:ring-indigo-500/25"
+                  ? "text-slate-800 placeholder-slate-400"
+                  : "text-zinc-100 placeholder-zinc-500"
               }`}
               data-testid="pin-chat-input"
             />
@@ -833,7 +817,7 @@ export function PinChatView({
             <button
               type="button"
               onClick={handleStop}
-              className="rounded-xl bg-rose-600 hover:bg-rose-500 px-3.5 py-2 text-xs font-semibold text-white transition-all cursor-pointer shrink-0 shadow-xs active:scale-95"
+              className="rounded-xl bg-rose-600 hover:bg-rose-500 px-3.5 py-2 text-xs font-semibold text-white transition-all cursor-pointer shrink-0 shadow-xs active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/50"
               title="中断当前生成"
               data-testid="pin-chat-stop"
             >
@@ -843,7 +827,7 @@ export function PinChatView({
             <button
               type="submit"
               disabled={!input.trim()}
-              className="rounded-xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 hover:from-indigo-500 hover:to-violet-500 px-3.5 py-2 text-xs font-semibold text-white transition-all shadow-xs shadow-indigo-500/25 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0 flex items-center gap-1 active:scale-95"
+              className="rounded-xl bg-gradient-to-r from-[var(--accent)] to-indigo-600 hover:brightness-110 px-3.5 py-2 text-xs font-semibold text-white transition-all shadow-sm shadow-sky-500/20 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0 flex items-center gap-1 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]"
               title="发送消息 (Enter)"
               data-testid="pin-chat-send"
             >

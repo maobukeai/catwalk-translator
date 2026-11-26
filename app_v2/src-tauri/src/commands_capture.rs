@@ -877,10 +877,19 @@ pub async fn cmd_region_ocr_translate(
         .ok()
         .map(|s| crate::translator::glossary_from_settings(&s.custom_dict_items))
         .unwrap_or_default();
+    let options = crate::commands::phrase_options_from_state(&state);
 
     let phrases: Vec<String> = overlay_blocks.iter().map(|b| b.original.clone()).collect();
     let translations = pipeline
-        .translate_phrases(&phrases, &preset, llm_config.as_ref(), &glossary)
+        .translate_phrases_styled_with_options(
+            &phrases,
+            &preset,
+            llm_config.as_ref(),
+            None,
+            &glossary,
+            None,
+            &options,
+        )
         .await;
 
     for (block, tr) in overlay_blocks.iter_mut().zip(translations.iter()) {
@@ -1014,15 +1023,17 @@ pub async fn cmd_image_ocr_translate(
             });
         }
     }
+    let options = crate::commands::phrase_options_from_state(&state);
     let phrases: Vec<String> = merged_blocks.iter().map(|b| b.text.clone()).collect();
     let translations = pipeline
-        .translate_phrases_styled(
+        .translate_phrases_styled_with_options(
             &phrases,
             &preset,
             llm_config.as_ref(),
             style.as_deref(),
             &glossary,
             None,
+            &options,
         )
         .await;
 
@@ -1137,8 +1148,9 @@ pub async fn cmd_begin_capture(
         IS_OVERLAY_ACTIVE.store(true, Ordering::SeqCst);
     }
 
-    // 0. 采样前台窗口识别 3D/CG 软件（必须在隐藏主窗口之前，此时前台即用户正在使用的软件）
-    let detected_app = crate::app_detect::detect_foreground_app();
+    // 0. 隐藏前预采样一次（全局热键触发时本窗口原本未聚焦，可提前命中前台软件）；
+    // 若用户点击主窗口按钮触发截图，隐藏前前台是本应用自身，需在隐藏后再次读取底层窗口。
+    let pre_hide_detected = crate::app_detect::detect_foreground_app();
 
     // Save the virtual desktop origin used to convert UIA desktop rectangles
     // into the screenshot bitmap's coordinate space.
@@ -1168,22 +1180,27 @@ pub async fn cmd_begin_capture(
     // the foreign foreground window remains unchanged. Never inspect our own
     // UI tree; image OCR stays the fallback for either case.
     #[cfg(target_os = "windows")]
-    {
+    let target_hwnd_val: isize = {
         use windows::Win32::System::Threading::GetCurrentProcessId;
         use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
         let hwnd = unsafe { GetForegroundWindow() };
         let mut target_pid = 0;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut target_pid)); }
         let own_pid = unsafe { GetCurrentProcessId() };
-        CAPTURE_TARGET_HWND.store(
-            if !hwnd.0.is_null() && target_pid != 0 && target_pid != own_pid {
-                hwnd.0 as isize
-            } else {
-                0
-            },
-            Ordering::SeqCst,
-        );
-    }
+        let resolved = if !hwnd.0.is_null() && target_pid != 0 && target_pid != own_pid {
+            hwnd.0 as isize
+        } else {
+            0
+        };
+        CAPTURE_TARGET_HWND.store(resolved, Ordering::SeqCst);
+        resolved
+    };
+    #[cfg(not(target_os = "windows"))]
+    let target_hwnd_val: isize = 0;
+    let detected_app = (target_hwnd_val != 0)
+        .then(|| crate::app_detect::detect_window_app(target_hwnd_val))
+        .flatten()
+        .or(pre_hide_detected);
 
     #[cfg(target_os = "windows")]
     {
@@ -1262,6 +1279,25 @@ pub async fn cmd_show_overlay(window: tauri::WebviewWindow) -> Result<(), String
         let _ = window.set_position(tauri::PhysicalPosition::new(vx, vy));
         let _ = window.set_size(tauri::PhysicalSize::new(vw as u32, vh as u32));
         let _ = window.show();
+        // 跨屏移动跨越不同 DPI 显示器时，Windows 会触发 WM_DPICHANGED 并改写窗口尺寸；
+        // show() 之后再用物理 SetWindowPos 校准一次，确保全虚拟桌面像素范围精确铺满。
+        if let Ok(hwnd) = window.hwnd() {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+            };
+            unsafe {
+                let _ = SetWindowPos(
+                    HWND(hwnd.0 as _),
+                    HWND_TOPMOST,
+                    vx,
+                    vy,
+                    vw,
+                    vh,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                );
+            }
+        }
         // Showing/resizing a window can recreate its DWM backdrop. Clear it
         // again after the full-screen overlay is visible so the desktop around
         // an in-place translation stays sharp instead of turning acrylic-blurry.
@@ -1524,6 +1560,18 @@ pub fn ocr_line_at(
     px: i32,
     py: i32,
 ) -> Option<(String, i32, i32, i32, i32)> {
+    ocr_line_at_with_options(bmp_data, bmp_w, bmp_h, px, py, None, None)
+}
+
+pub fn ocr_line_at_with_options(
+    bmp_data: &[u8],
+    bmp_w: u32,
+    bmp_h: u32,
+    px: i32,
+    py: i32,
+    ocr_engine: Option<&str>,
+    ocr_filter: Option<&[String]>,
+) -> Option<(String, i32, i32, i32, i32)> {
     // Neighborhood around the cursor (physical px, clamped)
     let half_w = 300i32;
     let half_h = 150i32;
@@ -1539,12 +1587,14 @@ pub fn ocr_line_at(
     };
     let crop_bmp = crate::ocr::crop_bmp(bmp_data, bmp_w, bmp_h, crop_rect)?;
 
-    let ocr_result = crate::ocr::execute_native_ocr(&crop_bmp).unwrap_or(OcrResult { blocks: vec![] });
-    if ocr_result.blocks.is_empty() {
+    let ocr_result = crate::ocr::execute_native_ocr_with_engine(&crop_bmp, ocr_engine)
+        .unwrap_or(OcrResult { blocks: vec![] });
+    let usable = retain_usable_ocr_with_context(ocr_result.blocks);
+    if usable.is_empty() {
         return None;
     }
 
-    let lines = LineClusterer::cluster_into_lines(ocr_result.blocks, 8.0);
+    let lines = LineClusterer::cluster_into_lines(usable, 8.0);
     let blocks: Vec<TextBlock> = lines
         .into_iter()
         .filter(|l| !l.is_empty())
@@ -1552,6 +1602,10 @@ pub fn ocr_line_at(
         .filter(|b| !b.text.trim().is_empty())
         .collect();
     let mut blocks = WordMerger::merge_prose_rows(blocks);
+    if let Some(rules) = ocr_filter {
+        let compiled = compile_ocr_filter_rules(rules);
+        blocks.retain(|b| !ocr_text_filtered_compiled(&compiled, &b.text));
+    }
     if blocks.is_empty() {
         return None;
     }
@@ -1589,6 +1643,7 @@ pub fn ocr_line_at(
 /// Overlay 冻结帧上的悬停取词:找光标下的文字行并返回逻辑坐标矩形。
 #[tauri::command]
 pub async fn cmd_hover_lookup(
+    state: State<'_, AppState>,
     x: f64,
     y: f64,
     scale_factor: Option<f64>,
@@ -1599,6 +1654,13 @@ pub async fn cmd_hover_lookup(
         Some(c) => c,
         None => return Ok(None),
     };
+
+    let (ocr_engine, ocr_filter) = state
+        .settings
+        .lock()
+        .ok()
+        .map(|s| (s.ocr_engine.clone(), ocr_filter_from_settings(&s)))
+        .unwrap_or((None, None));
 
     let fallback_sf = scale_factor.unwrap_or(stored_scale);
     let sf_x = overlay_width
@@ -1613,7 +1675,21 @@ pub async fn cmd_hover_lookup(
     let px = (x * sf_x).round() as i32;
     let py = (y * sf_y).round() as i32;
 
-    let Some((text, rx, ry, rw, rh)) = ocr_line_at(&bmp_data, bmp_w, bmp_h, px, py) else {
+    let hit = tauri::async_runtime::spawn_blocking(move || {
+        ocr_line_at_with_options(
+            &bmp_data,
+            bmp_w,
+            bmp_h,
+            px,
+            py,
+            ocr_engine.as_deref(),
+            ocr_filter.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Hover OCR task join failed: {}", e))?;
+
+    let Some((text, rx, ry, rw, rh)) = hit else {
         return Ok(None);
     };
 
@@ -1632,6 +1708,7 @@ pub async fn cmd_hover_lookup(
 /// return the tight logical rect — so users never drag precise boxes.
 #[tauri::command]
 pub async fn cmd_snap_region(
+    state: State<'_, AppState>,
     x: f64,
     y: f64,
     scale_factor: Option<f64>,
@@ -1642,6 +1719,13 @@ pub async fn cmd_snap_region(
         Some(c) => c,
         None => return Ok(None),
     };
+
+    let (ocr_engine, ocr_filter) = state
+        .settings
+        .lock()
+        .ok()
+        .map(|s| (s.ocr_engine.clone(), ocr_filter_from_settings(&s)))
+        .unwrap_or((None, None));
 
     let fallback_sf = scale_factor.unwrap_or(stored_scale);
     let sf_x = overlay_width
@@ -1677,23 +1761,36 @@ pub async fn cmd_snap_region(
         None => return Ok(None),
     };
 
-    let ocr_result =
-        crate::ocr::execute_native_ocr(&crop_bmp).unwrap_or(OcrResult { blocks: vec![] });
-    if ocr_result.blocks.is_empty() {
-        return Ok(None);
-    }
+    let blocks = tauri::async_runtime::spawn_blocking(move || -> Vec<TextBlock> {
+        let ocr_result = crate::ocr::execute_native_ocr_with_engine(&crop_bmp, ocr_engine.as_deref())
+            .unwrap_or(OcrResult { blocks: vec![] });
+        let usable = retain_usable_ocr_with_context(ocr_result.blocks);
+        if usable.is_empty() {
+            return vec![];
+        }
 
-    let lines = LineClusterer::cluster_into_lines(ocr_result.blocks, 8.0);
-    let blocks: Vec<TextBlock> = lines
-        .into_iter()
-        .filter(|l| !l.is_empty())
-        .flat_map(|l| WordMerger::merge_line_segments(l, 20.0))
-        .filter(|b| !b.text.trim().is_empty())
-        .collect();
-    let mut blocks = WordMerger::merge_prose_rows(blocks);
+        let lines = LineClusterer::cluster_into_lines(usable, 8.0);
+        let blocks: Vec<TextBlock> = lines
+            .into_iter()
+            .filter(|l| !l.is_empty())
+            .flat_map(|l| WordMerger::merge_line_segments(l, 20.0))
+            .filter(|b| !b.text.trim().is_empty())
+            .collect();
+        let mut blocks = WordMerger::merge_prose_rows(blocks);
+        if let Some(rules) = ocr_filter {
+            let compiled = compile_ocr_filter_rules(&rules);
+            blocks.retain(|b| !ocr_text_filtered_compiled(&compiled, &b.text));
+        }
+        blocks
+    })
+    .await
+    .map_err(|e| format!("Snap OCR task join failed: {}", e))?;
+
     if blocks.is_empty() {
         return Ok(None);
     }
+
+    let mut blocks = blocks;
 
     // Blocks are positioned relative to the crop; make them absolute physical.
     for b in blocks.iter_mut() {

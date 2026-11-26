@@ -154,18 +154,28 @@ pub fn match_preset(exe: &str, title: &str) -> Option<DetectedApp> {
 /// 采样当前前台窗口并匹配（仅 Windows；其他平台返回 None）。
 #[cfg(target_os = "windows")]
 pub fn detect_foreground_app() -> Option<DetectedApp> {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    let hwnd = unsafe { GetForegroundWindow() };
+    detect_window_app(hwnd.0 as isize)
+}
+
+#[cfg(target_os = "windows")]
+pub fn detect_window_app(hwnd_raw: isize) -> Option<DetectedApp> {
     use windows::core::PWSTR;
-    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Foundation::{CloseHandle, HWND};
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, GetWindowThreadProcessId};
+
+    if hwnd_raw == 0 {
+        return None;
+    }
 
     unsafe {
-        let hwnd = GetForegroundWindow();
+        let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
         if hwnd.0.is_null() {
             return None;
         }
@@ -199,6 +209,11 @@ pub fn detect_foreground_app() -> Option<DetectedApp> {
 
 #[cfg(not(target_os = "windows"))]
 pub fn detect_foreground_app() -> Option<DetectedApp> {
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn detect_window_app(_hwnd_raw: isize) -> Option<DetectedApp> {
     None
 }
 

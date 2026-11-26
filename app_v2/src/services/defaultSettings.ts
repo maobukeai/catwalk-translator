@@ -364,7 +364,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hotkey: 'F4',
   spotlightHotkey: 'Alt+Space',
   clipboardHotkey: 'Ctrl+Shift+C',
-  toggleWindowHotkey: 'Alt+W',
+  toggleWindowHotkey: 'Alt+Q',
   quickWindowHotkey: 'Alt+W',
   captureHotkeyEnabled: true,
   spotlightHotkeyEnabled: false,

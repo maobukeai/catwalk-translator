@@ -33,6 +33,7 @@ import {
 } from '../../../services/tauri';
 import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
+import { GlassSelect } from '../../Common/GlassSelect';
 import type { UserGlossaryEntry, GlossaryImportSummary, AnkiCheckResult } from '../../../services/types';
 
 export const GlossaryPanel: React.FC = () => {
@@ -344,10 +345,8 @@ export const GlossaryPanel: React.FC = () => {
     <div className="space-y-6">
       {/* 1. 头部介绍与术语库能力说明 */}
       <div
-        className={`p-5 rounded-2xl border transition-colors ${
-          isLight
-            ? 'bg-white/70 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800'
-            : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+        className={`settings-glass-card p-5 ${
+          isLight ? 'text-slate-800' : 'text-zinc-100'
         }`}
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4 border-slate-200 dark:border-white/10">
@@ -465,7 +464,7 @@ export const GlossaryPanel: React.FC = () => {
                   className={`px-2.5 py-0.5 rounded-md font-medium transition cursor-pointer ${
                     importMode === 'merge'
                       ? 'bg-white dark:bg-zinc-700 text-blue-600 dark:text-blue-400 shadow-xs font-bold'
-                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200'
                   }`}
                 >
                   增量合并 (Merge)
@@ -476,7 +475,7 @@ export const GlossaryPanel: React.FC = () => {
                   className={`px-2.5 py-0.5 rounded-md font-medium transition cursor-pointer ${
                     importMode === 'replace'
                       ? 'bg-white dark:bg-zinc-700 text-rose-600 dark:text-rose-400 shadow-xs font-bold'
-                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900'
+                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200'
                   }`}
                   title="清空当前所有词条，完全替换为新导入内容"
                 >
@@ -570,10 +569,8 @@ export const GlossaryPanel: React.FC = () => {
 
       {/* 3. 词库浏览与管理操作栏 */}
       <div
-        className={`p-5 rounded-2xl border transition-colors space-y-4 ${
-          isLight
-            ? 'bg-white/70 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800'
-            : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+        className={`settings-glass-card p-5 space-y-4 ${
+          isLight ? 'text-slate-800' : 'text-zinc-100'
         }`}
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -600,22 +597,16 @@ export const GlossaryPanel: React.FC = () => {
 
             {/* 分类筛选器 */}
             {categories.length > 0 && (
-              <select
+              <GlassSelect
                 value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className={`px-3 py-1.5 rounded-xl text-xs border outline-none font-medium cursor-pointer ${
-                  isLight
-                    ? 'bg-slate-50 border-slate-300 text-slate-700'
-                    : 'bg-zinc-800/60 border-white/10 text-zinc-200'
-                }`}
-              >
-                <option value="all">所有分类 ({entries.length})</option>
-                {categories.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedCategory}
+                size="sm"
+                menuMinWidth={160}
+                options={[
+                  { value: 'all', label: `所有分类 (${entries.length})` },
+                  ...categories.map((c) => ({ value: c, label: c })),
+                ]}
+              />
             )}
           </div>
 
@@ -677,11 +668,11 @@ export const GlossaryPanel: React.FC = () => {
                       : 'bg-zinc-800/80 border-white/10 text-zinc-300'
                   }`}
                 >
-                  <th className="py-2.5 px-4 w-1/3">原词 (Source)</th>
-                  <th className="py-2.5 px-4 w-1/3">译文 (Target)</th>
-                  <th className="py-2.5 px-4 w-28">分类</th>
-                  <th className="py-2.5 px-4">备注</th>
-                  <th className="py-2.5 px-4 w-20 text-right">操作</th>
+                  <th className="py-2.5 px-4 w-1/3 whitespace-nowrap">原词 (Source)</th>
+                  <th className="py-2.5 px-4 w-1/3 whitespace-nowrap">译文 (Target)</th>
+                  <th className="py-2.5 px-4 w-28 whitespace-nowrap">分类</th>
+                  <th className="py-2.5 px-4 whitespace-nowrap">备注</th>
+                  <th className="py-2.5 px-4 w-20 text-right whitespace-nowrap">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-white/5">
@@ -767,10 +758,8 @@ export const GlossaryPanel: React.FC = () => {
 
       {/* 4. AnkiConnect 本地同步联动卡片 */}
       <div
-        className={`p-5 rounded-2xl border transition-colors space-y-4 ${
-          isLight
-            ? 'bg-white/70 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800'
-            : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+        className={`settings-glass-card p-5 space-y-4 ${
+          isLight ? 'text-slate-800' : 'text-zinc-100'
         }`}
       >
         <div className="flex items-center justify-between border-b pb-3 border-slate-200 dark:border-white/10">

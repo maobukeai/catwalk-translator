@@ -182,6 +182,7 @@ const globalInvokeFn = vi.fn(async (cmd: string, args?: any) => {
     case 'cmd_hide_main_window':
     case 'cmd_open_quick_window':
     case 'cmd_set_pin_always_on_top':
+    case 'cmd_set_window_blur':
     case 'cmd_save_history':
     case 'cmd_add_history':
     case 'cmd_delete_history':

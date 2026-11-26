@@ -259,6 +259,51 @@ export function estimateDenseRowFontHeights(
       }
     }
   }
+  // Stacked sidebar / menu columns share the same left edge and typography,
+  // yet DBNet padding or absorbed UI icons can inflate some rows while leaving
+  // neighbours smaller. Normalize coherent vertical menu columns (>= 3 items)
+  // without touching isolated headings or mixed-scale pairs.
+  const rowNormalized = new Set(rows.filter((r) => r.length >= 2).flat());
+  const colOrder = blocks
+    .map((_, i) => i)
+    .filter((i) =>
+      !rowNormalized.has(i)
+      && blocks[i].logicalX !== undefined
+      && !blocks[i].original.includes('\n')
+      && blocks[i].original.replace(/\s/g, '').length <= 24
+      && (blocks[i].logicalW ?? 0) <= 220
+      && heights[i] <= 36,
+    )
+    .sort((a, b) => blocks[a].logicalY - blocks[b].logicalY
+      || (blocks[a].logicalX ?? 0) - (blocks[b].logicalX ?? 0));
+  const columns: number[][] = [];
+  for (const index of colOrder) {
+    const col = columns.find((indices) => {
+      const prev = blocks[indices[indices.length - 1]];
+      const curr = blocks[index];
+      if (Math.abs((prev.logicalX ?? 0) - (curr.logicalX ?? 0)) > 24) return false;
+      const gapY = curr.logicalY - prev.logicalY;
+      const refH = Math.max(heights[indices[indices.length - 1]], heights[index]);
+      if (gapY <= 0 || gapY > refH * 3.5) return false;
+      const colHeights = [...indices.map((i) => heights[i]), heights[index]];
+      const minH = Math.min(...colHeights);
+      const maxH = Math.max(...colHeights);
+      return maxH / Math.max(1, minH) <= 1.55;
+    });
+    if (col) col.push(index);
+    else columns.push([index]);
+  }
+  for (const col of columns) {
+    if (col.length < 3) continue;
+    const sortedHeights = col.map((i) => heights[i]).sort((a, b) => a - b);
+    const reference = sortedHeights[Math.floor((sortedHeights.length - 1) / 2)];
+    for (const index of col) {
+      normalized[index] = Math.min(
+        Math.max(normalized[index], reference * 0.85),
+        reference * 1.15,
+      );
+    }
+  }
   // A paragraph is commonly detected as one box per physical line. DBNet
   // padding may differ by several pixels between those lines even though the
   // source font is uniform. Normalize only neighbouring long rows with the

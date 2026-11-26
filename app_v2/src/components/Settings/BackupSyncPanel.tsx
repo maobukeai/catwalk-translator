@@ -25,6 +25,9 @@ import {
 } from 'lucide-react';
 import { useAppTheme } from '../../hooks/useAppTheme';
 import { useSettingsStore } from '../../stores/useSettingsStore';
+import { GlassSelect } from '../Common/GlassSelect';
+import { useSlidingIndicator } from '../../hooks/useSlidingIndicator';
+import { SlidingHighlight } from '../Common/SlidingHighlight';
 import {
   isTauri,
   cmdExportBackupBase64,
@@ -468,10 +471,8 @@ export const BackupSyncPanel: React.FC = () => {
   };
 
   // ── 样式工具 ──
-  const cardCls = `p-5 space-y-4 rounded-2xl border transition-colors ${
-    isLight
-      ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800'
-      : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+  const cardCls = `settings-glass-card p-5 space-y-4 ${
+    isLight ? 'text-slate-800' : 'text-zinc-100'
   }`;
   const subCardCls = `rounded-xl border p-3.5 text-xs ${
     isLight ? 'bg-slate-50 border-slate-200' : 'bg-zinc-950/50 border-white/[0.05]'
@@ -499,6 +500,21 @@ export const BackupSyncPanel: React.FC = () => {
       className={`h-3.5 w-3.5 animate-spin ${busy === key ? 'opacity-100' : 'opacity-0'}`}
     />
   );
+
+  const activePresetKey =
+    currentIncludedItems.length === 5
+      ? 'all'
+      : currentIncludedItems.length === 3 &&
+          currentIncludedItems.includes('settings') &&
+          currentIncludedItems.includes('api_keys') &&
+          currentIncludedItems.includes('custom_dict')
+        ? 'recommended'
+        : currentIncludedItems.length === 2 &&
+            currentIncludedItems.includes('settings') &&
+            currentIncludedItems.includes('custom_dict')
+          ? 'safe'
+          : null;
+  const presetSlider = useSlidingIndicator<HTMLDivElement>(activePresetKey);
 
   return (
     <div className="space-y-6">
@@ -542,16 +558,26 @@ export const BackupSyncPanel: React.FC = () => {
             </p>
           </div>
 
-          {/* 快捷预设按键 */}
-          <div className="flex items-center gap-1.5 flex-wrap">
+          {/* 快捷预设按键（带弹性滑动高亮） */}
+          <div ref={presetSlider.containerRef} className="relative flex items-center gap-1.5 flex-wrap">
+            <SlidingHighlight
+              rect={presetSlider.rect}
+              isReady={presetSlider.isReady}
+              variant="glass"
+              radiusClass="rounded-lg"
+              testId="backup-preset-slider"
+            />
             <button
+              ref={presetSlider.registerItem('all')}
               type="button"
               onClick={() => handleApplyPreset('all')}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-medium transition-all cursor-pointer ${
-                currentIncludedItems.length === 5
-                  ? isLight
-                    ? 'bg-cyan-100 text-cyan-800 font-bold border border-cyan-300'
-                    : 'bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-400/40'
+              className={`relative z-10 px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                activePresetKey === 'all'
+                  ? presetSlider.isReady
+                    ? 'border border-transparent font-bold text-[var(--accent-text)]'
+                    : isLight
+                      ? 'bg-cyan-100 text-cyan-800 font-bold border border-cyan-300'
+                      : 'bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-400/40'
                   : isLight
                     ? 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
                     : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-white/10'
@@ -560,16 +586,16 @@ export const BackupSyncPanel: React.FC = () => {
               全选（完整）
             </button>
             <button
+              ref={presetSlider.registerItem('recommended')}
               type="button"
               onClick={() => handleApplyPreset('recommended')}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-medium transition-all cursor-pointer ${
-                currentIncludedItems.length === 3 &&
-                currentIncludedItems.includes('settings') &&
-                currentIncludedItems.includes('api_keys') &&
-                currentIncludedItems.includes('custom_dict')
-                  ? isLight
-                    ? 'bg-cyan-100 text-cyan-800 font-bold border border-cyan-300'
-                    : 'bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-400/40'
+              className={`relative z-10 px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                activePresetKey === 'recommended'
+                  ? presetSlider.isReady
+                    ? 'border border-transparent font-bold text-[var(--accent-text)]'
+                    : isLight
+                      ? 'bg-cyan-100 text-cyan-800 font-bold border border-cyan-300'
+                      : 'bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-400/40'
                   : isLight
                     ? 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
                     : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-white/10'
@@ -579,15 +605,16 @@ export const BackupSyncPanel: React.FC = () => {
               推荐（排除历史）
             </button>
             <button
+              ref={presetSlider.registerItem('safe')}
               type="button"
               onClick={() => handleApplyPreset('safe')}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-medium transition-all cursor-pointer ${
-                currentIncludedItems.length === 2 &&
-                currentIncludedItems.includes('settings') &&
-                currentIncludedItems.includes('custom_dict')
-                  ? isLight
-                    ? 'bg-amber-100 text-amber-800 font-bold border border-amber-300'
-                    : 'bg-amber-500/20 text-amber-300 font-bold border border-amber-400/40'
+              className={`relative z-10 px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                activePresetKey === 'safe'
+                  ? presetSlider.isReady
+                    ? 'border border-transparent font-bold text-[var(--accent-text)]'
+                    : isLight
+                      ? 'bg-amber-100 text-amber-800 font-bold border border-amber-300'
+                      : 'bg-amber-500/20 text-amber-300 font-bold border border-amber-400/40'
                   : isLight
                     ? 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
                     : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-white/10'
@@ -772,15 +799,16 @@ export const BackupSyncPanel: React.FC = () => {
           </div>
           <div>
             <label className={labelCls}>云端保留天数</label>
-            <select
-              value={wdDays}
-              onChange={(e) => setWdDays(Number(e.target.value))}
-              className={inputCls}
-            >
-              {CLOUD_DAYS_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+            <GlassSelect
+              value={String(wdDays)}
+              onChange={(val) => setWdDays(Number(val))}
+              fullWidth
+              size="md"
+              options={CLOUD_DAYS_OPTIONS.map((o) => ({
+                value: String(o.value),
+                label: o.label,
+              }))}
+            />
           </div>
         </div>
 

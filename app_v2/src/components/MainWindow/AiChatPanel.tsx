@@ -13,7 +13,6 @@ import {
   AlertCircle,
   X,
   SquarePen,
-  MessageSquare,
   ChevronDown,
   BrainCircuit,
   RotateCcw,
@@ -30,7 +29,9 @@ import {
 } from 'lucide-react';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { useAppTheme } from '../../hooks/useAppTheme';
+import { useSlidingIndicator } from '../../hooks/useSlidingIndicator';
 import { GlassSelect } from '../Common/GlassSelect';
+import { SlidingHighlight } from '../Common/SlidingHighlight';
 import { CascadingModelSelect } from './CascadingModelSelect';
 import { resolveVendor, resolveModelLabel } from '../../services/defaultSettings';
 import type { ChatMessage, LlmConfig } from '../../services/types';
@@ -155,8 +156,132 @@ function sessionDisplayTime(ts: number): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+type ContentSegment =
+  | { type: 'text'; content: string }
+  | { type: 'code'; lang: string; content: string };
+
+function splitCodeFences(text: string): ContentSegment[] {
+  const segments: ContentSegment[] = [];
+  const fenceRegex = /```([a-zA-Z0-9_+-]*)[ \t]*\r?\n([\s\S]*?)(?:```|$)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = fenceRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', content: text.slice(lastIndex, match.index) });
+    }
+    const rawCode = match[2].replace(/\r?\n$/, '');
+    segments.push({
+      type: 'code',
+      lang: match[1] || 'code',
+      content: rawCode,
+    });
+    lastIndex = match.index + match[0].length;
+    if (!match[0].endsWith('```')) break;
+  }
+
+  if (lastIndex < text.length) {
+    segments.push({ type: 'text', content: text.slice(lastIndex) });
+  }
+  return segments.length > 0 ? segments : [{ type: 'text', content: text }];
+}
+
+function renderInlineTokens(text: string, isLight: boolean): React.ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((part, pIdx) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+      return (
+        <span
+          key={pIdx}
+          className={`font-bold px-1.5 py-0.5 rounded font-mono mx-0.5 text-[0.92em] ${
+            isLight
+              ? 'text-blue-700 bg-blue-500/10 border border-blue-300/50'
+              : 'text-sky-300 bg-sky-500/15 border border-sky-400/30'
+          }`}
+        >
+          {part.slice(2, -2)}
+        </span>
+      );
+    }
+    if (part.startsWith('`') && part.endsWith('`') && part.length >= 3) {
+      return (
+        <code
+          key={pIdx}
+          className={`font-mono px-1.5 py-0.5 rounded mx-0.5 text-[0.88em] ${
+            isLight
+              ? 'bg-slate-900/[0.06] text-slate-800 border border-slate-900/10'
+              : 'bg-white/10 text-sky-200 border border-white/10'
+          }`}
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return part;
+  });
+}
+
+function CodeBlockCard({
+  lang,
+  code,
+  isLight,
+}: {
+  lang: string;
+  code: string;
+  isLight: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const handleCopyCode = () => {
+    navigator.clipboard?.writeText?.(code)?.catch?.(() => {});
+    setCopied(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div
+      className={`my-2 rounded-xl overflow-hidden font-mono text-[12px] border shadow-xs ${
+        isLight ? 'bg-[#1e293b] text-slate-100 border-slate-700/60' : 'bg-[#0b1220] text-slate-100 border-white/10'
+      }`}
+    >
+      <div className="flex items-center justify-between px-3 py-1.5 bg-white/[0.06] border-b border-white/[0.08] text-[10.5px] text-slate-300 select-none">
+        <span className="uppercase tracking-wider font-semibold">{lang || 'code'}</span>
+        <button
+          type="button"
+          onClick={handleCopyCode}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md hover:bg-white/10 transition cursor-pointer text-slate-200"
+          title="复制代码片段"
+        >
+          {copied ? (
+            <>
+              <Check className="h-3 w-3 text-emerald-400" />
+              <span className="text-emerald-300 font-semibold">已复制</span>
+            </>
+          ) : (
+            <>
+              <Copy className="h-3 w-3" />
+              <span>复制代码</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="m-0 p-3 overflow-x-auto scrollbar-thin leading-relaxed select-text">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
 /**
- * 格式化简单 Markdown（将 **bold** 渲染为高亮节点，将 - 渲染为列表项）。
+ * 格式化轻量 Markdown（围栏代码块、行内代码、**bold** 高亮与 - 列表项）。
  * React.memo：流式输出期间 delta 只重渲染正在生成的消息，
  * 其余已完成消息 props 不变直接跳过（30 会话列表不再全量重算）。
  */
@@ -173,7 +298,7 @@ const FormattedContent = React.memo(function FormattedContent({
   fontSize?: 'small' | 'medium' | 'large';
   isCompact?: boolean;
 }) {
-  const lines = text.split('\n');
+  const segments = splitCodeFences(text);
   const sizeClass =
     fontSize === 'small'
       ? 'text-[12px] leading-snug'
@@ -185,54 +310,47 @@ const FormattedContent = React.memo(function FormattedContent({
 
   const nodes = (
     <div className={`${spacingClass} select-text ${sizeClass}`}>
-      {lines.map((line, idx) => {
-        const trimmed = line.trim();
-        const isBullet = trimmed.startsWith('- ') || trimmed.startsWith('* ');
-        const contentStr = isBullet ? trimmed.substring(2) : line;
-
-        const parts = contentStr.split(/(\*\*.*?\*\*)/g);
-        const lineNodes = parts.map((part, pIdx) => {
-          if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
-            return (
-              <span
-                key={pIdx}
-                className={`font-bold px-1.5 py-0.5 rounded font-mono mx-0.5 text-[0.92em] ${
-                  isLight
-                    ? 'text-blue-700 bg-blue-500/10 border border-blue-300/50'
-                    : 'text-sky-300 bg-sky-500/15 border border-sky-400/30'
-                }`}
-              >
-                {part.slice(2, -2)}
-              </span>
-            );
-          }
-          return part;
-        });
-
-        if (isBullet) {
-          return (
-            <div key={idx} className={`flex items-start ${isCompact ? 'space-x-1.5 my-0.5' : 'space-x-2 my-1'} pl-1`}>
-              <span className="shrink-0 mt-0.5 text-[0.85em]" style={{ color: 'var(--accent-text)' }}>•</span>
-              <span className="flex-1">{lineNodes}</span>
-            </div>
-          );
+      {segments.map((seg, sIdx) => {
+        if (seg.type === 'code') {
+          return <CodeBlockCard key={`code-${sIdx}`} lang={seg.lang} code={seg.content} isLight={isLight} />;
         }
 
+        const lines = seg.content.split('\n');
         return (
-          <div
-            key={idx}
-            className={
-              trimmed === ''
-                ? isCompact ? 'h-1.5' : 'h-2'
-                : fontSize === 'small'
-                ? 'min-h-[1.15rem]'
-                : fontSize === 'large'
-                ? 'min-h-[1.65rem]'
-                : 'min-h-[1.35rem]'
-            }
-          >
-            {lineNodes}
-          </div>
+          <React.Fragment key={`txt-${sIdx}`}>
+            {lines.map((line, idx) => {
+              const trimmed = line.trim();
+              const isBullet = trimmed.startsWith('- ') || trimmed.startsWith('* ');
+              const contentStr = isBullet ? trimmed.substring(2) : line;
+              const lineNodes = renderInlineTokens(contentStr, isLight);
+
+              if (isBullet) {
+                return (
+                  <div key={idx} className={`flex items-start ${isCompact ? 'space-x-1.5 my-0.5' : 'space-x-2 my-1'} pl-1`}>
+                    <span className="shrink-0 mt-0.5 text-[0.85em]" style={{ color: 'var(--accent-text)' }}>•</span>
+                    <span className="flex-1">{lineNodes}</span>
+                  </div>
+                );
+              }
+
+              return (
+                <div
+                  key={idx}
+                  className={
+                    trimmed === ''
+                      ? isCompact ? 'h-1.5' : 'h-2'
+                      : fontSize === 'small'
+                      ? 'min-h-[1.15rem]'
+                      : fontSize === 'large'
+                      ? 'min-h-[1.65rem]'
+                      : 'min-h-[1.35rem]'
+                  }
+                >
+                  {lineNodes}
+                </div>
+              );
+            })}
+          </React.Fragment>
         );
       })}
     </div>
@@ -378,6 +496,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
   const [editingSessionTitle, setEditingSessionTitle] = useState('');
   const [enableContext, setEnableContext] = useState(true);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [exportedToast, setExportedToast] = useState(false);
 
   // 聊天文字字号（小 12px / 中 14.5px / 大 17.5px）与紧凑排版状态
   const [chatFontSize, setChatFontSize] = useState<'small' | 'medium' | 'large'>(() => {
@@ -424,6 +543,9 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
       localStorage.setItem(CHAT_SHOW_PRESETS_KEY, String(show));
     } catch {}
   };
+
+  const chatFontSizeSlider = useSlidingIndicator<HTMLDivElement>(chatFontSize);
+  const presetSlider = useSlidingIndicator<HTMLDivElement>(activePresetLabel, [showPresets]);
 
   const abortRef = useRef(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -548,9 +670,10 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
       md += `---\n\n`;
     }
 
-    navigator.clipboard.writeText(md).then(() => {
-      alert('已将当前完整对话复制为 Markdown 格式到剪贴板！');
-    });
+    navigator.clipboard?.writeText?.(md)?.catch?.(() => {});
+    setExportedToast(true);
+    if (exportedTimerRef.current) clearTimeout(exportedTimerRef.current);
+    exportedTimerRef.current = setTimeout(() => setExportedToast(false), 2000);
   };
 
   const handleDeleteSession = (sessId: string, e?: React.MouseEvent) => {
@@ -871,14 +994,16 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
   };
 
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exportedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     return () => {
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      if (exportedTimerRef.current) clearTimeout(exportedTimerRef.current);
     };
   }, []);
 
   const handleCopy = (id: string, text: string) => {
-    navigator.clipboard.writeText(text);
+    navigator.clipboard?.writeText?.(text)?.catch?.(() => {});
     setCopiedId(id);
     if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
     copiedTimerRef.current = setTimeout(() => setCopiedId(null), 2000);
@@ -916,63 +1041,18 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
   };
 
   return (
-    <div className="flex h-full min-h-0 w-full gap-3 select-text">
-      {/* 左侧会话栏（有历史会话时显示） */}
-      {sessions.length > 0 && (
-        <aside className="hidden md:flex w-[165px] shrink-0 flex-col gap-2">
-          <button type="button" onClick={handleNewSession} className="lg-btn lg-btn-primary !text-xs !py-2 font-semibold">
-            <SquarePen className="h-3.5 w-3.5" />
-            新对话
-          </button>
-          <div className="lg-inset flex-1 overflow-y-auto scrollbar-thin p-1.5 space-y-0.5">
-            {sessions.map((s) => (
-              <div
-                key={s.id}
-                className={`group relative flex items-center rounded-[10px] px-2.5 py-2 cursor-pointer transition ${
-                  s.id === activeSessionId ? '' : 'hover:bg-[var(--g-surface-2)]'
-                }`}
-                style={s.id === activeSessionId ? { background: 'var(--accent-soft)' } : undefined}
-                onClick={() => {
-                  setActiveSessionId(s.id);
-                  setErrorMsg(null);
-                }}
-              >
-                <MessageSquare
-                  className="h-3.5 w-3.5 shrink-0 mr-2"
-                  style={{ color: s.id === activeSessionId ? 'var(--accent-text)' : 'var(--g-text-3)' }}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-semibold truncate" title={s.title}>{s.title}</div>
-                  <div className="text-[10px] tabular-nums mt-0.5" style={{ color: 'var(--g-text-3)' }}>
-                    {sessionDisplayTime(s.updatedAt)} · {s.messages.length} 条
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteSession(s.id);
-                  }}
-                  className="opacity-0 group-hover:opacity-100 transition p-1 rounded-md hover:bg-[var(--g-surface-3)] cursor-pointer"
-                  style={{ color: 'var(--danger)' }}
-                  title="删除会话"
-                  aria-label={`删除会话 ${s.title}`}
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </aside>
-      )}
-
-      {/* 右侧主聊天区 */}
-      <div className="flex flex-col flex-1 min-w-0 space-y-2.5 relative">
-        {/* 历史会话侧边抽屉 */}
-        {isHistoryOpen && (
+    <div className="flex flex-col flex-1 h-full min-h-0 w-full gap-2.5 select-text relative">
+      {/* 历史会话滑出式毛玻璃抽屉 */}
+      {isHistoryOpen && (
+        <>
           <div
-            className="absolute inset-y-0 left-0 z-30 w-72 sm:w-80 rounded-2xl border border-[var(--g-border)] bg-[var(--g-surface)]/95 backdrop-blur-2xl shadow-2xl flex flex-col animate-in slide-in-from-left duration-200"
-            style={{ borderColor: 'var(--g-border)' }}
+            className="absolute inset-0 z-20 rounded-2xl bg-black/15 backdrop-blur-[2px] animate-fade-in"
+            onClick={() => setIsHistoryOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            data-testid="chat-history-drawer"
+            className="chat-drawer-shell animate-chat-drawer-in absolute inset-y-0 left-0 z-30 w-72 sm:w-80 rounded-2xl flex flex-col"
           >
             <div className="flex items-center justify-between p-3.5 border-b border-[var(--g-border)]">
               <div className="flex items-center space-x-2">
@@ -1072,267 +1152,249 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
               )}
             </div>
           </div>
-        )}
+        </>
+      )}
 
-        {/* 顶部 Header：模型状态 + 快捷操作（紧凑流线排布） */}
-        <div className="lg-panel px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center space-x-2.5">
-            <div
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-white shadow-xs shrink-0"
-              style={{ background: 'var(--accent)' }}
-            >
-              <Bot className="h-4 w-4" />
-            </div>
-            <div>
-              <div className="flex items-center space-x-2 flex-wrap gap-y-1">
-                <h2 className="text-xs sm:text-sm font-bold shrink-0">AI 智能对话</h2>
-
-                {/* 级联分类选择器 或 0 模型未配置引导 */}
-                {allAvailableConfigs.length === 0 || !llm ? (
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-500 text-[11px] font-semibold">
-                    <span>未配置 AI 模型</span>
-                    {onOpenSettings && (
-                      <button
-                        type="button"
-                        onClick={onOpenSettings}
-                        className="underline hover:text-amber-400 cursor-pointer font-bold ml-0.5"
-                      >
-                        + 前往添加
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <CascadingModelSelect
-                    activeVendor={activeVendor}
-                    activeModelLabel={resolveModelLabel(llm)}
-                    activeModelKey={activeModelKey}
-                    vendorGroups={vendorGroups}
-                    onSelectModel={(cfg) => {
-                      setLlmConfig(cfg);
-                      setErrorMsg(null);
-                    }}
-                    onSelectVendor={(v) => {
-                      handleVendorChange(v);
-                    }}
-                    getConfigKey={getConfigKey}
-                  />
-                )}
-              </div>
-              <p className="text-[10px] font-mono flex items-center gap-1.5 flex-wrap leading-none mt-0.5" style={{ color: 'var(--g-text-3)' }}>
-                {llm && allAvailableConfigs.length > 0 ? (
-                  <>
-                    <span>厂商: <span className="font-semibold" style={{ color: 'var(--g-text-2)' }}>{activeVendor}</span></span>
-                    <span>·</span>
-                    <span>Model: <span className="font-semibold" style={{ color: 'var(--g-text-2)' }}>{resolveModelLabel(llm)}</span></span>
-                    {!isModelConfigured(llm) && onOpenSettings && (
-                      <button
-                        type="button"
-                        onClick={onOpenSettings}
-                        className="text-amber-500 hover:underline cursor-pointer font-sans text-[10px] font-semibold flex items-center gap-0.5"
-                      >
-                        <span>⚠️ 未配置 Key</span>
-                        <span>(前往设置)</span>
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <span>暂未配置大模型，点击上方按钮前往设置添加</span>
-                )}
-              </p>
-            </div>
+      {/* 顶部 Vision 状态栏：960px 默认宽度下单行紧凑对齐 */}
+      <div className="translator-pane relative z-20 rounded-2xl px-3 py-1.5 flex flex-wrap min-[820px]:flex-nowrap items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div
+            className="flex h-7 w-7 items-center justify-center rounded-xl text-white shadow-sm shrink-0"
+            style={{
+              background: 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 72%, #6366f1))',
+            }}
+          >
+            <Bot className="h-3.5 w-3.5" />
           </div>
+          <h2 className="text-[13px] font-bold shrink-0 whitespace-nowrap">AI 智能对话</h2>
 
-          <div className="flex items-center space-x-1 flex-wrap gap-y-1">
-            {/* 字号大小调节 */}
-            <div
-              className="flex items-center rounded-lg border border-[var(--g-border)] bg-[var(--g-surface-2)] p-0.5 text-[10.5px] select-none"
-              title="调节聊天文字大小 (小: 12px 紧凑展示更多内容, 中: 14.5px 标准, 大: 17.5px 明显放大护眼)"
-            >
-              <span className="px-1 text-[10px] opacity-60 font-mono">字号</span>
-              <button
-                type="button"
-                onClick={() => updateChatFontSize('small')}
-                className={`px-1.5 py-0.5 rounded cursor-pointer transition ${
-                  chatFontSize === 'small'
-                    ? 'bg-[var(--accent)] text-white font-bold shadow-xs'
-                    : 'hover:bg-[var(--g-surface-3)] text-[var(--g-text-2)]'
-                }`}
-                title="紧凑小字 (12px，展示最多内容)"
-              >
-                小
-              </button>
-              <button
-                type="button"
-                onClick={() => updateChatFontSize('medium')}
-                className={`px-1.5 py-0.5 rounded cursor-pointer transition ${
-                  chatFontSize === 'medium'
-                    ? 'bg-[var(--accent)] text-white font-bold shadow-xs'
-                    : 'hover:bg-[var(--g-surface-3)] text-[var(--g-text-2)]'
-                }`}
-                title="标准字号 (14.5px)"
-              >
-                中
-              </button>
-              <button
-                type="button"
-                onClick={() => updateChatFontSize('large')}
-                className={`px-1.5 py-0.5 rounded cursor-pointer transition ${
-                  chatFontSize === 'large'
-                    ? 'bg-[var(--accent)] text-white font-bold shadow-xs'
-                    : 'hover:bg-[var(--g-surface-3)] text-[var(--g-text-2)]'
-                }`}
-                title="舒适大字 (17.5px，明显放大护眼)"
-              >
-                大
-              </button>
+          {/* 级联分类选择器 或 0 模型未配置引导 */}
+          {allAvailableConfigs.length === 0 || !llm ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-500 text-[11px] font-semibold shrink-0">
+              <span>未配置 AI 模型</span>
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="underline hover:text-amber-400 cursor-pointer font-bold ml-0.5"
+                >
+                  + 前往添加
+                </button>
+              )}
             </div>
-
-            {/* 紧凑排版开关 */}
-            <button
-              type="button"
-              onClick={() => updateChatDensity(chatDensity === 'compact' ? 'normal' : 'compact')}
-              className={`lg-btn !px-2 !py-1 !text-[11px] font-medium transition ${
-                chatDensity === 'compact' ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent-text)] font-semibold shadow-xs' : ''
-              }`}
-              title={chatDensity === 'compact' ? '当前为紧凑高密度模式（点击切换为舒适宽敞模式）' : '当前为标准舒适模式（点击切换为紧凑高密度模式，单屏展示更多对话内容）'}
-            >
-              {chatDensity === 'compact' ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
-              <span>{chatDensity === 'compact' ? '紧凑' : '舒适'}</span>
-            </button>
-
-            {/* 快捷预设栏折叠 */}
-            <button
-              type="button"
-              onClick={() => updateShowPresets(!showPresets)}
-              className={`lg-btn !px-2 !py-1 !text-[11px] font-medium transition ${
-                !showPresets ? 'opacity-70' : ''
-              }`}
-              title={showPresets ? '折叠快捷翻译与润色预设栏，释放更多垂直阅读高度' : '展开快捷预设栏'}
-            >
-              {showPresets ? <ChevronsUp className="h-3 w-3" /> : <ChevronsDown className="h-3 w-3" />}
-              <span>{showPresets ? '收起预设' : '快捷预设'}</span>
-            </button>
-
-            {/* 连续上下文记忆开关（当预设栏折叠时在 Header 保持显示） */}
-            {!showPresets && (
-              <button
-                type="button"
-                onClick={() => setEnableContext(!enableContext)}
-                className={`lg-btn !px-2 !py-1 !text-[11px] font-semibold transition ${
-                  enableContext
-                    ? 'border-blue-500/50 bg-blue-500/10 text-blue-500'
-                    : 'opacity-70'
-                }`}
-                title={enableContext ? '已开启连续上下文记忆' : '已关闭上下文记忆'}
-              >
-                <BrainCircuit className="h-3 w-3" />
-                <span>{enableContext ? '连续' : '单轮'}</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setIsHistoryOpen(!isHistoryOpen)}
-              className={`lg-btn !px-2 !py-1 !text-[11px] font-medium transition ${
-                isHistoryOpen ? 'lg-btn-primary font-semibold' : ''
-              }`}
-              title="查看与管理历史对话记录"
-            >
-              <History className="h-3 w-3" />
-              <span>历史 ({sessions.length})</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleNewSession}
-              className="lg-btn !px-2 !py-1 !text-[11px] font-semibold"
-              title="开启新的对话会话"
-            >
-              <SquarePen className="h-3 w-3" />
-              <span>新对话</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleExportMarkdown}
-              disabled={messages.length === 0}
-              className="lg-btn !px-2 !py-1 !text-[11px] transition disabled:opacity-40 disabled:cursor-not-allowed"
-              title="将当前完整对话复制为 Markdown 格式"
-            >
-              <Download className="h-3 w-3" />
-              <span>导出</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleClearChat}
-              className="lg-btn lg-btn-ghost !px-1.5 !py-1 !text-[11px]"
-              title="清空当前聊天会话"
-            >
-              <Trash2 className="h-3 w-3" />
-              <span>清空</span>
-            </button>
-          </div>
+          ) : (
+            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+              <CascadingModelSelect
+                className="min-w-0 max-w-[205px] lg:max-w-[240px] xl:max-w-[280px]"
+                activeVendor={activeVendor}
+                activeModelLabel={resolveModelLabel(llm)}
+                activeModelKey={activeModelKey}
+                vendorGroups={vendorGroups}
+                onSelectModel={(cfg) => {
+                  setLlmConfig(cfg);
+                  setErrorMsg(null);
+                }}
+                onSelectVendor={(v) => {
+                  handleVendorChange(v);
+                }}
+                getConfigKey={getConfigKey}
+              />
+              {!isModelConfigured(llm) && onOpenSettings && (
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="text-amber-500 hover:underline cursor-pointer text-[10.5px] font-semibold shrink-0 whitespace-nowrap"
+                  title="当前模型未配置 API Key，点击前往设置"
+                >
+                  ⚠️ 未配置 Key
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* 快捷 Prompt 模板 Pills 与上下文记忆开关（紧凑排布，支持一键折叠） */}
-        {showPresets && (
-          <div className="flex items-center justify-between gap-1.5 overflow-x-auto scrollbar-none shrink-0 py-0.5 animate-in fade-in slide-in-from-top-1 duration-150">
-            <div className="flex items-center space-x-1.5 shrink-0">
-              {PROMPT_PRESETS.map((preset) => {
-                const Icon = preset.icon;
-                const isActive = activePresetLabel === preset.label;
-                const selectedLang = AI_TRANSLATE_LANGUAGES.find((l) => l.code === translateTargetLang);
-                const pillLabel = preset.id === 'ai_translate' && isActive && translateTargetLang !== 'auto'
-                  ? `AI 翻译 (${selectedLang?.shortName || translateTargetLang})`
-                  : preset.label;
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => applyPresetPrompt(preset.label)}
-                    className={`lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 whitespace-nowrap transition-all ${
-                      isActive ? 'lg-btn-primary font-semibold shadow-xs' : ''
-                    }`}
-                    title={preset.id === 'ai_translate' ? '点击开启 AI 对话翻译模式，支持 30+ 语种自由互译' : undefined}
-                  >
-                    <Icon className="h-3 w-3" />
-                    <span>{pillLabel}</span>
-                  </button>
-                );
-              })}
-            </div>
+        <div className="flex items-center gap-1 flex-wrap min-[820px]:flex-nowrap shrink-0">
+          {/* 字号大小调节（带弹性滑动胶囊） */}
+          <div
+            ref={chatFontSizeSlider.containerRef}
+            className="relative flex items-center rounded-full border border-[var(--g-border)] bg-[var(--g-surface-2)] p-0.5 text-[10.5px] select-none shrink-0"
+            title="调节聊天文字大小 (小: 12px 紧凑展示更多内容, 中: 14.5px 标准, 大: 17.5px 明显放大护眼)"
+          >
+            <SlidingHighlight
+              rect={chatFontSizeSlider.rect}
+              isReady={chatFontSizeSlider.isReady}
+              variant="solid"
+              radiusClass="rounded-full"
+              testId="aichat-fontsize-slider"
+            />
+            <span className="relative z-10 px-1 text-[10px] opacity-60 font-mono whitespace-nowrap">字号</span>
+            <button
+              ref={chatFontSizeSlider.registerItem('small')}
+              type="button"
+              onClick={() => updateChatFontSize('small')}
+              className={`relative z-10 px-1.5 py-0.5 rounded-full cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                chatFontSize === 'small'
+                  ? chatFontSizeSlider.isReady
+                    ? 'text-white font-bold'
+                    : 'bg-[var(--accent)] text-white font-bold shadow-xs'
+                  : 'hover:bg-[var(--g-surface-3)] text-[var(--g-text-2)]'
+              }`}
+              title="紧凑小字 (12px，展示最多内容)"
+            >
+              小
+            </button>
+            <button
+              ref={chatFontSizeSlider.registerItem('medium')}
+              type="button"
+              onClick={() => updateChatFontSize('medium')}
+              className={`relative z-10 px-1.5 py-0.5 rounded-full cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                chatFontSize === 'medium'
+                  ? chatFontSizeSlider.isReady
+                    ? 'text-white font-bold'
+                    : 'bg-[var(--accent)] text-white font-bold shadow-xs'
+                  : 'hover:bg-[var(--g-surface-3)] text-[var(--g-text-2)]'
+              }`}
+              title="标准字号 (14.5px)"
+            >
+              中
+            </button>
+            <button
+              ref={chatFontSizeSlider.registerItem('large')}
+              type="button"
+              onClick={() => updateChatFontSize('large')}
+              className={`relative z-10 px-1.5 py-0.5 rounded-full cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                chatFontSize === 'large'
+                  ? chatFontSizeSlider.isReady
+                    ? 'text-white font-bold'
+                    : 'bg-[var(--accent)] text-white font-bold shadow-xs'
+                  : 'hover:bg-[var(--g-surface-3)] text-[var(--g-text-2)]'
+              }`}
+              title="舒适大字 (17.5px，明显放大护眼)"
+            >
+              大
+            </button>
+          </div>
 
-            {/* 连续上下文记忆开关 */}
+          {/* 紧凑排版开关 */}
+          <button
+            type="button"
+            onClick={() => updateChatDensity(chatDensity === 'compact' ? 'normal' : 'compact')}
+            className={`lg-btn !px-2 !py-1 !gap-1 !text-[11px] !rounded-full font-medium whitespace-nowrap shrink-0 transition ${
+              chatDensity === 'compact' ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent-text)] font-semibold shadow-xs' : ''
+            }`}
+            title={chatDensity === 'compact' ? '当前为紧凑高密度模式（点击切换为舒适宽敞模式）' : '当前为标准舒适模式（点击切换为紧凑高密度模式，单屏展示更多对话内容）'}
+          >
+            {chatDensity === 'compact' ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+            <span>{chatDensity === 'compact' ? '紧凑' : '舒适'}</span>
+          </button>
+
+          {/* 快捷预设栏折叠 */}
+          <button
+            type="button"
+            onClick={() => updateShowPresets(!showPresets)}
+            className={`lg-btn !px-2 !py-1 !gap-1 !text-[11px] !rounded-full font-medium whitespace-nowrap shrink-0 transition ${
+              !showPresets ? 'opacity-75' : ''
+            }`}
+            title={showPresets ? '折叠快捷翻译与润色预设栏，释放更多垂直阅读高度' : '展开快捷预设栏'}
+          >
+            {showPresets ? <ChevronsUp className="h-3 w-3" /> : <ChevronsDown className="h-3 w-3" />}
+            <span>{showPresets ? '收起预设' : '快捷预设'}</span>
+          </button>
+
+          {/* 连续上下文记忆开关（当预设栏折叠时在 Header 保持显示） */}
+          {!showPresets && (
             <button
               type="button"
               onClick={() => setEnableContext(!enableContext)}
-              className={`lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 flex items-center space-x-1 transition ${
+              className={`lg-btn !px-2 !py-1 !gap-1 !text-[11px] !rounded-full font-semibold whitespace-nowrap shrink-0 transition ${
                 enableContext
-                  ? 'border-blue-500/50 bg-blue-500/10 text-blue-500 font-semibold'
+                  ? 'border-blue-500/50 bg-blue-500/10 text-blue-500'
                   : 'opacity-70'
               }`}
-              title={enableContext ? '已开启连续上下文记忆（提问时自动携带上文对话）' : '已关闭上下文记忆（单轮独立提问，更省 Token，速度更快）'}
+              title={enableContext ? '已开启连续上下文记忆' : '已关闭上下文记忆'}
             >
               <BrainCircuit className="h-3 w-3" />
-              <span>{enableContext ? '连续对话' : '单轮问答'}</span>
+              <span>{enableContext ? '连续' : '单轮'}</span>
             </button>
-          </div>
-        )}
+          )}
 
-        {/* 聊天消息流主视图 */}
+          <button
+            type="button"
+            onClick={() => setIsHistoryOpen(!isHistoryOpen)}
+            className={`lg-btn !px-2 !py-1 !gap-1 !text-[11px] !rounded-full font-medium whitespace-nowrap shrink-0 transition ${
+              isHistoryOpen ? 'lg-btn-primary font-semibold' : ''
+            }`}
+            title="查看与管理历史对话记录"
+          >
+            <History className="h-3 w-3" />
+            <span>历史 ({sessions.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleNewSession}
+            className="lg-btn !px-2 !py-1 !gap-1 !text-[11px] !rounded-full font-semibold whitespace-nowrap shrink-0"
+            title="开启新的对话会话"
+          >
+            <SquarePen className="h-3 w-3" />
+            <span>新对话</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportMarkdown}
+            disabled={messages.length === 0}
+            className="lg-btn !px-2 !py-1 !gap-1 !text-[11px] !rounded-full whitespace-nowrap shrink-0 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            style={exportedToast ? { color: 'var(--ok)', borderColor: 'var(--ok)' } : undefined}
+            title="将当前完整对话复制为 Markdown 格式"
+          >
+            {exportedToast ? <Check className="h-3 w-3" /> : <Download className="h-3 w-3" />}
+            <span>{exportedToast ? '已导出' : '导出'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleClearChat}
+            disabled={messages.length === 0}
+            className="lg-btn !px-2 !py-1 !gap-1 !text-[11px] !rounded-full whitespace-nowrap shrink-0 hover:text-rose-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            title="清空当前聊天会话"
+          >
+            <Trash2 className="h-3 w-3" />
+            <span>清空</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 居中可读聊天消息流主视图 */}
+      <div
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+        className={`translator-pane rounded-[20px] flex-1 min-h-0 ${
+          messages.length === 0
+            ? 'p-3 sm:p-4'
+            : chatDensity === 'compact'
+            ? 'p-2.5 sm:p-3'
+            : 'p-3.5 sm:p-5'
+        } overflow-y-auto scrollbar-thin relative`}
+      >
         <div
-          ref={messagesContainerRef}
-          onScroll={handleScroll}
-          className={`lg-panel flex-1 min-h-0 ${
-            chatDensity === 'compact' ? 'p-2 sm:p-2.5 space-y-2' : 'p-3 sm:p-4 space-y-3'
-          } overflow-y-auto scrollbar-thin relative`}
+          className={`mx-auto w-full max-w-[820px] ${
+            messages.length === 0
+              ? 'min-h-full flex flex-col'
+              : chatDensity === 'compact'
+              ? 'space-y-2.5'
+              : 'space-y-4'
+          }`}
         >
           {/* Error Alert */}
           {errorMsg && (
             <div
-              className="rounded-xl border p-3.5 text-xs flex flex-wrap items-center justify-between gap-2 shrink-0 animate-in fade-in"
-              style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', borderColor: 'color-mix(in srgb, var(--danger) 40%, transparent)', color: isLight ? '#b91c1c' : '#fecaca' }}
+              className="rounded-xl border p-3.5 text-xs flex flex-wrap items-center justify-between gap-2 shrink-0 animate-fade-in mb-2"
+              style={{
+                background: 'color-mix(in srgb, var(--danger) 10%, transparent)',
+                borderColor: 'color-mix(in srgb, var(--danger) 40%, transparent)',
+                color: isLight ? '#b91c1c' : '#fecaca',
+              }}
             >
               <div className="flex items-center space-x-2 min-w-0 flex-1">
                 <AlertCircle className="h-4 w-4 shrink-0" />
@@ -1360,79 +1422,89 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
           )}
 
           {messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center min-h-[320px] h-full text-center space-y-4 py-8 px-4 select-none">
-              <div className="lg-inset flex h-14 w-14 items-center justify-center !rounded-2xl">
-                <Bot className="h-7 w-7" style={{ color: 'var(--accent-text)' }} />
-              </div>
-
-              <div className="space-y-1 max-w-md">
-                <h3 className="text-sm font-bold">
-                  {allAvailableConfigs.length === 0 || !llm ? '暂未配置 AI 大语言模型' : '猫步 AI 智能对话助手就绪'}
-                </h3>
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--g-text-2)' }}>
-                  {allAvailableConfigs.length === 0 || !llm ? (
-                    <>
-                      猫步翻译已默认集成专业 CG 词库与多引擎在线机翻。如需开启深度对话、AI 智能翻译与学术润色，请点击下方前往设置添加服务商（支持 DeepSeek、OpenAI、本地 Ollama 等）：
-                    </>
-                  ) : (
-                    <>
-                      当前准备调用 <span className="font-mono font-semibold" style={{ color: 'var(--accent-text)' }}>{activeVendor} - {resolveModelLabel(llm)}</span> 大模型
-                    </>
-                  )}
-                </p>
-              </div>
-
-              {(allAvailableConfigs.length === 0 || !llm) && onOpenSettings && (
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={onOpenSettings}
-                    className="lg-btn lg-btn-primary !px-4 !py-2 text-xs font-semibold flex items-center gap-1.5 shadow-sm cursor-pointer"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>前往设置添加 AI 模型</span>
-                  </button>
+            <div className="flex flex-col items-center justify-center flex-1 text-center py-2 px-4 select-none">
+              <div className="my-auto flex flex-col items-center space-y-3 w-full">
+                <div
+                  className="flex h-12 w-12 items-center justify-center rounded-2xl border shadow-sm"
+                  style={{
+                    background: 'linear-gradient(135deg, var(--accent-soft), rgba(99,102,241,0.14))',
+                    borderColor: 'var(--accent-border)',
+                  }}
+                >
+                  <Bot className="h-6 w-6" style={{ color: 'var(--accent-text)' }} />
                 </div>
-              )}
 
-              {/* Quick Starter Prompt Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full max-w-xl pt-2">
-                {PROMPT_PRESETS.map((preset) => {
-                  const Icon = preset.icon;
-                  const isActive = activePresetLabel === preset.label;
-                  return (
+                <div className="space-y-1 max-w-lg">
+                  <h3 className="text-sm sm:text-base font-bold">
+                    {allAvailableConfigs.length === 0 || !llm ? '暂未配置 AI 大语言模型' : '猫步 AI 智能对话助手就绪'}
+                  </h3>
+                  <p className="text-xs leading-snug" style={{ color: 'var(--g-text-2)' }}>
+                    {allAvailableConfigs.length === 0 || !llm ? (
+                      <>
+                        猫步翻译已默认集成专业 CG 词库与多引擎在线机翻。如需开启深度对话、AI 智能翻译与学术润色，请点击下方前往设置添加服务商（支持 DeepSeek、OpenAI、本地 Ollama 等）：
+                      </>
+                    ) : (
+                      <>
+                        当前准备调用 <span className="font-mono font-semibold" style={{ color: 'var(--accent-text)' }}>{activeVendor} - {resolveModelLabel(llm)}</span> 大模型
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                {(allAvailableConfigs.length === 0 || !llm) && onOpenSettings && (
+                  <div>
                     <button
-                      key={preset.id}
                       type="button"
-                      onClick={() => applyPresetPrompt(preset.label)}
-                      className={`lg-inset flex items-start space-x-3 p-3.5 text-left transition cursor-pointer group hover:bg-[var(--g-surface-2)] ${
-                        isActive ? 'ring-2 ring-[var(--accent)]' : ''
-                      }`}
-                      style={isActive ? { background: 'var(--accent-soft)' } : undefined}
+                      onClick={onOpenSettings}
+                      className="lg-btn lg-btn-primary !px-4 !py-1.5 text-xs font-semibold flex items-center gap-1.5 shadow-sm cursor-pointer"
                     >
-                      <div className="lg-pill !p-1.5 shrink-0 group-hover:scale-110 transition-transform">
-                        <Icon className="h-4 w-4" style={{ color: 'var(--accent-text)' }} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-bold flex items-center justify-between">
-                          <span>{preset.label}</span>
-                          {isActive && <span className="text-[10px] font-semibold" style={{ color: 'var(--accent-text)' }}>(已开启)</span>}
-                        </div>
-                        <div className="text-[11px] line-clamp-1 mt-0.5" style={{ color: 'var(--g-text-3)' }}>
-                          {preset.id === 'ai_translate'
-                            ? '中英双向深度互译，保留专业术语'
-                            : preset.id === 'polish'
-                            ? '符合专业学术规范，保留术语'
-                            : preset.id === 'cg_dict'
-                            ? '3D/CG 节点与材质深度剖析'
-                            : preset.id === 'code_comment'
-                            ? '代码注释与变量名地道中译'
-                            : '3 种风格多语境重写'}
-                        </div>
-                      </div>
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>前往设置添加 AI 模型</span>
                     </button>
-                  );
-                })}
+                  </div>
+                )}
+
+                {/* Quick Starter Prompt Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-xl pt-1">
+                  {PROMPT_PRESETS.map((preset, idx) => {
+                    const Icon = preset.icon;
+                    const isActive = activePresetLabel === preset.label;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => applyPresetPrompt(preset.label)}
+                        className={`lg-inset flex items-start space-x-2.5 p-2.5 text-left transition-all cursor-pointer group hover:-translate-y-0.5 hover:bg-[var(--g-surface-2)] ${
+                          idx === 0 ? 'sm:col-span-2' : ''
+                        } ${
+                          isActive ? 'ring-2 ring-[var(--accent)]' : ''
+                        }`}
+                        style={isActive ? { background: 'var(--accent-soft)' } : undefined}
+                      >
+                        <div className="lg-pill !p-1.5 shrink-0 group-hover:scale-110 transition-transform">
+                          <Icon className="h-4 w-4" style={{ color: 'var(--accent-text)' }} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold flex items-center justify-between">
+                            <span>{preset.label}</span>
+                            {isActive && <span className="text-[10px] font-semibold" style={{ color: 'var(--accent-text)' }}>(已开启)</span>}
+                          </div>
+                          <div className="text-[11px] line-clamp-1 mt-0.5" style={{ color: 'var(--g-text-3)' }}>
+                            {preset.id === 'ai_translate'
+                              ? '中英双向深度互译，保留专业术语'
+                              : preset.id === 'polish'
+                              ? '符合专业学术规范，保留术语'
+                              : preset.id === 'cg_dict'
+                              ? '3D/CG 节点与材质深度剖析'
+                              : preset.id === 'code_comment'
+                              ? '代码注释与变量名地道中译'
+                              : '3 种风格多语境重写'}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           ) : (
@@ -1443,16 +1515,19 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
               return (
                 <div
                   key={msg.id}
-                  className={`flex items-start ${isCompact ? 'space-x-2' : 'space-x-3'} ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}
+                  className={`animate-chat-msg-in flex items-start ${isCompact ? 'space-x-2' : 'space-x-3'} ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}
                 >
                   {/* Avatar */}
                   <div
-                    className={`flex shrink-0 items-center justify-center rounded-full font-bold shadow-md transition-all ${
-                      isCompact ? 'h-7 w-7 text-[10px]' : 'h-9 w-9 text-xs'
+                    className={`flex shrink-0 items-center justify-center rounded-full font-bold shadow-sm transition-all ${
+                      isCompact ? 'h-7 w-7 text-[10px]' : 'h-8.5 w-8.5 text-[11px]'
                     }`}
                     style={
                       isUser
-                        ? { background: 'var(--accent)', color: '#fff' }
+                        ? {
+                            background: 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 72%, #2563eb))',
+                            color: '#fff',
+                          }
                         : { background: 'var(--g-surface-2)', border: '1px solid var(--g-border)', color: 'var(--accent-text)' }
                     }
                   >
@@ -1460,11 +1535,11 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                   </div>
 
                   {/* Message Bubble */}
-                  <div className={`space-y-1 ${isCompact ? 'max-w-[95%]' : 'max-w-[88%]'} ${isUser ? 'items-end' : 'items-start'}`}>
+                  <div className={`space-y-1 flex flex-col ${isCompact ? 'max-w-[92%]' : 'max-w-[84%]'} ${isUser ? 'items-end' : 'items-start'}`}>
                     <div className={`flex items-center space-x-1.5 text-[10.5px] px-1 ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`} style={{ color: 'var(--g-text-3)' }}>
                       <span className="font-medium">{isUser ? '我' : msg.model || resolveModelLabel(llm)}</span>
                       {isUser && msg.mode && (
-                        <span className="px-1.5 py-0.2 text-[9.5px] rounded font-semibold" style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}>
+                        <span className="px-1.5 py-0.5 text-[9.5px] rounded-full font-semibold" style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}>
                           {msg.mode}
                         </span>
                       )}
@@ -1473,8 +1548,8 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                     </div>
 
                     <div
-                      className={`rounded-2xl transition-all shadow-xs ${
-                        isCompact ? 'px-3.5 py-2' : 'px-5 py-3.5'
+                      className={`rounded-[18px] transition-all shadow-xs ${
+                        isCompact ? 'px-3.5 py-2' : 'px-4.5 py-3'
                       } ${
                         chatFontSize === 'small'
                           ? 'text-[12px] leading-snug'
@@ -1482,18 +1557,21 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                           ? 'text-[17.5px] leading-relaxed'
                           : 'text-[14.5px] leading-normal'
                       } ${
-                        isUser ? 'rounded-tr-xs' : 'lg-inset !rounded-2xl rounded-tl-xs'
+                        isUser ? 'rounded-tr-[5px]' : 'lg-inset !rounded-[18px] rounded-tl-[5px]'
                       }`}
                       style={
                         isUser
-                          ? { background: 'var(--accent)', color: '#fff' }
+                          ? {
+                              background: 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 78%, #2563eb))',
+                              color: '#fff',
+                            }
                           : undefined
                       }
                     >
                       {isUser ? (
                         <p className="whitespace-pre-wrap select-text">{msg.content}</p>
                       ) : (
-                        <div className={isCompact ? 'space-y-2' : 'space-y-3'}>
+                        <div className={isCompact ? 'space-y-2' : 'space-y-2.5'}>
                           {/* 深度思考过程 / 思路文字折叠卡片：回复完默认闭合，限高紧凑不遮挡上下文 */}
                           {(msg.reasoning || (isStreaming && !msg.content)) && (() => {
                             const isCollapsed = msg.isReasoningCollapsed !== undefined
@@ -1501,10 +1579,10 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                               : (!isStreaming || !!msg.content);
                             return (
                               <div
-                                className="rounded-xl border border-dashed overflow-hidden text-xs transition-all animate-in fade-in"
+                                className="rounded-xl border border-dashed overflow-hidden text-xs transition-all animate-fade-in"
                                 style={{
-                                  background: isLight ? 'rgba(0,0,0,0.02)' : 'rgba(255,255,255,0.02)',
-                                  borderColor: 'color-mix(in srgb, var(--accent) 30%, var(--g-border))',
+                                  background: isLight ? 'rgba(0, 113, 227, 0.035)' : 'rgba(10, 132, 255, 0.05)',
+                                  borderColor: 'color-mix(in srgb, var(--accent) 32%, var(--g-border))',
                                 }}
                               >
                                 <button
@@ -1516,7 +1594,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
                                   <div className="flex items-center space-x-2 min-w-0">
                                     <BrainCircuit
                                       className={`h-3.5 w-3.5 shrink-0 transition-transform ${
-                                        isStreaming && !msg.content ? 'animate-pulse' : 'opacity-70'
+                                        isStreaming && !msg.content ? 'animate-pulse' : 'opacity-75'
                                       }`}
                                       style={{ color: 'var(--accent-text)' }}
                                     />
@@ -1597,7 +1675,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
 
                     {/* Actions bar for AI messages */}
                     {!isUser && (
-                      <div className={`flex items-center ${isCompact ? 'space-x-2.5 pt-0.5 text-[11px]' : 'space-x-3 pt-1 text-xs'} px-1 select-none`}>
+                      <div className={`flex items-center ${isCompact ? 'space-x-2.5 pt-0.5 text-[11px]' : 'space-x-3 pt-0.5 text-xs'} px-1 select-none`}>
                         {msg.content && (
                           <button
                             type="button"
@@ -1717,137 +1795,199 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ initialPrompt = '', on
               );
             })
           )}
+        </div>
 
-          {/* 悬浮滚到底部按钮 */}
-          {showScrollBottom && (
+        {/* 悬浮滚到底部按钮 */}
+        {showScrollBottom && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="sticky bottom-3 float-right z-20 lg-pill !p-2.5 shadow-xl hover:scale-110 active:scale-95 transition-all cursor-pointer bg-[var(--g-surface)] border border-[var(--g-border)]"
+            title="滚动到最新消息"
+          >
+            <ArrowDown className="h-4 w-4" style={{ color: 'var(--accent-text)' }} />
+          </button>
+        )}
+
+        {messages.length > 0 && <div ref={messagesEndRef} />}
+      </div>
+
+      {/* 底部 Vision 悬浮玻璃输入舱（预设胶囊与上下文开关一体整合） */}
+      <div
+        data-testid="chat-composer-shell"
+        className="chat-composer-shell relative z-10 rounded-[20px] p-2.5 sm:p-3 space-y-2 shrink-0"
+      >
+        {activePresetLabel && (
+          <div
+            className="flex items-center justify-between px-2.5 py-1 text-[11px] font-medium rounded-xl border border-[var(--g-hairline)]"
+            style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}
+          >
+            <div className="flex items-center space-x-1.5 min-w-0 flex-wrap gap-y-0.5">
+              <span className="flex items-center space-x-1 shrink-0">
+                <Sparkles className="h-3 w-3 shrink-0" />
+                <span>已激活 <strong>【{activePresetLabel}】</strong></span>
+              </span>
+
+              {activePresetLabel === 'AI 智能翻译' && (
+                <div className="flex items-center space-x-1 shrink-0">
+                  <span className="text-[10px] opacity-80 ml-1">目标语言:</span>
+                  <GlassSelect
+                    value={translateTargetLang}
+                    onChange={setTranslateTargetLang}
+                    direction="up"
+                    align="left"
+                    size="sm"
+                    searchable={true}
+                    title="选择 AI 对话翻译的目标语言"
+                    options={AI_TRANSLATE_LANGUAGES.map((l) => ({
+                      value: l.code,
+                      label: l.name,
+                    }))}
+                  />
+                </div>
+              )}
+            </div>
+
             <button
               type="button"
-              onClick={scrollToBottom}
-              className="sticky bottom-3 float-right z-20 lg-pill !p-2.5 shadow-xl hover:scale-110 active:scale-95 transition-all cursor-pointer bg-[var(--g-surface)] border border-[var(--g-border)]"
-              title="滚动到最新消息"
+              onClick={() => {
+                const currentPreset = PROMPT_PRESETS.find((p) => p.label === activePresetLabel);
+                if (currentPreset && input.startsWith(currentPreset.promptPrefix)) {
+                  setInput(input.slice(currentPreset.promptPrefix.length));
+                }
+                setActivePresetLabel(null);
+              }}
+              className="text-[11px] cursor-pointer flex items-center space-x-0.5 hover:opacity-75 font-semibold shrink-0 ml-2"
+              style={{ color: 'var(--accent-text)' }}
             >
-              <ArrowDown className="h-4 w-4" style={{ color: 'var(--accent-text)' }} />
+              <X className="h-3 w-3" />
+              <span>退出</span>
             </button>
-          )}
+          </div>
+        )}
 
-          <div ref={messagesEndRef} />
-        </div>
+        <div className="relative flex items-end gap-2">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder={
+              activePresetLabel === 'AI 智能翻译'
+                ? translateTargetLang === 'auto'
+                  ? '【已开启 AI 智能翻译模式 · 中英双向】输入任意文本即可进行 AI 深度翻译 (Enter 发送)...'
+                  : `【已开启 AI 智能翻译模式 · 译为 ${AI_TRANSLATE_LANGUAGES.find((l) => l.code === translateTargetLang)?.shortName || translateTargetLang}】输入任意文本即可进行 AI 深度翻译 (Enter 发送)...`
+                : activePresetLabel
+                ? `【已激活 ${activePresetLabel}】输入内容直接发送 (Enter 发送，Shift+Enter 换行)...`
+                : '输入翻译需求、多语种润色或任意问题 (Enter 发送，Shift+Enter 换行)...'
+            }
+            rows={1}
+            className={`w-full bg-transparent border-0 focus:outline-none focus:ring-0 px-2 py-1 leading-relaxed resize-none scrollbar-thin max-h-[140px] min-h-[36px] transition-all ${
+              chatFontSize === 'small'
+                ? 'text-xs'
+                : chatFontSize === 'large'
+                ? 'text-[15.5px]'
+                : 'text-xs sm:text-[13.5px]'
+            }`}
+            style={{ color: 'var(--g-text)' }}
+          />
 
-        {/* 底部 Input 表单发送区域（一体化现代自适应输入条，释放超过 100px 垂直视野） */}
-        <div className="lg-panel p-2 sm:p-2.5 space-y-1.5 shrink-0 transition-all focus-within:border-[var(--accent)] shadow-xs">
-          {activePresetLabel && (
-            <div className="flex items-center justify-between px-2.5 py-1 text-[11px] font-medium rounded-lg border border-[var(--g-hairline)]" style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}>
-              <div className="flex items-center space-x-1.5 min-w-0 flex-wrap gap-y-0.5">
-                <span className="flex items-center space-x-1 shrink-0">
-                  <Sparkles className="h-3 w-3 shrink-0" />
-                  <span>已激活 <strong>【{activePresetLabel}】</strong></span>
-                </span>
+          <div className="flex items-center gap-1.5 shrink-0 pb-0.5 pr-0.5 select-none">
+            {input.length > 0 && (
+              <span className="text-[10px] font-mono opacity-50 hidden sm:inline-block" style={{ color: 'var(--g-text-3)' }}>
+                {input.length} 字
+              </span>
+            )}
 
-                {activePresetLabel === 'AI 智能翻译' && (
-                  <div className="flex items-center space-x-1 shrink-0">
-                    <span className="text-[10px] opacity-80 ml-1">目标语言:</span>
-                    <GlassSelect
-                      value={translateTargetLang}
-                      onChange={setTranslateTargetLang}
-                      direction="up"
-                      align="left"
-                      size="sm"
-                      searchable={true}
-                      title="选择 AI 对话翻译的目标语言"
-                      options={AI_TRANSLATE_LANGUAGES.map((l) => ({
-                        value: l.code,
-                        label: l.name,
-                      }))}
-                    />
-                  </div>
-                )}
-              </div>
-
+            {loading ? (
               <button
                 type="button"
-                onClick={() => {
-                  const currentPreset = PROMPT_PRESETS.find((p) => p.label === activePresetLabel);
-                  if (currentPreset && input.startsWith(currentPreset.promptPrefix)) {
-                    setInput(input.slice(currentPreset.promptPrefix.length));
-                  }
-                  setActivePresetLabel(null);
-                }}
-                className="text-[11px] cursor-pointer flex items-center space-x-0.5 hover:opacity-75 font-semibold shrink-0 ml-2"
-                style={{ color: 'var(--accent-text)' }}
+                onClick={handleStopGeneration}
+                className="flex h-8 px-3 items-center justify-center space-x-1 rounded-xl bg-rose-500 hover:bg-rose-600 text-white shadow-xs transition active:scale-95 cursor-pointer"
+                title="中断并停止当前回答生成"
               >
-                <X className="h-3 w-3" />
-                <span>退出</span>
+                <Square className="h-3 w-3 fill-current" />
+                <span className="text-xs font-semibold">停止</span>
               </button>
-            </div>
-          )}
-
-          <div className="relative flex items-end gap-2">
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder={
-                activePresetLabel === 'AI 智能翻译'
-                  ? translateTargetLang === 'auto'
-                    ? '【已开启 AI 智能翻译模式 · 中英双向】输入任意文本即可进行 AI 深度翻译 (Enter 发送)...'
-                    : `【已开启 AI 智能翻译模式 · 译为 ${AI_TRANSLATE_LANGUAGES.find((l) => l.code === translateTargetLang)?.shortName || translateTargetLang}】输入任意文本即可进行 AI 深度翻译 (Enter 发送)...`
-                  : activePresetLabel
-                  ? `【已激活 ${activePresetLabel}】输入内容直接发送 (Enter 发送，Shift+Enter 换行)...`
-                  : '输入翻译需求、多语种润色或任意问题 (Enter 发送，Shift+Enter 换行)...'
-              }
-              rows={1}
-              className={`w-full bg-transparent border-0 focus:outline-none focus:ring-0 px-2 py-1 leading-relaxed resize-none scrollbar-thin max-h-[140px] min-h-[36px] transition-all ${
-                chatFontSize === 'small'
-                  ? 'text-xs'
-                  : chatFontSize === 'large'
-                  ? 'text-[15.5px]'
-                  : 'text-xs sm:text-[13.5px]'
-              }`}
-              style={{ color: 'var(--g-text)' }}
-            />
-
-            <div className="flex items-center gap-1.5 shrink-0 pb-0.5 pr-0.5 select-none">
-              {input.length > 0 && (
-                <span className="text-[10px] font-mono opacity-50 hidden sm:inline-block" style={{ color: 'var(--g-text-3)' }}>
-                  {input.length} 字
-                </span>
-              )}
-
-              {loading ? (
-                <button
-                  type="button"
-                  onClick={handleStopGeneration}
-                  className="flex h-7.5 px-2.5 items-center justify-center space-x-1 rounded-lg bg-rose-500 hover:bg-rose-600 text-white shadow-xs transition active:scale-95 cursor-pointer"
-                  title="中断并停止当前回答生成"
-                >
-                  <Square className="h-3 w-3 fill-current" />
-                  <span className="text-xs font-semibold">停止</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => handleSend()}
-                  disabled={!input.trim()}
-                  className={`flex h-7.5 px-3 items-center justify-center space-x-1 rounded-lg transition-all cursor-pointer ${
-                    input.trim()
-                      ? 'bg-[var(--accent)] text-white shadow-xs hover:opacity-90 active:scale-95'
-                      : 'opacity-30 cursor-not-allowed bg-[var(--g-surface-3)] text-[var(--g-text-3)]'
-                  }`}
-                  title="发送 (Enter 发送，Shift+Enter 换行)"
-                >
-                  <Send className="h-3 w-3" />
-                  <span className="text-xs font-semibold">发送</span>
-                </button>
-              )}
-            </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleSend()}
+                disabled={!input.trim()}
+                className={`flex h-8 px-3.5 items-center justify-center space-x-1.5 rounded-xl transition-all cursor-pointer ${
+                  input.trim()
+                    ? 'bg-[var(--accent)] text-white shadow-sm hover:opacity-92 hover:scale-[1.02] active:scale-95'
+                    : 'opacity-65 cursor-not-allowed bg-[var(--g-surface-2)] text-[var(--g-text-2)] border border-[var(--g-border)]'
+                }`}
+                title="发送 (Enter 发送，Shift+Enter 换行)"
+              >
+                <Send className="h-3 w-3" />
+                <span className="text-xs font-semibold">发送</span>
+              </button>
+            )}
           </div>
         </div>
+
+        {/* 底部内嵌快捷预设胶囊行（支持收起） */}
+        {showPresets && (
+          <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-[var(--g-hairline)]">
+            <div ref={presetSlider.containerRef} className="relative flex items-center space-x-1.5 overflow-x-auto scrollbar-none min-w-0">
+              <SlidingHighlight
+                rect={presetSlider.rect}
+                isReady={presetSlider.isReady}
+                variant="solid"
+                radiusClass="rounded-full"
+                testId="aichat-preset-slider"
+              />
+              {PROMPT_PRESETS.map((preset) => {
+                const Icon = preset.icon;
+                const isActive = activePresetLabel === preset.label;
+                const selectedLang = AI_TRANSLATE_LANGUAGES.find((l) => l.code === translateTargetLang);
+                const pillLabel = preset.id === 'ai_translate' && isActive && translateTargetLang !== 'auto'
+                  ? `AI 翻译 (${selectedLang?.shortName || translateTargetLang})`
+                  : preset.label;
+                return (
+                  <button
+                    key={preset.id}
+                    ref={presetSlider.registerItem(preset.label)}
+                    type="button"
+                    onClick={() => applyPresetPrompt(preset.label)}
+                    className={`relative z-10 lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                      isActive
+                        ? presetSlider.isReady
+                          ? '!bg-transparent !border-transparent !text-white font-semibold'
+                          : 'lg-btn-primary font-semibold shadow-xs'
+                        : ''
+                    }`}
+                    title={preset.id === 'ai_translate' ? '点击开启 AI 对话翻译模式，支持 30+ 语种自由互译' : undefined}
+                  >
+                    <Icon className="h-3 w-3" />
+                    <span>{pillLabel}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setEnableContext(!enableContext)}
+              className={`lg-btn !px-2.5 !py-1 !text-[11px] !rounded-full shrink-0 flex items-center space-x-1 transition ${
+                enableContext
+                  ? 'border-blue-500/50 bg-blue-500/10 text-blue-500 font-semibold'
+                  : 'opacity-70'
+              }`}
+              title={enableContext ? '已开启连续上下文记忆（提问时自动携带上文对话）' : '已关闭上下文记忆（单轮独立提问，更省 Token，速度更快）'}
+            >
+              <BrainCircuit className="h-3 w-3" />
+              <span>{enableContext ? '连续对话' : '单轮问答'}</span>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

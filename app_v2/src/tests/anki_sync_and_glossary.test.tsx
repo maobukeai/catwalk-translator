@@ -362,7 +362,7 @@ describe('Anki Ecosystem and Universal Glossary Engine', () => {
 
       expect(await screen.findByText('Subsurface Scattering')).toBeInTheDocument();
 
-      const ankiBtn = screen.getByRole('button', { name: /📇 同步至 Anki/ });
+      const ankiBtn = screen.getByRole('button', { name: /同步至 Anki/ });
       fireEvent.click(ankiBtn);
 
       expect(await screen.findByText('同步生词到 Anki')).toBeInTheDocument();

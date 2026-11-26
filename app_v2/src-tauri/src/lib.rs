@@ -231,7 +231,7 @@ pub fn register_all_user_shortcuts(
         let hk = settings
             .toggle_window_hotkey
             .as_deref()
-            .unwrap_or("Alt+W");
+            .unwrap_or("Alt+Q");
         if !hk.trim().is_empty() {
             match parse_hotkey(hk) {
                 Ok(s) => {
@@ -448,7 +448,7 @@ pub fn run() {
                                 let hk = settings
                                     .toggle_window_hotkey
                                     .as_deref()
-                                    .unwrap_or("Alt+W");
+                                    .unwrap_or("Alt+Q");
                                 if !hk.trim().is_empty() {
                                     if let Ok(s) = parse_hotkey(hk) {
                                         if s == *shortcut {

@@ -9,10 +9,8 @@ import {
   Clipboard,
   Keyboard,
   Zap,
-  Info,
 } from "lucide-react";
 import { useSettingsStore } from "../stores/useSettingsStore";
-import { useOcrStatus } from "../hooks/useOcrStatus";
 
 export type AppTab = "translate" | "search" | "vocabulary" | "settings" | "ai" | "about";
 
@@ -52,9 +50,11 @@ export const Dock: React.FC<DockProps> = ({
   hotkey = "F4",
 }) => {
   const { settings } = useSettingsStore();
-  const { status: ocrStatus, detail: ocrDetail } = useOcrStatus();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isStretching, setIsStretching] = useState(false);
   const dockRef = useRef<HTMLDivElement>(null);
+  const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const prevTabRef = useRef<AppTab>(activeTab);
 
   // 点击 Dock 外部时关闭右键菜单
   useEffect(() => {
@@ -72,12 +72,6 @@ export const Dock: React.FC<DockProps> = ({
     if (id === "vocabulary") return "Ctrl+D 收藏";
     return "";
   };
-
-  const ocrDotColor =
-    ocrStatus === "ready" ? "var(--ok)" :
-    ocrStatus === "warming" ? "var(--warn)" :
-    ocrStatus === "failed" ? "var(--danger)" :
-    "var(--g-text-3)";
 
   const handleContextAction = (id: typeof CONTEXT_ACTIONS[number]["id"]) => {
     setMenuOpen(false);
@@ -97,7 +91,7 @@ export const Dock: React.FC<DockProps> = ({
   }>(() => {
     const activeIndex = DOCK_ITEMS.findIndex((item) => item.id === activeTab);
     return {
-      left: activeIndex >= 0 ? 14 + activeIndex * (42 + 7) : 14,
+      left: activeIndex >= 0 ? 12 + activeIndex * (42 + 8) : 12,
       top: 8,
       width: 42,
       height: 42,
@@ -119,7 +113,7 @@ export const Dock: React.FC<DockProps> = ({
       const activeIndex = DOCK_ITEMS.findIndex((item) => item.id === activeTab);
       if (activeIndex >= 0) {
         setIndicatorStyle({
-          left: 14 + activeIndex * (42 + 7),
+          left: 12 + activeIndex * (42 + 8),
           top: 8,
           width: 42,
           height: 42,
@@ -133,12 +127,47 @@ export const Dock: React.FC<DockProps> = ({
 
   useEffect(() => {
     updateIndicator();
+    if (prevTabRef.current !== activeTab) {
+      prevTabRef.current = activeTab;
+      setIsStretching(true);
+      const timer = setTimeout(() => setIsStretching(false), 140);
+      return () => clearTimeout(timer);
+    }
   }, [activeTab]);
 
   useEffect(() => {
     window.addEventListener("resize", updateIndicator);
     return () => window.removeEventListener("resize", updateIndicator);
   }, [activeTab]);
+
+  // macOS 高斯衰减磁力波浪（直接写入 CSS 变量，零 React 重渲染）
+  const handleDockMouseMove = (e: React.MouseEvent<HTMLElement>) => {
+    if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
+      return;
+    }
+    const cursorX = e.clientX;
+    for (const btn of buttonRefs.current) {
+      if (!btn) continue;
+      const rect = btn.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const dist = Math.abs(cursorX - centerX);
+      const factor = Math.exp(-(dist * dist) / 3000);
+      const ty = (-9 * factor).toFixed(2);
+      const scale = (1 + 0.32 * factor).toFixed(3);
+      btn.style.setProperty("--mag-ty", `${ty}px`);
+      btn.style.setProperty("--mag-scale", scale);
+    }
+  };
+
+  const handleDockMouseLeave = () => {
+    for (const btn of buttonRefs.current) {
+      if (!btn) continue;
+      btn.style.setProperty("--mag-ty", "0px");
+      btn.style.setProperty("--mag-scale", "1");
+    }
+  };
+
+  const indicatorPos = `translate3d(${indicatorStyle.left}px, ${indicatorStyle.top}px, 0)`;
 
   return (
     <div ref={dockRef} className="relative">
@@ -167,26 +196,29 @@ export const Dock: React.FC<DockProps> = ({
       <nav
         className="dock"
         aria-label="主导航"
+        onMouseMove={handleDockMouseMove}
+        onMouseLeave={handleDockMouseLeave}
         onContextMenu={(e) => {
           e.preventDefault();
           setMenuOpen((v) => !v);
         }}
       >
-        {/* 丝滑滑动高亮滑块与底部光点 */}
+        {/* 丝滑果冻滑动高亮滑块与底部发光指示条 */}
         <div
-          className="dock-indicator"
+          className={`dock-indicator ${isStretching ? "is-stretching" : ""}`}
           style={{
-            transform: `translate3d(${indicatorStyle.left}px, ${indicatorStyle.top}px, 0)`,
+            "--dock-ind-pos": indicatorPos,
+            transform: indicatorPos,
             width: `${indicatorStyle.width}px`,
             height: `${indicatorStyle.height}px`,
             opacity: indicatorStyle.visible ? 1 : 0,
-          }}
+          } as React.CSSProperties}
           aria-hidden
         >
           <span className="dock-dot" />
         </div>
 
-        {DOCK_ITEMS.map((item) => {
+        {DOCK_ITEMS.map((item, idx) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
           const tip = hotkeyTip(item.id);
@@ -195,6 +227,7 @@ export const Dock: React.FC<DockProps> = ({
               key={item.id}
               ref={(el) => {
                 itemRefs.current[item.id] = el;
+                buttonRefs.current[idx] = el;
               }}
               type="button"
               onClick={() => onTabChange(item.id)}
@@ -216,6 +249,9 @@ export const Dock: React.FC<DockProps> = ({
 
         {/* 截图划词翻译 CTA（强调色） */}
         <button
+          ref={(el) => {
+            buttonRefs.current[DOCK_ITEMS.length] = el;
+          }}
           type="button"
           onClick={onTriggerCapture}
           className="dock-item dock-cta"
@@ -228,14 +264,6 @@ export const Dock: React.FC<DockProps> = ({
             <kbd>{hotkey}</kbd>
           </span>
         </button>
-
-        {/* OCR 引擎真实状态微指示点 */}
-        <span
-          className="ml-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
-          style={{ background: ocrDotColor, boxShadow: `0 0 6px ${ocrDotColor}` }}
-          title={`OCR 引擎状态：${ocrStatus}${ocrDetail ? ` · ${ocrDetail}` : ""}`}
-          aria-label={`OCR 引擎状态：${ocrStatus}`}
-        />
       </nav>
     </div>
   );

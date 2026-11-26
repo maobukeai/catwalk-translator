@@ -247,6 +247,19 @@ pub fn get_active_glossary_pairs(state: &AppState) -> Vec<(String, String)> {
 
 
 
+pub fn phrase_options_from_state(state: &AppState) -> crate::translator::PhraseTranslationOptions {
+    state
+        .settings
+        .lock()
+        .ok()
+        .map(|st| crate::translator::PhraseTranslationOptions {
+            online_engines: st.online_engines.clone(),
+            preset_dicts: Some(st.preset_dicts.clone()),
+            translation_tiers: (!st.translation_tiers.is_empty()).then(|| st.translation_tiers.clone()),
+        })
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 pub async fn cmd_translate_phrases(
     state: State<'_, AppState>,
@@ -260,9 +273,18 @@ pub async fn cmd_translate_phrases(
 
     let pipeline = crate::translator::shared_pipeline();
     let glossary = get_active_glossary_pairs(&state);
+    let options = phrase_options_from_state(&state);
 
     let results = pipeline
-        .translate_phrases(&phrases, &preset, llm_config.as_ref(), &glossary)
+        .translate_phrases_styled_with_options(
+            &phrases,
+            &preset,
+            llm_config.as_ref(),
+            None,
+            &glossary,
+            None,
+            &options,
+        )
         .await;
     Ok(results)
 }
@@ -285,15 +307,17 @@ pub async fn cmd_translate_phrases_styled(
 
     let pipeline = crate::translator::shared_pipeline();
     let glossary = get_active_glossary_pairs(&state);
+    let options = phrase_options_from_state(&state);
 
     let results = pipeline
-        .translate_phrases_styled(
+        .translate_phrases_styled_with_options(
             &phrases,
             &preset,
             llm_config.as_ref(),
             style.as_deref(),
             &glossary,
             target_lang.as_deref(),
+            &options,
         )
         .await;
     Ok(results)
@@ -345,7 +369,7 @@ pub async fn cmd_llm_batch_refine(
 /// can be glassy; theme only picks the color palette.
 pub fn glass_enabled_for_settings(settings: &AppSettings) -> bool {
     match &settings.appearance {
-        Some(ap) => ap.enable_blur && ap.enable_transparency,
+        Some(ap) => ap.enable_blur && ap.blur_amount > 0,
         None => true,
     }
 }

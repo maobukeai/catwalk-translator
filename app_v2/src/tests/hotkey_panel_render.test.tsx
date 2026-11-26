@@ -40,7 +40,8 @@ describe('HotkeyPanel 快捷键控制中心渲染与交互测试', () => {
     expect(screen.getByText('F4')).toBeInTheDocument();
     expect(screen.getByText('Alt+Space')).toBeInTheDocument();
     expect(screen.getByText('Ctrl+Shift+C')).toBeInTheDocument();
-    expect(screen.getAllByText('Alt+W')).toHaveLength(2);
+    expect(screen.getByText('Alt+Q')).toBeInTheDocument();
+    expect(screen.getByText('Alt+W')).toBeInTheDocument();
 
     // 验证 5 个重新录制按钮与 5 个测试按钮
     const recordButtons = screen.getAllByRole('button', { name: /重新录制/i });
@@ -145,7 +146,7 @@ describe('HotkeyPanel 快捷键控制中心渲染与交互测试', () => {
     render(<HotkeyPanel />);
 
     // 旧值不在动态选项中，必须以兜底选项呈现而不是下拉空白
-    expect(screen.getByText('⚙️ deepseek（旧版通道，重新选择即更新）')).toBeInTheDocument();
+    expect(screen.getAllByText('⚙️ deepseek（旧版通道，重新选择即更新）').length).toBeGreaterThan(0);
   });
 
   it('默认状态下仅开启「全局划词选区」，其余快捷键（含快捷查词悬浮窗）默认关闭', () => {

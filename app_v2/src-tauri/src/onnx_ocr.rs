@@ -941,6 +941,7 @@ impl OnnxOcrEngine {
         // and shallow, but must remain intact; a dense CJK menu string such as
         // "文件编辑渲染窗口帮助" should be re-cut at real visual gutters.
         blocks = refine_dense_toolbar_blocks(sessions, &bgr, img_w, img_h, blocks)?;
+        blocks = trim_edge_icons_and_tighten_boxes(sessions, &bgr, img_w, img_h, blocks)?;
         let dense_toolbar = is_dense_toolbar_scene(&blocks);
         if self.fixed_version.is_none() {
             if dense_toolbar {
@@ -1180,7 +1181,7 @@ fn should_refine_dense_toolbar(block: &TextBlock, _version: &str) -> bool {
     // A full-size sentence may also consist of short words. Splitting it at
     // ink valleys destroys context and clips glyphs; this pass is for compact
     // UI toolbars only, not paragraphs or headings, regardless of model tier.
-    block.box_rect.height <= 32
+    block.box_rect.height <= 38
         && block.box_rect.width >= block.box_rect.height.saturating_mul(6)
         && (cjk_count >= 4 || short_word_row)
 }
@@ -1275,6 +1276,274 @@ fn refine_dense_toolbar_blocks(
         }
     }
     Ok(refined)
+}
+
+fn active_ink_column_runs(
+    bgr: &[u8],
+    img_w: u32,
+    img_h: u32,
+    rect: (u32, u32, u32, u32),
+    min_gutter: usize,
+) -> Vec<(usize, usize)> {
+    let (bx, by, bw, bh) = rect;
+    if bw == 0 || bh == 0 || bx >= img_w || by >= img_h {
+        return Vec::new();
+    }
+    let x1 = (bx + bw).min(img_w);
+    let y1 = (by + bh).min(img_h);
+    let cw = (x1 - bx) as usize;
+    let ch = (y1 - by) as usize;
+    if cw == 0 || ch == 0 || bgr.len() < img_w as usize * img_h as usize * 3 {
+        return Vec::new();
+    }
+
+    let min_ink_pixels = (ch / 6).max(2);
+    let mut active = vec![false; cw];
+    let mut column = Vec::with_capacity(ch);
+    for (local_x, is_active) in active.iter_mut().enumerate() {
+        column.clear();
+        for y in by as usize..y1 as usize {
+            let i = (y * img_w as usize + bx as usize + local_x) * 3;
+            let b = bgr[i] as u16;
+            let g = bgr[i + 1] as u16;
+            let r = bgr[i + 2] as u16;
+            column.push(((29 * b + 150 * g + 77 * r) >> 8) as u8);
+        }
+        column.sort_unstable();
+        let median = column[column.len() / 2];
+        let contrast_pixels = column.iter().filter(|&&v| v.abs_diff(median) >= 24).count();
+        *is_active = contrast_pixels >= min_ink_pixels;
+    }
+
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut x = 0;
+    while x < cw {
+        if !active[x] {
+            x += 1;
+            continue;
+        }
+        let start = x;
+        while x < cw && active[x] {
+            x += 1;
+        }
+        if let Some(prev) = runs.last_mut() {
+            if start - prev.1 < min_gutter {
+                prev.1 = x;
+                continue;
+            }
+        }
+        runs.push((start, x));
+    }
+    runs
+}
+
+fn tighten_box_vertically_to_ink(
+    bgr: &[u8],
+    img_w: u32,
+    img_h: u32,
+    bbox: BoundingBox,
+) -> BoundingBox {
+    let bx = bbox.x.max(0) as u32;
+    let by = bbox.y.max(0) as u32;
+    let bw = bbox.width;
+    let bh = bbox.height;
+    if bh < 12 || bw < 4 || bx >= img_w || by >= img_h {
+        return bbox;
+    }
+    let x1 = (bx + bw).min(img_w);
+    let y1 = (by + bh).min(img_h);
+    let cw = (x1 - bx) as usize;
+    let ch = (y1 - by) as usize;
+    if cw < 4 || ch < 12 || bgr.len() < img_w as usize * img_h as usize * 3 {
+        return bbox;
+    }
+
+    let mut row_luma = Vec::with_capacity(cw);
+    let mut first_ink: Option<usize> = None;
+    let mut last_ink: Option<usize> = None;
+    for local_y in 0..ch {
+        row_luma.clear();
+        let row_base = (by as usize + local_y) * img_w as usize + bx as usize;
+        for local_x in 0..cw {
+            let i = (row_base + local_x) * 3;
+            let b = bgr[i] as u16;
+            let g = bgr[i + 1] as u16;
+            let r = bgr[i + 2] as u16;
+            row_luma.push(((29 * b + 150 * g + 77 * r) >> 8) as u8);
+        }
+        row_luma.sort_unstable();
+        let median = row_luma[row_luma.len() / 2];
+        let contrast = row_luma.iter().filter(|&&v| v.abs_diff(median) >= 22).count();
+        // Ignore full-width container borders while keeping real glyph stroke rows.
+        if contrast >= 2 && contrast <= (cw * 4 / 5).max(2) {
+            if first_ink.is_none() {
+                first_ink = Some(local_y);
+            }
+            last_ink = Some(local_y);
+        }
+    }
+
+    let (Some(top_row), Some(bot_row)) = (first_ink, last_ink) else {
+        return bbox;
+    };
+    let ink_h = (bot_row - top_row + 1) as u32;
+    if ink_h < 6 || bh <= ink_h + 4 {
+        return bbox;
+    }
+    let pad_v = 2u32;
+    let new_y = by + (top_row as u32).saturating_sub(pad_v);
+    let new_bottom = (by + bot_row as u32 + 1 + pad_v).min(y1);
+    let new_h = new_bottom.saturating_sub(new_y).max(8);
+    if new_h + 2 >= bh {
+        return bbox;
+    }
+    BoundingBox {
+        x: bbox.x,
+        y: new_y as i32,
+        width: bbox.width,
+        height: new_h,
+    }
+}
+
+fn is_plausible_dropped_icon_prefix(orig: &str, trimmed: &str, trimmed_conf: f32, orig_conf: f32) -> bool {
+    let mut chars = orig.chars();
+    let first = chars.next();
+    let second = chars.next();
+    // Protect real numbered labels/quantities like "16 个环境", "1. 设置", "2-step", "3/4".
+    if first.is_some_and(|c| c.is_ascii_digit()) {
+        let followed_by_num_or_list_punct = second.is_some_and(|c| {
+            c.is_ascii_digit() || matches!(c, '.' | '、' | ':' | '/' | '-' | ')' | '）' | '%')
+        });
+        if followed_by_num_or_list_punct || orig_conf >= 0.90 {
+            return false;
+        }
+    }
+    if orig.chars().next().is_some_and(|c| matches!(
+        c,
+        '☐' | '☑' | '☒' | '□' | '■' | '☆' | '★' | '◇' | '◆' | '☰' | '≡' | '▷' | '▶' | '▽' | '▼'
+    )) {
+        return true;
+    }
+    if let Some(prefix) = orig.strip_suffix(trimmed) {
+        let p = prefix.trim();
+        let p_chars = p.chars().count();
+        if p_chars == 1 {
+            let c = p.chars().next().unwrap();
+            return (!c.is_ascii_digit() && (matches!(c, '三' | '二' | '口' | '日' | '志' | '凉' | '&' | 'L' | 'o' | 'O' | 'l' | 'I' | '|' | '>' | '<')
+                || trimmed_conf >= orig_conf + 0.04))
+                || (c.is_ascii_digit() && orig_conf < 0.90 && trimmed_conf >= orig_conf + 0.05);
+        }
+        return false;
+    }
+    trimmed_conf >= orig_conf + 0.08
+        && orig_conf < 0.85
+        && trimmed.chars().any(|c| matches!(c as u32, 0x3400..=0x9fff) && orig.contains(c))
+}
+
+fn is_plausible_dropped_icon_suffix(orig: &str, trimmed: &str) -> bool {
+    let Some(suffix) = orig.strip_prefix(trimmed) else {
+        return false;
+    };
+    let s = suffix.trim();
+    let s_chars = s.chars().count();
+    if s_chars == 1 {
+        let c = s.chars().next().unwrap();
+        return matches!(c, 'N' | '2' | '二' | 'v' | 'V' | '>' | '<' | '|' | '×' | 'x' | 'X' | '⌄' | '∨');
+    }
+    false
+}
+
+/// Separate detached left UI icons (`☐`, `≡`, `☆`, etc.) and trailing
+/// dropdown chevrons from compact UI text labels, and tighten excess vertical
+/// DBNet unclip padding to actual glyph ink bounds.
+fn trim_edge_icons_and_tighten_boxes(
+    sessions: &mut Sessions,
+    bgr: &[u8],
+    img_w: u32,
+    img_h: u32,
+    blocks: Vec<TextBlock>,
+) -> Result<Vec<TextBlock>, String> {
+    let mut out = Vec::with_capacity(blocks.len());
+    for mut block in blocks {
+        if !block.text.contains('\n') {
+            block.box_rect = tighten_box_vertically_to_ink(bgr, img_w, img_h, block.box_rect);
+        }
+        if !block.text.contains('\n')
+            && block.box_rect.x >= 0
+            && block.box_rect.y >= 0
+            && block.box_rect.height >= 10
+            && block.box_rect.height <= 44
+            && block.box_rect.width >= block.box_rect.height.saturating_mul(2)
+        {
+            let mut bx = block.box_rect.x as u32;
+            let by = block.box_rect.y as u32;
+            let mut bw = block.box_rect.width;
+            let bh = block.box_rect.height;
+            let left_gutter = (bh as f32 * 0.22).ceil().clamp(3.0, 10.0) as usize;
+            let runs = active_ink_column_runs(bgr, img_w, img_h, (bx, by, bw, bh), left_gutter);
+            if runs.len() >= 2 && (runs[0].1 - runs[0].0) <= (bh as f32 * 1.40) as usize {
+                let main_start = runs[1].0 as u32;
+                let main_end = runs.last().unwrap().1 as u32;
+                if main_end > main_start + bh {
+                    let new_x = bx + main_start;
+                    let new_w = main_end - main_start;
+                    let crop = crop_bgr(bgr, img_w as usize, img_h as usize, new_x, by, new_w, bh);
+                    let prep = rec_preprocess(&crop, new_w, bh);
+                    if let Some((txt, conf)) = recognize_prepared_batch(sessions, std::slice::from_ref(&prep))?
+                        .into_iter()
+                        .next()
+                    {
+                        let cleaned = crate::ocr::clean_ocr_text(&txt);
+                        if cleaned.chars().filter(|c| !c.is_whitespace()).count() >= 2
+                            && conf >= 0.80
+                            && cleaned != block.text
+                            && is_plausible_dropped_icon_prefix(&block.text, &cleaned, conf, block.confidence)
+                        {
+                            bx = new_x;
+                            bw = new_w;
+                            block.text = cleaned;
+                            block.confidence = conf;
+                            block.box_rect.x = bx as i32;
+                            block.box_rect.width = bw;
+                        }
+                    }
+                }
+            }
+
+            let right_gutter = (bh as f32 * 0.45).ceil().clamp(5.0, 14.0) as usize;
+            let runs = active_ink_column_runs(bgr, img_w, img_h, (bx, by, bw, bh), right_gutter);
+            if runs.len() >= 2 {
+                let last = runs[runs.len() - 1];
+                let prev = runs[runs.len() - 2];
+                if (last.1 - last.0) <= (bh as f32 * 1.35) as usize && prev.1 > runs[0].0 + bh as usize {
+                    let main_start = runs[0].0 as u32;
+                    let main_end = prev.1 as u32;
+                    let new_x = bx + main_start;
+                    let new_w = main_end - main_start;
+                    let crop = crop_bgr(bgr, img_w as usize, img_h as usize, new_x, by, new_w, bh);
+                    let prep = rec_preprocess(&crop, new_w, bh);
+                    if let Some((txt, conf)) = recognize_prepared_batch(sessions, std::slice::from_ref(&prep))?
+                        .into_iter()
+                        .next()
+                    {
+                        let cleaned = crate::ocr::clean_ocr_text(&txt);
+                        if cleaned.chars().filter(|c| !c.is_whitespace()).count() >= 2
+                            && conf >= 0.80
+                            && cleaned != block.text
+                            && is_plausible_dropped_icon_suffix(&block.text, &cleaned)
+                        {
+                            block.text = cleaned;
+                            block.confidence = conf;
+                            block.box_rect.x = new_x as i32;
+                            block.box_rect.width = new_w;
+                        }
+                    }
+                }
+            }
+        }
+        out.push(block);
+    }
+    Ok(out)
 }
 
 fn block_visual_units(text: &str) -> f32 {
@@ -1759,7 +2028,7 @@ fn use_hist_equalize() -> bool {
     *HE.get_or_init(|| {
         std::env::var("ONNX_PREPROCESS_HE")
             .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-            .unwrap_or(true)
+            .unwrap_or(false)
     })
 }
 
@@ -1902,7 +2171,6 @@ fn postprocess_db_for_version(
             }
         }
     }
-    drop(seg);
 
     // BFS connected components (4-neighbour).
     let mut visited = vec![false; mw * mh];
@@ -1917,7 +2185,8 @@ fn postprocess_db_for_version(
         stack.push(start);
         visited[start] = true;
         let (mut min_x, mut min_y, mut max_x, mut max_y) = (usize::MAX, usize::MAX, 0usize, 0usize);
-        let (mut count, mut score_sum) = (0u32, 0f32);
+        let (mut seg_count, mut seg_sum) = (0u32, 0f32);
+        let (mut total_count, mut total_sum) = (0u32, 0f32);
 
         while let Some(i) = stack.pop() {
             let (x, y) = (i % mw, i / mw);
@@ -1925,8 +2194,12 @@ fn postprocess_db_for_version(
             min_y = min_y.min(y);
             max_x = max_x.max(x);
             max_y = max_y.max(y);
-            count += 1;
-            score_sum += map[i];
+            total_count += 1;
+            total_sum += map[i];
+            if seg[i] {
+                seg_count += 1;
+                seg_sum += map[i];
+            }
 
             if x > 0 && !visited[i - 1] && dilated[i - 1] {
                 visited[i - 1] = true;
@@ -1948,10 +2221,16 @@ fn postprocess_db_for_version(
 
         let bw = (max_x - min_x + 1) as u32;
         let bh = (max_y - min_y + 1) as u32;
-        if count < 1 || bw == 0 || bh == 0 {
+        if total_count < 1 || bw == 0 || bh == 0 {
             continue;
         }
-        let score = score_sum / count as f32;
+        // Score over the un-dilated `seg` core so 1px low-probability halo
+        // borders do not pull small/thin UI labels below DET_BOX_THRESH.
+        let score = if seg_count > 0 {
+            seg_sum / seg_count as f32
+        } else {
+            total_sum / total_count as f32
+        };
         if score < DET_BOX_THRESH {
             continue;
         }
@@ -1985,9 +2264,8 @@ fn postprocess_db_for_version(
     }
 
     // 冗余外壳抑制（Containment & Ghost Row Suppression）：
-    // 当存在一个小框 B 被一个大框 A 几乎完全包含（重叠面积占 B 的 80% 以上），
-    // 且大框 A 的面积显著大于 B（> 2.0 倍），说明大框 A 是由于表格交替浅灰底纹或分割线
-    // 引起的虚假连通外壳，必须剔除大框 A，保留精准贴合文字的单元格独立框。
+    // 只有当大框 A 同时包含 >= 2 个彼此水平分离的真实单元格子框 B 时，才说明 A 是表格浅灰底纹
+    // 或分割线引起的虚假连通外壳并予剔除；若 A 内部仅含单个小碎片（如孤立标点/偏旁），绝不删除整行 A。
     let mut suppressed = vec![false; out.len()];
     for i in 0..out.len() {
         if suppressed[i] {
@@ -1995,12 +2273,16 @@ fn postprocess_db_for_version(
         }
         let (ax, ay, aw, ah) = out[i];
         let a_area = (aw as u64) * (ah as u64);
+        let mut children: Vec<(u32, u32)> = Vec::new();
 
         for j in 0..out.len() {
             if i == j || suppressed[j] {
                 continue;
             }
             let (bx, by, bw, bh) = out[j];
+            if bw < 6 || bh < 6 {
+                continue;
+            }
             let b_area = (bw as u64) * (bh as u64);
             if a_area <= (b_area * 2) {
                 continue;
@@ -2014,8 +2296,18 @@ fn postprocess_db_for_version(
             if inter_x1 > inter_x0 && inter_y1 > inter_y0 {
                 let inter_area = ((inter_x1 - inter_x0) as u64) * ((inter_y1 - inter_y0) as u64);
                 if (inter_area as f64) / (b_area as f64) >= 0.80 {
-                    suppressed[i] = true;
-                    break;
+                    let bx_end = bx + bw;
+                    let disjoint = children.iter().all(|&(cx0, cx1)| {
+                        let ox = cx1.min(bx_end).saturating_sub(cx0.max(bx));
+                        ox <= bw.min(cx1 - cx0) / 4
+                    });
+                    if disjoint {
+                        children.push((bx, bx_end));
+                        if children.len() >= 2 {
+                            suppressed[i] = true;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -2973,6 +3265,105 @@ mod tests {
         assert_eq!(get_active_version(), "v6t");
 
         unload_engine();
+    }
+
+    #[test]
+    fn test_use_hist_equalize_defaults_off_unless_explicitly_enabled() {
+        if std::env::var_os("ONNX_PREPROCESS_HE").is_none() {
+            assert!(!use_hist_equalize());
+        }
+    }
+
+    #[test]
+    fn test_postprocess_db_seg_only_scoring_keeps_thin_low_contrast_line() {
+        let (mw, mh) = (80usize, 40usize);
+        let mut map = vec![0.02f32; mw * mh];
+        for y in 18..21 {
+            for x in 10..50 {
+                map[y * mw + x] = 0.65;
+            }
+        }
+        let boxes = postprocess_db_for_version(&map, mw, mh, 160, 80, "v6");
+        assert_eq!(boxes.len(), 1, "thin low-contrast core line must not be dropped by dilation halo");
+    }
+
+    #[test]
+    fn test_postprocess_db_preserves_line_containing_single_inner_dot() {
+        let (mw, mh) = (120usize, 60usize);
+        let mut map = vec![0.02f32; mw * mh];
+        // Main U-like contour spanning x=10..80, y=15..45 (upper and lower arms)
+        for y in 15..20 {
+            for x in 10..80 { map[y * mw + x] = 0.9; }
+        }
+        for y in 15..45 {
+            for x in 10..15 { map[y * mw + x] = 0.9; }
+        }
+        for y in 40..45 {
+            for x in 10..80 { map[y * mw + x] = 0.9; }
+        }
+        // One disconnected interior stroke/dot inside the bounding box
+        for y in 26..33 {
+            for x in 35..43 { map[y * mw + x] = 0.9; }
+        }
+        let boxes = postprocess_db_for_version(&map, mw, mh, 240, 120, "v6");
+        assert!(boxes.iter().any(|b| b.2 >= 120), "outer text line must not be suppressed by a single inner fragment: {:?}", boxes);
+    }
+
+    #[test]
+    fn test_postprocess_db_suppresses_ghost_shell_wrapping_multiple_cells() {
+        let (mw, mh) = (160usize, 80usize);
+        let mut map = vec![0.02f32; mw * mh];
+        // Two separate inner cell blobs
+        for y in 26..34 {
+            for x in 20..50 { map[y * mw + x] = 0.9; }
+            for x in 100..130 { map[y * mw + x] = 0.9; }
+        }
+        // Thin disconnected top/bottom ghost frame around both
+        for y in 16..19 {
+            for x in 12..140 { map[y * mw + x] = 0.85; }
+        }
+        for y in 16..50 {
+            for x in 12..15 { map[y * mw + x] = 0.85; }
+            for x in 137..140 { map[y * mw + x] = 0.85; }
+        }
+        for y in 47..50 {
+            for x in 12..140 { map[y * mw + x] = 0.85; }
+        }
+        let boxes = postprocess_db_for_version(&map, mw, mh, 160, 80, "v6");
+        assert_eq!(boxes.len(), 2, "ghost outer table frame must be suppressed while retaining both cells: {:?}", boxes);
+    }
+
+    #[test]
+    fn test_tighten_box_vertically_to_ink_removes_excess_unclip_padding() {
+        let (w, h) = (80u32, 40u32);
+        let mut bgr = vec![248u8; (w * h * 3) as usize];
+        // Real glyph strokes occupy y=12..26 (14px tall) inside a 36px box
+        for y in 12usize..26 {
+            for x in 16usize..60 {
+                if (x + y) % 3 != 0 {
+                    let i = (y * w as usize + x) * 3;
+                    bgr[i..i + 3].fill(30);
+                }
+            }
+        }
+        let tightened = tighten_box_vertically_to_ink(
+            &bgr,
+            w,
+            h,
+            BoundingBox { x: 8, y: 2, width: 64, height: 36 },
+        );
+        assert!(tightened.y >= 10 && tightened.y <= 12, "y={}", tightened.y);
+        assert!(tightened.height >= 16 && tightened.height <= 20, "height={}", tightened.height);
+    }
+
+    #[test]
+    fn test_icon_prefix_guard_strips_digit_icon_noise_without_stripping_numbers() {
+        assert!(is_plausible_dropped_icon_prefix("4网络与代理", "网络与代理", 0.99, 0.87));
+        assert!(is_plausible_dropped_icon_prefix("3AI 与 MCP", "AI 与 MCP", 0.99, 0.84));
+        assert!(is_plausible_dropped_icon_prefix("☐系统", "系统", 0.99, 0.82));
+        assert!(!is_plausible_dropped_icon_prefix("16 个环境", "个环境", 0.99, 0.98));
+        assert!(!is_plausible_dropped_icon_prefix("1. 网络与代理", "网络与代理", 0.99, 0.85));
+        assert!(!is_plausible_dropped_icon_prefix("3 个选项", "个选项", 0.99, 0.96));
     }
 }
 

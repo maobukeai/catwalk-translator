@@ -215,7 +215,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         theme: normalizedTheme,
         spotlightHotkey: fetched.spotlightHotkey || 'Alt+Space',
         clipboardHotkey: fetched.clipboardHotkey || 'Ctrl+Shift+C',
-        toggleWindowHotkey: fetched.toggleWindowHotkey || 'Alt+W',
+        toggleWindowHotkey: fetched.toggleWindowHotkey || 'Alt+Q',
         quickWindowHotkey: fetched.quickWindowHotkey || 'Alt+W',
         captureHotkeyEnabled: fetched.captureHotkeyEnabled ?? true,
         spotlightHotkeyEnabled: fetched.spotlightHotkeyEnabled ?? false,
@@ -874,11 +874,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       theme: normalizedTheme,
       appearance: updatedAppearance,
     };
-    // 毫秒级即时同步 CSS 根变量，消除 React 调度与 re-render 延迟
+    // 毫秒级即时同步 CSS 根变量与全局玻璃态属性，消除 React 调度与 re-render 延迟
     if (typeof document !== 'undefined') {
       const bEnabled = updatedAppearance.enableBlur ?? true;
-      const bAmount = bEnabled ? (updatedAppearance.blurAmount ?? 24) : 0;
+      const clampedAmount = Math.max(0, Math.min(40, updatedAppearance.blurAmount ?? 24));
+      const bAmount = bEnabled ? clampedAmount : 0;
+      const glassState = !bEnabled ? 'off' : clampedAmount === 0 ? 'clear' : 'frosted';
       document.documentElement.style.setProperty('--glass-blur', `${bAmount}px`);
+      document.documentElement.style.setProperty(
+        '--glass-frost-ratio',
+        bEnabled ? (clampedAmount / 40).toFixed(3) : '0'
+      );
+      document.documentElement.dataset.glass = glassState;
     }
 
     // 毫秒级即时同步 UI 状态

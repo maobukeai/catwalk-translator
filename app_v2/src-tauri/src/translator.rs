@@ -1030,6 +1030,86 @@ pub struct OnlineCredentials {
     pub yandex_folder_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct PhraseTranslationOptions {
+    pub online_engines: Option<crate::models::OnlineEngines>,
+    pub preset_dicts: Option<crate::models::PresetDicts>,
+    pub translation_tiers: Option<Vec<String>>,
+}
+
+fn preset_dict_enabled(dicts: Option<&crate::models::PresetDicts>, name: &str) -> bool {
+    let Some(dicts) = dicts else {
+        return true;
+    };
+    match name {
+        "blender" => dicts.blender,
+        "substance" => dicts.substance,
+        "unity" => dicts.unity,
+        "unreal" => dicts.unreal,
+        "maya" => dicts.maya,
+        "houdini" => dicts.houdini,
+        _ => true,
+    }
+}
+
+fn is_preset_dict_name(name: &str) -> bool {
+    matches!(
+        name,
+        "blender" | "substance" | "unity" | "unreal" | "maya" | "houdini"
+    )
+}
+
+fn cache_matches_preset(preset: &str, source_tier: &str, llm_config: Option<&LlmConfig>) -> bool {
+    let p = preset.trim().to_lowercase();
+    let tier = source_tier.to_lowercase();
+    if p.is_empty() || p == "auto" || is_preset_dict_name(&p) {
+        return true;
+    }
+    if p == "llm" || p.starts_with("llm:") {
+        if !(tier.contains("llm") || tier.contains("ai 精翻")) {
+            return false;
+        }
+        if let Some(cfg) = llm_config {
+            let prov = cfg.provider.trim().to_lowercase();
+            if !prov.is_empty() && !tier.contains(&prov) {
+                return false;
+            }
+        }
+        return true;
+    }
+    match p.as_str() {
+        "google" => tier.contains("google"),
+        "bing" => tier.contains("bing") || tier.contains("微软"),
+        "youdao" => tier.contains("youdao") || tier.contains("有道"),
+        "tencent" => tier.contains("tencent") || tier.contains("腾讯"),
+        "deepl" => tier.contains("deepl"),
+        "baidu" => {
+            (tier.contains("baidu") || tier.contains("百度"))
+                && !tier.contains("大模型")
+                && !tier.contains("llm")
+        }
+        "baidu_llm" | "baidullm" => {
+            tier.contains("baidu_llm") || tier.contains("百度大模型") || tier.contains("文心")
+        }
+        "caiyun" => tier.contains("caiyun") || tier.contains("彩云"),
+        "volcengine" => tier.contains("volcengine") || tier.contains("火山"),
+        "yandex" => tier.contains("yandex"),
+        "lingva" => tier.contains("lingva"),
+        "mymemory" => tier.contains("mymemory"),
+        "urban" => tier.contains("urban"),
+        "general" | "offline" => tier.contains("离线"),
+        _ => false,
+    }
+}
+
+fn can_batch_online_phrases(phrases: &[String], indices: &[usize]) -> bool {
+    indices.len() > 1
+        && indices.iter().all(|&idx| {
+            let s = phrases[idx].trim();
+            !s.is_empty() && !s.contains('\n') && !s.contains('\r')
+        })
+}
+
 pub struct MultiTierPipeline {
     pub cache: TranslationCache,
     pub client: std::sync::RwLock<Client>,
@@ -1096,6 +1176,15 @@ impl MultiTierPipeline {
     }
 
     pub fn lookup_dict(&self, phrase: &str, preset: &str) -> Option<(String, String)> {
+        self.lookup_dict_filtered(phrase, preset, None)
+    }
+
+    pub fn lookup_dict_filtered(
+        &self,
+        phrase: &str,
+        preset: &str,
+        allowed: Option<&crate::models::PresetDicts>,
+    ) -> Option<(String, String)> {
         let dicts = get_cg_dicts();
         let trimmed = phrase.trim();
         if trimmed.is_empty() {
@@ -1108,15 +1197,17 @@ impl MultiTierPipeline {
 
         if has_chinese {
             // 中文反查阶段 1：先严格全等匹配（绝对优先，杜绝首字符或短子串误拦截）
-            if let Some(map) = dicts.get(preset) {
-                for (k, v) in map {
-                    if v == trimmed {
-                        return Some((k.clone(), preset.to_string()));
+            if preset_dict_enabled(allowed, preset) {
+                if let Some(map) = dicts.get(preset) {
+                    for (k, v) in map {
+                        if v == trimmed {
+                            return Some((k.clone(), preset.to_string()));
+                        }
                     }
                 }
             }
             for (dict_name, map) in dicts {
-                if dict_name != preset {
+                if dict_name != preset && preset_dict_enabled(allowed, dict_name) {
                     for (k, v) in map {
                         if v == trimmed {
                             return Some((k.clone(), dict_name.clone()));
@@ -1127,15 +1218,17 @@ impl MultiTierPipeline {
 
             // 中文反查阶段 2：仅在无全等匹配且待查文本具有足够区分度(>1字)时执行包含匹配
             if trimmed.chars().count() > 1 {
-                if let Some(map) = dicts.get(preset) {
-                    for (k, v) in map {
-                        if v.contains(trimmed) {
-                            return Some((k.clone(), preset.to_string()));
+                if preset_dict_enabled(allowed, preset) {
+                    if let Some(map) = dicts.get(preset) {
+                        for (k, v) in map {
+                            if v.contains(trimmed) {
+                                return Some((k.clone(), preset.to_string()));
+                            }
                         }
                     }
                 }
                 for (dict_name, map) in dicts {
-                    if dict_name != preset {
+                    if dict_name != preset && preset_dict_enabled(allowed, dict_name) {
                         for (k, v) in map {
                             if v.contains(trimmed) {
                                 return Some((k.clone(), dict_name.clone()));
@@ -1146,21 +1239,23 @@ impl MultiTierPipeline {
             }
         } else {
             // Priority 1: Check requested preset dictionary
-            if let Some(map) = dicts.get(preset) {
-                if let Some(val) = map.get(trimmed) {
-                    return Some((val.clone(), preset.to_string()));
-                }
-                let lower = trimmed.to_lowercase();
-                for (k, v) in map {
-                    if k.to_lowercase() == lower {
-                        return Some((v.clone(), preset.to_string()));
+            if preset_dict_enabled(allowed, preset) {
+                if let Some(map) = dicts.get(preset) {
+                    if let Some(val) = map.get(trimmed) {
+                        return Some((val.clone(), preset.to_string()));
+                    }
+                    let lower = trimmed.to_lowercase();
+                    for (k, v) in map {
+                        if k.to_lowercase() == lower {
+                            return Some((v.clone(), preset.to_string()));
+                        }
                     }
                 }
             }
 
-            // Priority 2: Fallback search across remaining preset dictionaries
+            // Priority 2: Fallback search across remaining enabled preset dictionaries
             for (dict_name, map) in dicts {
-                if dict_name != preset {
+                if dict_name != preset && preset_dict_enabled(allowed, dict_name) {
                     if let Some(val) = map.get(trimmed) {
                         return Some((val.clone(), dict_name.clone()));
                     }
@@ -1197,8 +1292,40 @@ impl MultiTierPipeline {
         glossary: &[(String, String)],
         target_lang: Option<&str>,
     ) -> Vec<TranslationResult> {
+        self.translate_phrases_styled_with_options(
+            phrases,
+            preset,
+            llm_config,
+            style,
+            glossary,
+            target_lang,
+            &PhraseTranslationOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn translate_phrases_styled_with_options(
+        &self,
+        phrases: &[String],
+        preset: &str,
+        llm_config: Option<&LlmConfig>,
+        style: Option<&str>,
+        glossary: &[(String, String)],
+        target_lang: Option<&str>,
+        options: &PhraseTranslationOptions,
+    ) -> Vec<TranslationResult> {
         if let Some(target) = target_lang.map(str::trim).filter(|t| !t.is_empty() && *t != "auto") {
-            return self.translate_phrases_to_target(phrases, preset, llm_config, style, glossary, target).await;
+            return self
+                .translate_phrases_to_target(
+                    phrases,
+                    preset,
+                    llm_config,
+                    style,
+                    glossary,
+                    target,
+                    options,
+                )
+                .await;
         }
 
         // OCR batches often contain both English content and Chinese window chrome.
@@ -1207,13 +1334,39 @@ impl MultiTierPipeline {
             .partition(|&i| auto_target_for_text(&phrases[i]) == "en");
         if to_english.is_empty() || to_chinese.is_empty() {
             let target = if to_english.is_empty() { "zh-CN" } else { "en" };
-            return self.translate_phrases_to_target(phrases, preset, llm_config, style, glossary, target).await;
+            return self
+                .translate_phrases_to_target(
+                    phrases,
+                    preset,
+                    llm_config,
+                    style,
+                    glossary,
+                    target,
+                    options,
+                )
+                .await;
         }
         let english_phrases: Vec<String> = to_english.iter().map(|&i| phrases[i].clone()).collect();
         let chinese_phrases: Vec<String> = to_chinese.iter().map(|&i| phrases[i].clone()).collect();
         let (english, chinese) = tokio::join!(
-            self.translate_phrases_to_target(&english_phrases, preset, llm_config, style, glossary, "en"),
-            self.translate_phrases_to_target(&chinese_phrases, preset, llm_config, style, glossary, "zh-CN"),
+            self.translate_phrases_to_target(
+                &english_phrases,
+                preset,
+                llm_config,
+                style,
+                glossary,
+                "en",
+                options,
+            ),
+            self.translate_phrases_to_target(
+                &chinese_phrases,
+                preset,
+                llm_config,
+                style,
+                glossary,
+                "zh-CN",
+                options,
+            ),
         );
         let mut results: Vec<Option<TranslationResult>> = vec![None; phrases.len()];
         for (index, result) in to_english.into_iter().zip(english).chain(to_chinese.into_iter().zip(chinese)) {
@@ -1230,6 +1383,7 @@ impl MultiTierPipeline {
         style: Option<&str>,
         glossary: &[(String, String)],
         actual_target: &str,
+        options: &PhraseTranslationOptions,
     ) -> Vec<TranslationResult> {
         // 词库变化 → 翻译记忆整体失效(读锁快路径,通常零开销)
         self.cache.ensure_glossary(glossary_hash(glossary));
@@ -1244,6 +1398,35 @@ impl MultiTierPipeline {
         } else {
             "auto"
         };
+
+        let p_lower = preset.trim().to_lowercase();
+        let is_explicit_llm = p_lower == "llm" || p_lower.starts_with("llm:");
+        let is_preset_specific_online = online_engine_label(&p_lower).is_some();
+        let is_explicit_offline = matches!(p_lower.as_str(), "general" | "offline");
+
+        let tiers_opt = options.translation_tiers.as_deref();
+        let allow_preset_dict_tier =
+            tiers_opt.is_none_or(|t| t.iter().any(|s| s == "Preset Dictionary"));
+        let allow_llm_tier = tiers_opt.is_none_or(|t| t.iter().any(|s| s == "LLM API"));
+        let allow_online_tier =
+            tiers_opt.is_none_or(|t| t.iter().any(|s| s == "Online Fallback"));
+        let is_llm_configured = llm_config.is_some_and(|config| {
+            let ep = config.endpoint.trim();
+            let is_local = ep.contains("localhost") || ep.contains("127.0.0.1");
+            !ep.is_empty()
+                && (!config.api_key.trim().is_empty() || is_local)
+                && config.enabled.unwrap_or(true)
+        });
+        let llm_before_dict = tiers_opt.is_some_and(|t| {
+            let l = t.iter().position(|s| s == "LLM API");
+            let d = t.iter().position(|s| s == "Preset Dictionary");
+            matches!((l, d), (Some(li), Some(di)) if li < di)
+        });
+        let dict_before_llm = allow_preset_dict_tier
+            && !is_explicit_llm
+            && !is_preset_specific_online
+            && !is_explicit_offline
+            && !(llm_before_dict && is_llm_configured);
 
         for (i, phrase) in phrases.iter().enumerate() {
             let trimmed = phrase.trim();
@@ -1277,15 +1460,15 @@ impl MultiTierPipeline {
                     || (cached.source_tier == "标识符透传" && is_technical_identifier(trimmed))
                     || usable_translation_for_target(trimmed, &cached.translated, actual_target)
             }) {
-                let should_use_cache = match preset.to_lowercase().as_str() {
-                    "auto" => true,
-                    "google" => cached.source_tier.contains("Google"),
-                    "bing" => cached.source_tier.contains("Bing"),
-                    "youdao" => cached.source_tier.contains("有道"),
-                    "tencent" => cached.source_tier.contains("腾讯"),
-                    "llm" => cached.source_tier.contains("LLM"),
-                    _ => true,
-                };
+                let cached_dict_blocked = is_preset_dict_name(&cached.source_tier)
+                    && (!allow_preset_dict_tier
+                        || (llm_before_dict && is_llm_configured)
+                        || !preset_dict_enabled(
+                            options.preset_dicts.as_ref(),
+                            &cached.source_tier,
+                        ));
+                let should_use_cache = !cached_dict_blocked
+                    && cache_matches_preset(preset, &cached.source_tier, llm_config);
                 if should_use_cache {
                     results[i] = Some(TranslationResult {
                         original: phrase.clone(),
@@ -1328,8 +1511,10 @@ impl MultiTierPipeline {
             }
 
             // Step 1 & 2: Local Preset Dictionary & CG Fallback Dictionary
-            if allow_dict {
-                if let Some((translated, source_tier)) = self.lookup_dict(phrase, preset) {
+            if allow_dict && dict_before_llm {
+                if let Some((translated, source_tier)) =
+                    self.lookup_dict_filtered(phrase, preset, options.preset_dicts.as_ref())
+                {
                     let res = TranslationResult {
                         original: phrase.clone(),
                         translated,
@@ -1343,7 +1528,7 @@ impl MultiTierPipeline {
 
             // Step 2.5: Offline phrase dictionary — embedded general-UI terms,
             // participates only when the offline engine is installed on disk.
-            if offline_ready && allow_dict {
+            if offline_ready && allow_dict && (is_explicit_offline || dict_before_llm) {
                 if let Some(translated) = crate::offline::translate_offline(trimmed) {
                     let res = TranslationResult {
                         original: phrase.clone(),
@@ -1369,56 +1554,97 @@ impl MultiTierPipeline {
             .collect();
 
         // Step 3: Tier 3 (LLM API Client)
-        let is_preset_specific_online = [
-            "bing", "google", "youdao", "tencent", "deepl", "baidu", "baidu_llm", "baidullm", "caiyun", "volcengine", "yandex", "lingva", "mymemory", "urban"
-        ].contains(&preset.to_lowercase().as_str());
-        if !is_preset_specific_online {
+        if !is_preset_specific_online
+            && !is_explicit_offline
+            && (is_explicit_llm || allow_llm_tier)
+            && is_llm_configured
+        {
             if let Some(config) = llm_config {
-                let ep = config.endpoint.trim();
-                let is_local = ep.contains("localhost") || ep.contains("127.0.0.1");
-                let is_configured = !ep.is_empty()
-                    && (!config.api_key.trim().is_empty() || is_local)
-                    && config.enabled.unwrap_or(true);
-                if is_configured {
-                    let llm_res = self
-                        .translate_via_llm_with_style(
-                            &unmatched_phrases,
-                            config,
-                            style,
-                            glossary,
-                            Some(actual_target),
-                        )
-                        .await;
-                    if let Ok(map) = llm_res {
-                        if !map.is_empty() {
-                            let tier_label = if !config.provider.is_empty() {
-                                format!("LLM API ({})", config.provider)
-                            } else {
-                                "LLM API".to_string()
-                            };
+                let llm_res = self
+                    .translate_via_llm_with_style(
+                        &unmatched_phrases,
+                        config,
+                        style,
+                        glossary,
+                        Some(actual_target),
+                    )
+                    .await;
+                if let Ok(map) = llm_res {
+                    if !map.is_empty() {
+                        let tier_label = if !config.provider.is_empty() {
+                            format!("LLM API ({})", config.provider)
+                        } else {
+                            "LLM API".to_string()
+                        };
 
-                            let mut still_unmatched_indices = Vec::new();
-                            for &idx in &unmatched_indices {
-                                let p = phrases[idx].trim();
-                                // 采用鲁棒的智能对齐匹配，彻底杜绝因前缀序号(1./•)、全半角标点或路径转义导致遗漏
-                                if let Some(translated) = match_from_translation_map(p, &map)
-                                    .filter(|t| usable_translation_for_target(p, t, actual_target)) {
-                                    let res = TranslationResult {
-                                        original: phrases[idx].clone(),
-                                        translated,
-                                        source_tier: tier_label.clone(),
-                                    };
-                                    self.cache.store_with_lang(res.clone(), actual_target);
-                                    results[idx] = Some(res);
-                                } else {
-                                    still_unmatched_indices.push(idx);
-                                }
+                        let mut still_unmatched_indices = Vec::new();
+                        for &idx in &unmatched_indices {
+                            let p = phrases[idx].trim();
+                            // 采用鲁棒的智能对齐匹配，彻底杜绝因前缀序号(1./•)、全半角标点或路径转义导致遗漏
+                            if let Some(translated) = match_from_translation_map(p, &map)
+                                .filter(|t| usable_translation_for_target(p, t, actual_target))
+                            {
+                                let res = TranslationResult {
+                                    original: phrases[idx].clone(),
+                                    translated,
+                                    source_tier: tier_label.clone(),
+                                };
+                                self.cache.store_with_lang(res.clone(), actual_target);
+                                results[idx] = Some(res);
+                            } else {
+                                still_unmatched_indices.push(idx);
                             }
-                            unmatched_indices = still_unmatched_indices;
                         }
+                        unmatched_indices = still_unmatched_indices;
                     }
                 }
             }
+        }
+
+        // 若用户把 LLM 优先级排在本地词库之前，LLM 未命中时仍用本地/离线词库兜底
+        if !unmatched_indices.is_empty()
+            && llm_before_dict
+            && allow_preset_dict_tier
+            && !is_explicit_llm
+            && !is_preset_specific_online
+            && !is_explicit_offline
+        {
+            let mut post_llm_unmatched = Vec::new();
+            let is_target_zh = actual_target.starts_with("zh");
+            let is_target_en = actual_target.starts_with("en");
+            for &idx in &unmatched_indices {
+                let trimmed = phrases[idx].trim();
+                let phrase_has_cjk = trimmed.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+                let allow_dict = (is_target_zh && !phrase_has_cjk) || (is_target_en && phrase_has_cjk);
+                if allow_dict {
+                    if let Some((translated, source_tier)) =
+                        self.lookup_dict_filtered(&phrases[idx], preset, options.preset_dicts.as_ref())
+                    {
+                        let res = TranslationResult {
+                            original: phrases[idx].clone(),
+                            translated,
+                            source_tier,
+                        };
+                        self.cache.store_with_lang(res.clone(), actual_target);
+                        results[idx] = Some(res);
+                        continue;
+                    }
+                    if offline_ready {
+                        if let Some(translated) = crate::offline::translate_offline(trimmed) {
+                            let res = TranslationResult {
+                                original: phrases[idx].clone(),
+                                translated,
+                                source_tier: "离线词库".to_string(),
+                            };
+                            self.cache.store_with_lang(res.clone(), actual_target);
+                            results[idx] = Some(res);
+                            continue;
+                        }
+                    }
+                }
+                post_llm_unmatched.push(idx);
+            }
+            unmatched_indices = post_llm_unmatched;
         }
 
         if unmatched_indices.is_empty() {
@@ -1426,69 +1652,95 @@ impl MultiTierPipeline {
         }
 
         // Step 4: 在线阶段有统一截止时间，已完成的行保留；截止后不再逐行重跑。
-        let active_client = self.client();
-        let p_lower = preset.to_lowercase();
-        let selected_online = online_engine_label(&p_lower).is_some();
-        let race_budget = online_race_timeout();
-        let waves = unmatched_indices.len().div_ceil(PHRASE_ONLINE_CONCURRENCY) as u64;
-        let per_wave_ms = race_budget.as_millis() as u64
-            + if selected_online { 4000 } else { 0 };
-        let batch_ms = if !selected_online && unmatched_indices.len() > 1 {
-            race_budget.as_millis() as u64
-        } else {
-            0
-        };
-        let online_budget = Duration::from_millis(
-            (per_wave_ms.saturating_mul(waves) + batch_ms + 250).min(12_000),
-        );
-        let deadline = tokio::time::Instant::now() + online_budget;
+        let allow_online_fallback =
+            is_preset_specific_online || (!is_explicit_offline && allow_online_tier);
         let mut online_results: HashMap<usize, (String, String)> = HashMap::new();
+        if allow_online_fallback {
+            let active_client = self.client();
+            let selected_online = is_preset_specific_online;
+            let race_budget = online_race_timeout();
+            let waves = unmatched_indices.len().div_ceil(PHRASE_ONLINE_CONCURRENCY) as u64;
+            let per_wave_ms = race_budget.as_millis() as u64
+                + if selected_online { 4000 } else { 0 };
+            let batch_allowed = !selected_online && can_batch_online_phrases(phrases, &unmatched_indices);
+            let batch_ms = if batch_allowed {
+                race_budget.as_millis() as u64
+            } else {
+                0
+            };
+            let online_budget = Duration::from_millis(
+                (per_wave_ms.saturating_mul(waves) + batch_ms + 250).min(12_000),
+            );
+            let deadline = tokio::time::Instant::now() + online_budget;
+            let credentials = self.get_credentials();
 
-        // 多行合批优先减少网络往返；行数与输入严格对应才可采纳。
-        if !selected_online && unmatched_indices.len() > 1 {
-            let joined_text = unmatched_indices
-                .iter()
-                .map(|&idx| phrases[idx].trim())
-                .collect::<Vec<_>>()
-                .join("\n");
-            if let Ok(Ok(translated_joined)) = tokio::time::timeout_at(
-                deadline,
-                translate_online_fallback_with_lang(&active_client, &joined_text, actual_source, actual_target),
-            ).await {
-                let split_lines: Vec<&str> = translated_joined.lines().collect();
-                if split_lines.len() == unmatched_indices.len() {
-                    for (i, &idx) in unmatched_indices.iter().enumerate() {
-                        let translated = split_lines[i].trim();
-                        if usable_translation_for_target(phrases[idx].trim(), translated, actual_target) {
-                            online_results.insert(idx, (translated.to_string(), "Online Fallback".to_string()));
+            // 多行合批优先减少网络往返；仅对纯单行短语合批，且非空行数严格 1:1 对应才采纳，杜绝错位。
+            if batch_allowed {
+                let joined_text = unmatched_indices
+                    .iter()
+                    .map(|&idx| phrases[idx].trim())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if let Ok(Ok(translated_joined)) = tokio::time::timeout_at(
+                    deadline,
+                    translate_online_with_config(
+                        &active_client,
+                        &joined_text,
+                        actual_source,
+                        actual_target,
+                        options.online_engines.as_ref(),
+                        &credentials,
+                    ),
+                )
+                .await
+                {
+                    let split_lines: Vec<&str> = translated_joined.lines().collect();
+                    if split_lines.len() == unmatched_indices.len()
+                        && split_lines.iter().all(|l| !l.trim().is_empty())
+                    {
+                        for (i, &idx) in unmatched_indices.iter().enumerate() {
+                            let translated = split_lines[i].trim();
+                            if usable_translation_for_target(
+                                phrases[idx].trim(),
+                                translated,
+                                actual_target,
+                            ) {
+                                online_results.insert(
+                                    idx,
+                                    (translated.to_string(), "Online Fallback".to_string()),
+                                );
+                            }
                         }
                     }
                 }
             }
-        }
 
-        let remaining_indices: Vec<usize> = unmatched_indices
-            .iter()
-            .copied()
-            .filter(|idx| !online_results.contains_key(idx))
-            .collect();
-        let credentials = self.get_credentials();
-        let remaining_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if !remaining_indices.is_empty() && !remaining_budget.is_zero() {
-            let completed = collect_online_translations(
-                &remaining_indices,
-                PHRASE_ONLINE_CONCURRENCY,
-                remaining_budget,
-                |idx| translate_selected_online_with_fallback(
-                    &active_client,
-                    phrases[idx].trim(),
-                    &p_lower,
-                    actual_source,
-                    actual_target,
-                    &credentials,
-                ),
-            ).await;
-            online_results.extend(completed);
+            let remaining_indices: Vec<usize> = unmatched_indices
+                .iter()
+                .copied()
+                .filter(|idx| !online_results.contains_key(idx))
+                .collect();
+            let remaining_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if !remaining_indices.is_empty() && !remaining_budget.is_zero() {
+                let completed = collect_online_translations(
+                    &remaining_indices,
+                    PHRASE_ONLINE_CONCURRENCY,
+                    remaining_budget,
+                    |idx| {
+                        translate_selected_online_with_fallback(
+                            &active_client,
+                            phrases[idx].trim(),
+                            &p_lower,
+                            actual_source,
+                            actual_target,
+                            &credentials,
+                            options.online_engines.as_ref(),
+                        )
+                    },
+                )
+                .await;
+                online_results.extend(completed);
+            }
         }
 
         let mut still_unmatched = Vec::new();
@@ -1532,6 +1784,41 @@ impl MultiTierPipeline {
     }
 
     pub async fn translate_via_llm_with_style(
+        &self,
+        phrases: &[String],
+        config: &LlmConfig,
+        style: Option<&str>,
+        glossary: &[(String, String)],
+        target_lang: Option<&str>,
+    ) -> Result<HashMap<String, String>, String> {
+        const MAX_LLM_BATCH_PHRASES: usize = 24;
+        if phrases.len() <= MAX_LLM_BATCH_PHRASES {
+            return self
+                .translate_via_llm_chunk_with_style(phrases, config, style, glossary, target_lang)
+                .await;
+        }
+        let mut combined = HashMap::new();
+        let mut first_err: Option<String> = None;
+        for wave in phrases.chunks(MAX_LLM_BATCH_PHRASES).collect::<Vec<_>>().chunks(3) {
+            let futs = wave.iter().map(|chunk| {
+                self.translate_via_llm_chunk_with_style(chunk, config, style, glossary, target_lang)
+            });
+            for res in futures_util::future::join_all(futs).await {
+                match res {
+                    Ok(map) => combined.extend(map),
+                    Err(err) if first_err.is_none() => first_err = Some(err),
+                    Err(_) => {}
+                }
+            }
+        }
+        if !combined.is_empty() {
+            Ok(combined)
+        } else {
+            Err(first_err.unwrap_or_else(|| "LLM batch translation failed".to_string()))
+        }
+    }
+
+    async fn translate_via_llm_chunk_with_style(
         &self,
         phrases: &[String],
         config: &LlmConfig,
@@ -1636,6 +1923,15 @@ impl MultiTierPipeline {
 
         if parsed.is_empty() && !phrases.is_empty() {
             return Err("Failed to deserialize LLM translation map".to_string());
+        }
+
+        for phrase in phrases {
+            let trimmed = phrase.trim();
+            if !trimmed.is_empty() && !parsed.contains_key(trimmed) {
+                if let Some(matched) = match_from_translation_map(trimmed, &parsed) {
+                    parsed.insert(trimmed.to_string(), matched);
+                }
+            }
         }
 
         // Both the progressive-refinement IPC and the main pipeline use this
@@ -3580,9 +3876,10 @@ fn detect_source_language(text: &str) -> &'static str {
     }
     let han = text.chars().filter(|c| ('\u{3400}'..='\u{4DBF}').contains(c) || ('\u{4E00}'..='\u{9FFF}').contains(c)).count();
     let latin = text.chars().filter(|c| c.is_ascii_alphabetic() || ('\u{00C0}'..='\u{024F}').contains(c)).count();
+    let lowercase_latin = text.chars().filter(|c| c.is_ascii_lowercase()).count();
     let cyrillic = text.chars().filter(|c| ('\u{0400}'..='\u{04FF}').contains(c)).count();
     if cyrillic > han.max(latin) { "ru" }
-    else if han > 0 && han >= latin { "zh-CN" }
+    else if han > 0 && (han >= latin || (!text.contains('\n') && latin <= 12 && lowercase_latin <= 4)) { "zh-CN" }
     else { "en" }
 }
 
@@ -4414,6 +4711,7 @@ async fn translate_selected_online_with_fallback(
     source: &str,
     target: &str,
     credentials: &OnlineCredentials,
+    online_engines: Option<&crate::models::OnlineEngines>,
 ) -> Option<(String, String)> {
     let label = online_engine_label(preset);
     if let Some(label) = label {
@@ -4450,7 +4748,16 @@ async fn translate_selected_online_with_fallback(
         }
     }
 
-    let translated = translate_online_fallback_with_lang(client, phrase, source, target).await.ok()?;
+    let translated = translate_online_with_config(
+        client,
+        phrase,
+        source,
+        target,
+        online_engines,
+        credentials,
+    )
+    .await
+    .ok()?;
     if !usable_translation_for_target(phrase, &translated, target) {
         return None;
     }
@@ -4476,102 +4783,116 @@ pub async fn translate_online_fallback_with_lang(
     source_lang: &str,
     target_lang: &str,
 ) -> Result<String, String> {
+    let creds = shared_pipeline().get_credentials();
+    translate_online_with_config(client, phrase, source_lang, target_lang, None, &creds).await
+}
 
+fn accept_structured_online(res: MultiEngineTranslation) -> Option<String> {
+    if !is_retry_status(&res)
+        && !res.source_tier.contains("Error")
+        && !res.source_tier.contains("Config")
+        && !res.source_tier.contains("Unconfigured")
+        && !res.translated.starts_with('[')
+    {
+        Some(res.translated)
+    } else {
+        None
+    }
+}
+
+pub async fn translate_online_with_config(
+    client: &Client,
+    phrase: &str,
+    source_lang: &str,
+    target_lang: &str,
+    online_engines: Option<&crate::models::OnlineEngines>,
+    creds: &OnlineCredentials,
+) -> Result<String, String> {
     let target_is_zh = target_lang.starts_with("zh");
     let target_is_en = target_lang.starts_with("en");
     let target_is_ja = target_lang.starts_with("ja");
 
+    let run_bing = online_engines.map_or(true, |o| o.bing.unwrap_or(true));
+    let run_tencent = online_engines.map_or(true, |o| o.tencent == Some(true));
+    let run_google = online_engines.map_or(true, |o| o.google == Some(true));
+    let run_youdao = online_engines.map_or(true, |o| o.youdao.unwrap_or(true))
+        && (target_is_zh || target_is_en);
+    let run_caiyun = online_engines.map_or(true, |o| o.caiyun == Some(true))
+        && (target_is_zh || target_is_en || target_is_ja);
+    let run_mymemory = online_engines.map_or(true, |o| o.my_memory == Some(true));
+    let run_lingva = online_engines.map_or(true, |o| o.lingva == Some(true));
+    let run_urban = online_engines.map_or(true, |o| o.urban == Some(true)) && target_is_en;
+    let run_baidu = online_engines.map_or(true, |o| o.baidu == Some(true));
+    let run_baidu_llm = online_engines.is_some_and(|o| o.baidu_llm == Some(true));
+    let run_deepl = online_engines.is_some_and(|o| o.deepl == Some(true));
+    let run_volcengine = online_engines.is_some_and(|o| o.volcengine == Some(true));
+    let run_yandex = online_engines.is_some_and(|o| o.yandex == Some(true));
+
     let mut futures = tokio::task::JoinSet::new();
 
-    // 1. 微软必应翻译（Edge 免密官方 API + cn.bing 直连并发，全语种支持良好，国内与海外均 150-300ms 极速稳定）
-    {
+    if run_bing {
         let c = client.clone();
         let p = phrase.to_string();
         let src = source_lang.to_string();
         let tgt = target_lang.to_string();
-        futures.spawn(async move {
-            translate_bing(&c, &p, &src, &tgt).await
-        });
+        futures.spawn(async move { translate_bing(&c, &p, &src, &tgt).await });
     }
 
-    // 2. 腾讯交互翻译（免密直连通道，原生支持中、英、日、韩、德、法、西、意、俄、葡、泰、越等）
-    {
+    if run_tencent {
         let c = client.clone();
         let p = phrase.to_string();
         let src = source_lang.to_string();
         let tgt = target_lang.to_string();
-        futures.spawn(async move {
-            translate_tencent(&c, &p, &src, &tgt).await
-        });
+        futures.spawn(async move { translate_tencent(&c, &p, &src, &tgt).await });
     }
 
-    // 3. Google GTX / 官方 Chrome 扩展接口（带短超时并发竞速，全语种支持）
-    {
+    if run_google {
         let c = client.clone();
         let p = phrase.to_string();
         let src = source_lang.to_string();
         let tgt = target_lang.to_string();
-        futures.spawn(async move {
-            translate_google(&c, &p, &src, &tgt).await
-        });
+        futures.spawn(async move { translate_google(&c, &p, &src, &tgt).await });
     }
 
-    // 4. 网易有道翻译（仅在目标为中/英时启用，AUTO 仅支持中英互译，排除韩/德/法/俄等无效请求）
-    if target_is_zh || target_is_en {
+    if run_youdao {
         let c = client.clone();
         let p = phrase.to_string();
         let src = source_lang.to_string();
         let tgt = target_lang.to_string();
-        futures.spawn(async move {
-            translate_youdao(&c, &p, &src, &tgt).await
-        });
+        futures.spawn(async move { translate_youdao(&c, &p, &src, &tgt).await });
     }
 
-    // 5. 彩云小译（仅在目标为中/英/日时启用）
-    if target_is_zh || target_is_en || target_is_ja {
+    if run_caiyun {
         let c = client.clone();
         let p = phrase.to_string();
         let src = source_lang.to_string();
         let tgt = target_lang.to_string();
-        futures.spawn(async move {
-            translate_caiyun(&c, &p, &src, &tgt).await
-        });
+        futures.spawn(async move { translate_caiyun(&c, &p, &src, &tgt).await });
     }
 
-    // 6. MyMemory 全球翻译记忆库（支持全语种）
-    {
+    if run_mymemory {
         let c = client.clone();
         let p = phrase.to_string();
         let src = source_lang.to_string();
         let tgt = target_lang.to_string();
-        futures.spawn(async move {
-            translate_mymemory(&c, &p, &src, &tgt).await
-        });
+        futures.spawn(async move { translate_mymemory(&c, &p, &src, &tgt).await });
     }
 
-    // 7. Lingva 镜像（Google 翻译国内免翻直连镜像）
-    {
+    if run_lingva {
         let c = client.clone();
         let p = phrase.to_string();
         let src = source_lang.to_string();
         let tgt = target_lang.to_string();
-        futures.spawn(async move {
-            translate_lingva(&c, &p, &src, &tgt).await
-        });
+        futures.spawn(async move { translate_lingva(&c, &p, &src, &tgt).await });
     }
 
-    // 8. Urban Dictionary 俚语释义（仅限目标为英文）
-    if target_is_en {
+    if run_urban {
         let c = client.clone();
         let p = phrase.to_string();
-        futures.spawn(async move {
-            translate_urban_dictionary(&c, &p).await
-        });
+        futures.spawn(async move { translate_urban_dictionary(&c, &p).await });
     }
 
-    // 9. 百度通用翻译（若用户已配置 AppID 与密钥，纳入并发大竞速池 ~200-400ms）
-    {
-        let creds = shared_pipeline().get_credentials();
+    if run_baidu {
         if let (Some(id), Some(sec)) = (creds.baidu_app_id.as_deref(), creds.baidu_secret.as_deref()) {
             if !id.trim().is_empty() && !sec.trim().is_empty() {
                 let c = client.clone();
@@ -4581,18 +4902,101 @@ pub async fn translate_online_fallback_with_lang(
                 let app_id = id.to_string();
                 let secret = sec.to_string();
                 futures.spawn(async move {
-                    let res = translate_baidu(&c, &p, &src, &tgt, Some(&app_id), Some(&secret)).await;
-                    if res.source_tier != "Baidu (Auth Error)"
-                        && res.source_tier != "Online (Retry)"
-                        && !res.translated.starts_with('[')
-                    {
-                        Some(res.translated)
-                    } else {
-                        None
-                    }
+                    accept_structured_online(
+                        translate_baidu(&c, &p, &src, &tgt, Some(&app_id), Some(&secret)).await,
+                    )
                 });
             }
         }
+    }
+
+    if run_baidu_llm {
+        if let (Some(id), Some(llm_key)) =
+            (creds.baidu_app_id.as_deref(), creds.baidu_llm_api_key.as_deref())
+        {
+            if !id.trim().is_empty() && !llm_key.trim().is_empty() {
+                let c = client.clone();
+                let p = phrase.to_string();
+                let src = source_lang.to_string();
+                let tgt = target_lang.to_string();
+                let app_id = id.to_string();
+                let secret = creds.baidu_secret.clone();
+                let key = llm_key.to_string();
+                futures.spawn(async move {
+                    accept_structured_online(
+                        translate_baidu_llm(
+                            &c,
+                            &p,
+                            &src,
+                            &tgt,
+                            Some(&app_id),
+                            secret.as_deref(),
+                            Some(&key),
+                        )
+                        .await,
+                    )
+                });
+            }
+        }
+    }
+
+    if run_deepl {
+        let has_key = creds.deepl_api_key.as_deref().is_some_and(|k| !k.trim().is_empty());
+        let has_url = creds.deepl_custom_url.as_deref().is_some_and(|u| !u.trim().is_empty());
+        if has_key || has_url {
+            let c = client.clone();
+            let p = phrase.to_string();
+            let src = source_lang.to_string();
+            let tgt = target_lang.to_string();
+            let key = creds.deepl_api_key.clone();
+            let url = creds.deepl_custom_url.clone();
+            futures.spawn(async move {
+                accept_structured_online(
+                    translate_deepl(&c, &p, &src, &tgt, key.as_deref(), url.as_deref()).await,
+                )
+            });
+        }
+    }
+
+    if run_volcengine {
+        if let (Some(ak), Some(sk)) = (
+            creds.volcengine_access_key.as_deref(),
+            creds.volcengine_secret_key.as_deref(),
+        ) {
+            if !ak.trim().is_empty() && !sk.trim().is_empty() {
+                let c = client.clone();
+                let p = phrase.to_string();
+                let src = source_lang.to_string();
+                let tgt = target_lang.to_string();
+                let ak = ak.to_string();
+                let sk = sk.to_string();
+                futures.spawn(async move {
+                    accept_structured_online(
+                        translate_volcengine(&c, &p, &src, &tgt, Some(&ak), Some(&sk)).await,
+                    )
+                });
+            }
+        }
+    }
+
+    if run_yandex {
+        if let Some(key) = creds.yandex_api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+            let c = client.clone();
+            let p = phrase.to_string();
+            let src = source_lang.to_string();
+            let tgt = target_lang.to_string();
+            let key = key.to_string();
+            let fid = creds.yandex_folder_id.clone();
+            futures.spawn(async move {
+                accept_structured_online(
+                    translate_yandex(&c, &p, &src, &tgt, Some(&key), fid.as_deref()).await,
+                )
+            });
+        }
+    }
+
+    if futures.is_empty() {
+        return Err("No online engines enabled".to_string());
     }
 
     first_accepted_race_result(futures, online_race_timeout(), |translated| {
@@ -4749,6 +5153,8 @@ mod translation_direction_regressions {
         assert!(usable_translation_for_target("English", "英文", "zh-CN"));
         assert_eq!(auto_target_for_text("設定を開く"), "zh-CN");
         assert_eq!(auto_target_for_text("中文"), "en");
+        assert_eq!(auto_target_for_text("AI 与 MCP"), "en");
+        assert_eq!(auto_target_for_text("API 密钥"), "en");
         assert_eq!(auto_target_for_text("设置\nTranslate the selected text into natural simplified Chinese."), "zh-CN");
         assert_eq!(detect_source_language("中文Русский текст для перевода"), "ru");
     }
@@ -6161,6 +6567,167 @@ Here is my thought process:
 
         // 恢复默认 system 状态
         set_network_config(NetworkConfig::default());
+    }
+
+    #[tokio::test]
+    async fn phrase_options_respect_disabled_preset_dicts_and_online_engines() {
+        let pipeline = MultiTierPipeline::new();
+        let all_disabled_dicts = crate::models::PresetDicts {
+            blender: false,
+            substance: false,
+            unity: false,
+            unreal: false,
+            maya: false,
+            houdini: false,
+        };
+        let all_disabled_online = crate::models::OnlineEngines {
+            google: Some(false),
+            bing: Some(false),
+            youdao: Some(false),
+            deepl: Some(false),
+            my_memory: Some(false),
+            baidu: Some(false),
+            baidu_llm: Some(false),
+            tencent: Some(false),
+            lingva: Some(false),
+            caiyun: Some(false),
+            urban: Some(false),
+            volcengine: Some(false),
+            yandex: Some(false),
+        };
+        let options = PhraseTranslationOptions {
+            online_engines: Some(all_disabled_online),
+            preset_dicts: Some(all_disabled_dicts),
+            translation_tiers: None,
+        };
+        let res = pipeline
+            .translate_phrases_styled_with_options(
+                &["Roughness".into()],
+                "auto",
+                None,
+                None,
+                &[],
+                Some("zh-CN"),
+                &options,
+            )
+            .await;
+        assert_eq!(res[0].original, "Roughness");
+        assert_eq!(res[0].translated, "Roughness");
+        assert_eq!(res[0].source_tier, "翻译失败·点击重试");
+    }
+
+    #[tokio::test]
+    async fn explicit_llm_preset_is_not_hijacked_by_preset_dict() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 4096];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            let body = serde_json::json!({
+                "choices": [{ "message": { "content": "{\"Roughness\":\"大模型粗糙度\"}" } }]
+            })
+            .to_string();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(headers.as_bytes()).await.unwrap();
+            socket.write_all(body.as_bytes()).await.unwrap();
+        });
+
+        let pipeline = MultiTierPipeline::new();
+        let config = LlmConfig {
+            id: Some("mock-llm".into()),
+            provider: "MockLLM".into(),
+            endpoint: format!("http://{}/v1/chat/completions", address),
+            api_key: "test-key".into(),
+            model: "mock-model".into(),
+            enabled: Some(true),
+        };
+        let res = pipeline
+            .translate_phrases_styled_with_options(
+                &["Roughness".into()],
+                "llm:mock-llm",
+                Some(&config),
+                None,
+                &[],
+                Some("zh-CN"),
+                &PhraseTranslationOptions::default(),
+            )
+            .await;
+        server.await.unwrap();
+        assert_eq!(res[0].translated, "大模型粗糙度");
+        assert!(res[0].source_tier.contains("LLM API"));
+    }
+
+    #[tokio::test]
+    async fn cache_does_not_leak_across_explicit_engines_or_llm_models() {
+        let pipeline = MultiTierPipeline::new();
+        pipeline.cache.store_with_lang(
+            TranslationResult {
+                original: "SpecularTint".into(),
+                translated: "谷歌镜面染色".into(),
+                source_tier: "Google 官方".into(),
+            },
+            "zh-CN",
+        );
+
+        let all_disabled_online = crate::models::OnlineEngines {
+            google: Some(false),
+            bing: Some(false),
+            youdao: Some(false),
+            deepl: Some(false),
+            my_memory: Some(false),
+            baidu: Some(false),
+            baidu_llm: Some(false),
+            tencent: Some(false),
+            lingva: Some(false),
+            caiyun: Some(false),
+            urban: Some(false),
+            volcengine: Some(false),
+            yandex: Some(false),
+        };
+        assert!(!cache_matches_preset("deepl", "Google 官方", None));
+        assert!(!cache_matches_preset("llm:deepseek", "Google 官方", None));
+        assert!(cache_matches_preset("google", "Google 官方", None));
+        assert!(!cache_matches_preset(
+            "llm:gemini",
+            "LLM API (OpenAI)",
+            Some(&LlmConfig {
+                id: Some("gemini".into()),
+                provider: "Gemini".into(),
+                endpoint: String::new(),
+                api_key: String::new(),
+                model: "gemini-2.5-flash".into(),
+                enabled: Some(true),
+            })
+        ));
+        let _ = pipeline
+            .translate_phrases_styled_with_options(
+                &["SpecularTint".into()],
+                "deepl",
+                None,
+                None,
+                &[],
+                Some("zh-CN"),
+                &PhraseTranslationOptions {
+                    online_engines: Some(all_disabled_online),
+                    preset_dicts: None,
+                    translation_tiers: None,
+                },
+            )
+            .await;
+    }
+
+    #[test]
+    fn multiline_phrase_skips_unsafe_newline_online_batching() {
+        let single_lines = vec!["First line".to_string(), "Second line".to_string()];
+        assert!(can_batch_online_phrases(&single_lines, &[0, 1]));
+
+        let with_newline = vec!["Line A\nLine B".to_string(), "Line C".to_string()];
+        assert!(!can_batch_online_phrases(&with_newline, &[0, 1]));
     }
 }
 

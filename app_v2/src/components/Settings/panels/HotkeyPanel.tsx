@@ -17,6 +17,9 @@ import type { OfflineEngineStatus } from '../../../services/tauri';
 import { normalizeHotkeyForCompare } from '../../../services/hotkeys';
 import { buildCaptureEngineChoices, findEngineOption } from '../../../services/engineOptions';
 import { LlmProviderConfigCard } from './LlmProviderConfigCard';
+import { GlassSelect } from '../../Common/GlassSelect';
+import { useSlidingIndicator } from '../../../hooks/useSlidingIndicator';
+import { SlidingHighlight } from '../../Common/SlidingHighlight';
 import type {
   LlmConfig, OcrEngineStatus, ThemeMode, FontFamilyOption, FontSizeOption, CustomDictItem,
 } from '../../../services/types';
@@ -38,9 +41,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
   onToggleWindow,
   onTriggerQuickWindow,
 }) => {
-  const { theme } = useAppTheme();
-  const isLight = theme === 'light';
-
+  const { isLight } = useAppTheme();
   const {
     settings,
     setHotkey,
@@ -120,7 +121,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
             { target: 'capture', label: '全局划词选区', value: settings.hotkey || 'F4' },
             { target: 'spotlight', label: 'Spotlight 查词', value: settings.spotlightHotkey || 'Alt+Space' },
             { target: 'clipboard', label: '剪贴板静默翻译', value: settings.clipboardHotkey || 'Ctrl+Shift+C' },
-            { target: 'toggleWindow', label: '唤醒/隐藏主程序', value: settings.toggleWindowHotkey || 'Alt+W' },
+            { target: 'toggleWindow', label: '唤醒/隐藏主程序', value: settings.toggleWindowHotkey || 'Alt+Q' },
             { target: 'quickWindow', label: '桌面贴图悬浮窗', value: settings.quickWindowHotkey || 'Alt+W' },
           ] as { target: string; label: string; value: string }[]
         ).find(
@@ -150,11 +151,13 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
   }, [recordingTarget, setHotkey, setSpotlightHotkey, setClipboardHotkey, setToggleWindowHotkey, setQuickWindowHotkey, settings.hotkey, settings.spotlightHotkey, settings.clipboardHotkey, settings.toggleWindowHotkey, settings.quickWindowHotkey]);
 
 
+  const releaseSlider = useSlidingIndicator<HTMLDivElement>(settings.captureReleaseAction ?? 'auto');
+
   return (
     <>
         <div className="space-y-4 animate-in fade-in duration-150">
-          <div className={`p-4 space-y-3.5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+          <div className={`settings-glass-card p-4 sm:p-5 space-y-3.5 ${
+            isLight ? 'text-slate-800' : 'text-zinc-100'
           }`}>
             <div>
               <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
@@ -392,7 +395,7 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                     } ${!(settings.toggleWindowHotkeyEnabled ?? false) ? 'opacity-40 line-through' : ''}`}
                     title="点击开始录制按键"
                   >
-                    {recordingTarget === 'toggleWindow' ? '⌨️ 请按下按键...' : settings.toggleWindowHotkey || 'Alt+W'}
+                    {recordingTarget === 'toggleWindow' ? '⌨️ 请按下按键...' : settings.toggleWindowHotkey || 'Alt+Q'}
                   </kbd>
 
                   <button
@@ -503,33 +506,29 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
               <label className={`block text-xs font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>
                 截图划词首选 AI 模型 / 翻译通道
               </label>
-              <select
-                value={settings.captureEngine || 'auto'}
-                onChange={(e) => setCaptureEngine(e.target.value)}
-                className={`w-full rounded-xl border px-3.5 py-2 text-xs focus:border-blue-500 focus:outline-none cursor-pointer font-medium ${
-                  isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-950/80 border-white/15 text-zinc-100'
-                }`}
-              >
-                {(() => {
-                  const choices = buildCaptureEngineChoices(settings);
-                  const legacy = settings.captureEngine && !findEngineOption(choices, settings.captureEngine)
-                    ? { value: settings.captureEngine, label: `⚙️ ${settings.captureEngine}（旧版通道，重新选择即更新）` }
-                    : null;
-                  return (
-                    <>
-                      <option value={choices.auto.value}>{choices.auto.label}</option>
-                      {legacy && <option value={legacy.value}>{legacy.label}</option>}
-                      {choices.groups.map((g) => (
-                        <optgroup key={g.key} label={`── ${g.label} ──`}>
-                          {g.options.map((o) => (
-                            <option key={o.value} value={o.value}>{o.label}</option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </>
-                  );
-                })()}
-              </select>
+              {(() => {
+                const choices = buildCaptureEngineChoices(settings);
+                const legacy = settings.captureEngine && !findEngineOption(choices, settings.captureEngine)
+                  ? { value: settings.captureEngine, label: `⚙️ ${settings.captureEngine}（旧版通道，重新选择即更新）` }
+                  : null;
+                const releaseSlider = useSlidingIndicator<HTMLDivElement>(settings.captureReleaseAction ?? 'auto');
+
+  return (
+                  <GlassSelect
+                    value={settings.captureEngine || 'auto'}
+                    options={[choices.auto, ...(legacy ? [legacy] : [])]}
+                    groups={choices.groups.map((g) => ({
+                      key: g.key,
+                      label: `── ${g.label} ──`,
+                      options: g.options.map((o) => ({ value: o.value, label: o.label })),
+                    }))}
+                    onChange={setCaptureEngine}
+                    fullWidth
+                    size="md"
+                    menuMinWidth={280}
+                  />
+                );
+              })()}
               <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
                 框选截图后将直接调用所选 AI 模型进行识别翻译，也可在划词浮层顶部随时秒切。
               </p>
@@ -546,25 +545,43 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                     「先调整」松手后选区保留 8 个控制点，可缩放/移动/方向键微调，按 Enter 再识别；「立即识别」保留旧版松手即译。
                   </p>
                 </div>
-                <div className="flex items-center p-0.5 rounded-xl border shrink-0">
+                <div
+                  ref={releaseSlider.containerRef}
+                  className={`relative flex items-center p-0.5 rounded-xl border shrink-0 ${
+                    isLight ? 'border-slate-200 bg-slate-100/70' : 'border-white/10 bg-zinc-900/60'
+                  }`}
+                >
+                  <SlidingHighlight
+                    rect={releaseSlider.rect}
+                    isReady={releaseSlider.isReady}
+                    variant="solid"
+                    radiusClass="rounded-lg"
+                    testId="hotkey-release-slider"
+                  />
                   {([
                     { value: 'adjust', label: '⏸ 先调整' },
                     { value: 'auto', label: '⚡ 立即识别' },
-                  ] as const).map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      data-testid={`release-action-${opt.value}`}
-                      onClick={() => setCaptureReleaseAction(opt.value)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                        (settings.captureReleaseAction ?? 'auto') === opt.value
-                          ? 'bg-sky-500 text-white shadow'
-                          : (isLight ? 'text-slate-600 hover:bg-slate-100' : 'text-zinc-300 hover:bg-white/10')
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+                  ] as const).map((opt) => {
+                    const isSelected = (settings.captureReleaseAction ?? 'auto') === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        ref={releaseSlider.registerItem(opt.value)}
+                        type="button"
+                        data-testid={`release-action-${opt.value}`}
+                        onClick={() => setCaptureReleaseAction(opt.value)}
+                        className={`relative z-10 px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                          isSelected
+                            ? releaseSlider.isReady
+                              ? 'text-white'
+                              : 'bg-sky-500 text-white shadow'
+                            : (isLight ? 'text-slate-600 hover:bg-slate-100' : 'text-zinc-300 hover:bg-white/10')
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -630,18 +647,19 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <select
+                  <GlassSelect
                     value={settings.hoverLookupModifier ?? 'ctrl'}
-                    onChange={(e) => setHoverLookupModifier(e.target.value as 'ctrl' | 'alt' | 'shift')}
-                    className={`rounded-lg border px-2 py-1 text-[11px] ${
-                      isLight ? 'bg-white border-slate-300 text-slate-700' : 'bg-zinc-900/60 border-zinc-700 text-zinc-200'
-                    }`}
+                    options={[
+                      { value: 'ctrl', label: 'Ctrl' },
+                      { value: 'alt', label: 'Alt' },
+                      { value: 'shift', label: 'Shift' },
+                    ]}
+                    onChange={(val) => setHoverLookupModifier(val as 'ctrl' | 'alt' | 'shift')}
                     title="悬停取词使用的修饰键"
-                  >
-                    <option value="ctrl">Ctrl</option>
-                    <option value="alt">Alt</option>
-                    <option value="shift">Shift</option>
-                  </select>
+                    size="xs"
+                    menuMinWidth={110}
+                    align="right"
+                  />
                   <button
                     type="button"
                     data-testid="hover-lookup-toggle"
@@ -730,6 +748,8 @@ export const HotkeyPanel: React.FC<HotkeyPanelProps> = ({
                   ? 'Spotlight 居中查词'
                   : recordingTarget === 'clipboard'
                   ? '剪贴板静默翻译'
+                  : recordingTarget === 'quickWindow'
+                  ? '桌面贴图悬浮窗'
                   : '唤醒 / 隐藏主程序'}
                 】快捷键
               </h3>

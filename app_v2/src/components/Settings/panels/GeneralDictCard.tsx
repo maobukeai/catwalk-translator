@@ -57,9 +57,7 @@ export const GeneralDictCard: React.FC = () => {
   };
 
   return (
-    <div className={`rounded-2xl border p-4 ${
-      isLight ? 'bg-white/70 border-slate-200' : 'bg-zinc-900/40 border-white/[0.07]'
-    }`} data-testid="general-dict-card">
+    <div className="settings-glass-card p-4 sm:p-5" data-testid="general-dict-card">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <BookOpen className="h-4 w-4 text-sky-500" />

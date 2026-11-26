@@ -12,6 +12,8 @@ interface LanguageDropdownProps {
   quickCodes?: LanguageCode[];
   showQuickPills?: boolean;
   align?: 'left' | 'right';
+  /** 紧凑胶囊桥模式（隐藏外部“源语言：/目标语言：”文字前缀） */
+  compact?: boolean;
 }
 
 export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
@@ -23,6 +25,7 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
   quickCodes = ["auto", "en", "zh-CN", "ja"],
   showQuickPills = false,
   align = 'left',
+  compact = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -41,16 +44,27 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
     }
   }, [isOpen]);
 
-  // Close dropdown on outside click
+  // Close dropdown on outside click or Escape
   useEffect(() => {
+    if (!isOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false);
       }
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setIsOpen(false);
+      }
+    };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
 
   const filteredOptions = searchQuery.trim()
     ? options.filter(
@@ -64,8 +78,8 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
   const availableQuickPills = options.filter((opt) => quickCodes.includes(opt.code));
 
   return (
-    <div ref={containerRef} className="relative inline-flex items-center space-x-2 font-sans">
-      <span className={`text-xs font-semibold pl-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>{label}：</span>
+    <div ref={containerRef} className={`relative inline-flex items-center ${compact ? 'space-x-1' : 'space-x-2'} font-sans`}>
+      <span className={compact ? 'sr-only' : `text-xs font-semibold pl-1 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>{label}：</span>
 
       {/* Quick Language Pills (only if enabled) */}
       {showQuickPills && (
@@ -99,20 +113,18 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
       {/* Custom Dropdown Trigger Button */}
       <button
         type="button"
+        title={label}
         onClick={() => setIsOpen((prev) => !prev)}
-        className={`flex items-center space-x-2 rounded-xl px-3 py-1.5 text-xs font-medium transition shadow-xs cursor-pointer focus:outline-none ${
-          isLight
-            ? "bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 shadow-sm"
-            : "bg-zinc-800/90 hover:bg-zinc-700/80 text-zinc-200 border border-zinc-700/80"
-        } ${
-          isOpen ? "border-blue-500 ring-2 ring-blue-500/20" : ""
+        className={`vision-select-trigger flex items-center space-x-1.5 ${compact ? 'rounded-full px-2.5 py-1' : 'rounded-xl px-3 py-1.5'} text-xs font-medium cursor-pointer ${
+          isOpen ? "is-open" : ""
         }`}
       >
-        <Globe className="h-3.5 w-3.5 text-blue-500" />
-        <span>{selectedOption.name}</span>
-        <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${
-          isLight ? "text-slate-500" : "text-zinc-400"
-        } ${isOpen ? "rotate-180 text-blue-500" : ""}`} />
+        <Globe className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--accent-text)" }} />
+        <span className="truncate max-w-[150px]">{selectedOption.name}</span>
+        <ChevronDown
+          className={`h-3.5 w-3.5 shrink-0 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+          style={{ color: isOpen ? "var(--accent-text)" : "var(--g-text-3)" }}
+        />
       </button>
 
       {/* Auto Detected Tag */}
@@ -126,47 +138,40 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
         </span>
       )}
 
-      {/* Custom Dropdown Menu Popover (Solid Opaque Background + Custom Scrollbar) */}
+      {/* Custom Dropdown Menu Popover (Unified Vision Glass Popover) */}
       {isOpen && (
         <div
-          className={`absolute top-full mt-2 z-[300] min-w-[225px] rounded-2xl p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-150 border ${
+          className={`vision-select-popover absolute top-full mt-2 z-[300] min-w-[235px] ${
             align === 'right' ? 'right-0 left-auto' : 'left-0'
-          } ${
-            isLight
-              ? "bg-white border-slate-300 text-slate-800 shadow-slate-900/15"
-              : "bg-[#181822] border-zinc-700 text-zinc-100 shadow-[0_16px_40px_rgba(0,0,0,0.85)]"
           }`}
         >
-          <div className={`px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider border-b mb-1.5 flex items-center justify-between ${
-            isLight ? "text-slate-500 border-slate-200" : "text-zinc-400 border-zinc-800"
-          }`}>
+          <div
+            className="vision-select-group-label flex items-center justify-between border-b mb-1.5 pb-1.5"
+            style={{ borderColor: "var(--g-hairline)" }}
+          >
             <span>选择语言 / Language</span>
-            <span className={isLight ? "text-slate-400" : "text-zinc-500"}>({options.length} 种)</span>
+            <span className="font-mono opacity-80">({options.length} 种)</span>
           </div>
 
           {/* Quick Search Input */}
-          <div className="px-1 mb-1.5">
-            <div className={`relative flex items-center rounded-lg border transition ${
-              isLight
-                ? "bg-slate-100/90 border-slate-200 focus-within:border-blue-500 focus-within:bg-white"
-                : "bg-zinc-800/90 border-zinc-700/80 focus-within:border-blue-500 focus-within:bg-zinc-800"
-            }`}>
-              <Search className={`h-3 w-3 absolute left-2.5 ${isLight ? "text-slate-400" : "text-zinc-400"}`} />
+          <div className="px-0.5 mb-1.5">
+            <div className="vision-select-search relative flex items-center">
+              <Search className="h-3 w-3 absolute left-2.5 pointer-events-none" style={{ color: "var(--g-text-3)" }} />
               <input
                 ref={searchInputRef}
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="搜索语言名称或代码 (如: ja, 日语)..."
-                className={`w-full bg-transparent text-xs pl-7 pr-7 py-1 outline-none font-medium placeholder:text-[11px] ${
-                  isLight ? "text-slate-800 placeholder:text-slate-400" : "text-zinc-100 placeholder:text-zinc-500"
-                }`}
+                className="w-full bg-transparent text-xs pl-7 pr-7 py-1 outline-none font-medium placeholder:text-[11px]"
+                style={{ color: "var(--g-text-1)" }}
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery("")}
-                  className="absolute right-2 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+                  className="absolute right-2 opacity-60 hover:opacity-100 cursor-pointer"
+                  style={{ color: "var(--g-text-2)" }}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -174,13 +179,7 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
             </div>
           </div>
 
-          <div
-            className={`max-h-64 overflow-y-auto space-y-0.5 pr-1 ${
-              isLight
-                ? "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent"
-                : "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent"
-            }`}
-          >
+          <div className="max-h-64 overflow-y-auto space-y-0.5 pr-0.5">
             {filteredOptions.length > 0 ? (
               filteredOptions.map((opt) => {
                 const isSelected = value === opt.code;
@@ -192,19 +191,15 @@ export const LanguageDropdown: React.FC<LanguageDropdownProps> = ({
                       onChange(opt.code);
                       setIsOpen(false);
                     }}
-                    className={`flex items-center justify-between w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
-                      isSelected
-                        ? (isLight ? "bg-blue-50 text-blue-700 font-bold border border-blue-200" : "bg-blue-600/25 text-blue-300 font-bold border border-blue-400/40")
-                        : (isLight ? "text-slate-700 hover:bg-slate-100 hover:text-slate-900" : "text-zinc-300 hover:bg-white/10 hover:text-white")
-                    }`}
+                    className={`vision-select-option ${isSelected ? "is-selected" : ""}`}
                   >
                     <span className="truncate pr-2">{opt.name}</span>
-                    {isSelected && <Check className="h-3.5 w-3.5 text-blue-500 shrink-0 ml-1" />}
+                    {isSelected && <Check className="h-3.5 w-3.5 shrink-0 ml-1" style={{ color: "var(--accent-text)" }} />}
                   </button>
                 );
               })
             ) : (
-              <div className="py-4 text-center text-xs text-slate-400 dark:text-zinc-500">
+              <div className="py-4 text-center text-xs" style={{ color: "var(--g-text-3)" }}>
                 未找到匹配的语言 "{searchQuery}"
               </div>
             )}

@@ -34,13 +34,17 @@ export function hasAnyCompleteModelSet(status: OfflineModelStatus[]): boolean {
   return false;
 }
 
-export const OcrModelGuideModal: React.FC<{ onGoDownload: () => void }> = ({ onGoDownload }) => {
+export const OcrModelGuideModal: React.FC<{ onGoDownload: () => void; suppressed?: boolean }> = ({
+  onGoDownload,
+  suppressed = false,
+}) => {
   const { isLight } = useAppTheme();
   const [open, setOpen] = useState(false);
   const [checkedOnce, setCheckedOnce] = useState(false);
   const [dismissForever, setDismissForever] = useState(false);
 
   useEffect(() => {
+    if (suppressed) return;
     let cancelled = false;
     (async () => {
       try {
@@ -61,7 +65,7 @@ export const OcrModelGuideModal: React.FC<{ onGoDownload: () => void }> = ({ onG
     return () => {
       cancelled = true;
     };
-  }, [checkedOnce]);
+  }, [checkedOnce, suppressed]);
 
   const close = (forever: boolean) => {
     setOpen(false);
@@ -74,87 +78,96 @@ export const OcrModelGuideModal: React.FC<{ onGoDownload: () => void }> = ({ onG
 
   return (
     <div className="fixed inset-0 z-[500] flex items-center justify-center p-4" data-testid="ocr-model-guide">
-      <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" onClick={() => close(false)} />
+      <div className="vision-modal-backdrop absolute inset-0" onClick={() => close(false)} />
       <div
-        className={`relative w-full max-w-md rounded-2xl border p-6 shadow-2xl overflow-hidden ${
-          isLight
-            ? 'bg-white/95 border-slate-200 text-slate-800'
-            : 'bg-zinc-900/95 border-white/10 text-zinc-100'
+        className={`vision-modal-shell vision-modal-enter relative w-full max-w-md rounded-[26px] p-6 overflow-hidden ${
+          isLight ? 'text-slate-800' : 'text-zinc-100'
         }`}
+        role="dialog"
+        aria-modal="true"
       >
         <button
           type="button"
           onClick={() => close(false)}
-          className={`absolute top-3 right-3 p-1.5 rounded-lg transition cursor-pointer ${
-            isLight ? 'text-slate-400 hover:bg-slate-100' : 'text-zinc-500 hover:bg-white/5'
+          className={`absolute top-4 right-4 p-1.5 rounded-full transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+            isLight ? 'text-slate-400 hover:bg-slate-200/70 hover:text-slate-700' : 'text-zinc-400 hover:bg-white/10 hover:text-zinc-100'
           }`}
           title="关闭"
         >
           <X className="h-4 w-4" />
         </button>
 
-        <div className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg text-[11px] font-semibold mb-3 ${
-          isLight ? 'bg-blue-500/10 text-blue-600' : 'bg-blue-500/15 text-blue-400'
-        }`}>
-          <Cpu className="h-3.5 w-3.5" />
-          首次使用提示
+        <div className="flex flex-col items-center text-center">
+          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-text)] shadow-inner">
+            <Cpu className="h-5 w-5" />
+          </div>
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-semibold bg-[var(--accent-soft)] text-[var(--accent-text)] border border-[var(--accent-border)] mb-2">
+            首次使用提示
+          </div>
+          <h2 className="text-base font-bold leading-snug text-[var(--g-text-1)]">尚未安装本地 OCR 识别模型</h2>
         </div>
 
-        <h2 className="text-base font-bold leading-snug">尚未安装本地 OCR 识别模型</h2>
-
-        <div className={`mt-2.5 space-y-2 text-[12.5px] leading-relaxed ${
-          isLight ? 'text-slate-600' : 'text-zinc-400'
-        }`}>
+        <div
+          className={`mt-4 rounded-2xl border p-3.5 space-y-2 text-[12.5px] leading-relaxed ${
+            isLight
+              ? 'bg-white/65 border-slate-200/70 text-slate-600'
+              : 'bg-white/[0.04] border-white/[0.08] text-zinc-300'
+          }`}
+        >
           <p>
-            截图划词翻译由<b className={isLight ? 'text-slate-900' : 'text-zinc-100'}>本地离线 PP-OCR 模型</b>
-            执行识别，模型由您自己下载安装（不占安装包体积）。未安装时 OCR 会降级到系统
-            内置识别——实测对 UI 小字几乎无法识别。
+            截图划词翻译由<b className="text-[var(--g-text-1)]">本地离线 PP-OCR 模型</b>
+            执行识别，模型由您自己下载安装（不占安装包体积）。未安装时 OCR 会降级到系统内置识别——实测对 UI 小字几乎无法识别。
           </p>
           <p>
-            推荐先下载 <b className={isLight ? 'text-slate-900' : 'text-zinc-100'}>PP-OCRv6 Small</b>（约 31MB，默认均衡档）；
+            推荐先下载 <b className="text-[var(--g-text-1)]">PP-OCRv6 Small</b>（约 31MB，默认均衡档）；
             Tiny 更快但复杂文字可能漏读，Medium 可按需试用。可在设置页下载并明确设置默认模型。
           </p>
         </div>
 
-        <div className="mt-5 flex items-center justify-between gap-3">
-          <label className={`flex items-center gap-2 text-[11.5px] cursor-pointer select-none ${
-            isLight ? 'text-slate-500' : 'text-zinc-500'
-          }`}>
+        <div className="mt-4 flex justify-center">
+          <label
+            className={`inline-flex items-center gap-2 text-[11.5px] cursor-pointer select-none rounded-full px-3 py-1 border transition ${
+              isLight
+                ? 'bg-white/75 border-slate-200/80 text-slate-600 hover:bg-white'
+                : 'bg-white/[0.05] border-white/10 text-zinc-300 hover:bg-white/[0.09]'
+            }`}
+          >
             <input
               type="checkbox"
               checked={dismissForever}
               onChange={(e) => setDismissForever(e.target.checked)}
-              className="accent-blue-500"
+              className="accent-[var(--accent)] cursor-pointer"
             />
             不再提示
           </label>
-          <div className="flex gap-2.5">
-            <button
-              type="button"
-              onClick={() => close(dismissForever)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-medium border transition cursor-pointer ${
-                isLight
-                  ? 'border-slate-300 text-slate-600 hover:bg-slate-100'
-                  : 'border-white/15 text-zinc-300 hover:bg-white/5'
-              }`}
-              data-testid="ocr-guide-dismiss"
-            >
-              稍后再说
-            </button>
-            <button
-              type="button"
-              data-testid="ocr-guide-download"
-              onClick={() => {
-                if (dismissForever && typeof window !== 'undefined') window.localStorage.setItem(DISMISS_KEY, '1');
-                setOpen(false);
-                onGoDownload();
-              }}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-semibold bg-blue-600 text-white hover:bg-blue-500 transition cursor-pointer shadow-sm"
-            >
-              <Download className="h-3.5 w-3.5" />
-              去下载模型
-            </button>
-          </div>
+        </div>
+
+        <div className="mt-4 flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => close(dismissForever)}
+            className={`flex-1 px-4 py-2 rounded-full text-xs font-semibold border transition cursor-pointer active:scale-97 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+              isLight
+                ? 'bg-white/85 border-slate-200/90 text-slate-600 hover:bg-white'
+                : 'bg-white/[0.06] border-white/12 text-zinc-300 hover:bg-white/[0.12]'
+            }`}
+            data-testid="ocr-guide-dismiss"
+          >
+            稍后再说
+          </button>
+          <button
+            type="button"
+            data-testid="ocr-guide-download"
+            onClick={() => {
+              if (dismissForever && typeof window !== 'undefined') window.localStorage.setItem(DISMISS_KEY, '1');
+              setOpen(false);
+              onGoDownload();
+            }}
+            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold bg-gradient-to-r from-[var(--accent)] to-indigo-600 text-white hover:brightness-110 transition cursor-pointer shadow-sm shadow-sky-500/20 active:scale-97 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]"
+          >
+            <Download className="h-3.5 w-3.5" />
+            去下载模型
+          </button>
         </div>
       </div>
     </div>

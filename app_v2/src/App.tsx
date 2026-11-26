@@ -22,8 +22,28 @@ import { useSettingsStore } from "./stores/useSettingsStore";
 import { useAppTheme } from "./hooks/useAppTheme";
 import { Camera } from "lucide-react";
 
+const TAB_ORDER: Record<AppTab, number> = {
+  translate: 0,
+  search: 1,
+  ai: 2,
+  vocabulary: 3,
+  settings: 4,
+  about: 5,
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("translate");
+  const [navDirection, setNavDirection] = useState<"none" | "right" | "left">("none");
+  const activeTabRef = useRef<AppTab>("translate");
+  activeTabRef.current = activeTab;
+
+  const handleTabChange = useCallback((nextTab: AppTab) => {
+    const prevTab = activeTabRef.current;
+    if (prevTab === nextTab) return;
+    setNavDirection(TAB_ORDER[nextTab] >= TAB_ORDER[prevTab] ? "right" : "left");
+    setActiveTab(nextTab);
+  }, []);
+
   const [triggerToast, setTriggerToast] = useState<string | null>(null);
   const [isOverlayOpen, setIsOverlayOpen] = useState(false);
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
@@ -58,7 +78,7 @@ function App() {
   const goDownloadOcrModels = () => {
     setSettingsInitialCategory('dicts');
     setSettingsFocusOcr(true);
-    setActiveTab('settings');
+    handleTabChange('settings');
   };
   const [clipboardPayload, setClipboardPayload] = useState<ClipboardPayload | null>(null);
   // seq 保证从划词 overlay 二次发送「相同文本」时也能强制重挂载 DualPaneTranslator
@@ -380,28 +400,42 @@ function App() {
   const activeTheme = appearance.theme || 'system';
 
   const blurEnabled = appearance.enableBlur ?? true;
-  const blurPx = appearance.blurAmount ?? 24;
-  // 磨砂开关是玻璃/纯色的唯一裁决：用户开启磨砂时任何主题都渲染玻璃层，
-  // 主题（system/dark/light）只决定配色，不再强制纯色。
-  const isSolid = !blurEnabled || blurPx === 0;
+  const blurPx = Math.max(0, Math.min(40, appearance.blurAmount ?? 24));
+  // 磨砂开关关闭才切为不透明纯色；开启磨砂但滑到 0px 时为「清晰透视」半透明态
+  const isSolid = !blurEnabled;
+  const isClearGlass = blurEnabled && blurPx === 0;
+  const dwmBlurActive = blurEnabled && blurPx > 0;
+  const frostRatio = blurEnabled ? blurPx / 40 : 0;
+  const glassState: 'off' | 'clear' | 'frosted' = isSolid ? 'off' : isClearGlass ? 'clear' : 'frosted';
 
   useEffect(() => {
     if (!isOverlayOpen) {
-      void cmdSetWindowBlur(blurEnabled, !isLight);
+      void cmdSetWindowBlur(dwmBlurActive, !isLight);
     }
-  }, [blurEnabled, isLight, isOverlayOpen]);
+  }, [dwmBlurActive, isLight, isOverlayOpen]);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
-      document.documentElement.style.setProperty('--glass-blur', `${blurPx}px`);
+      document.documentElement.style.setProperty('--glass-blur', `${blurEnabled ? blurPx : 0}px`);
+      document.documentElement.style.setProperty('--glass-frost-ratio', frostRatio.toFixed(3));
+      document.documentElement.dataset.glass = glassState;
     }
-  }, [blurPx]);
+  }, [blurEnabled, blurPx, frostRatio, glassState]);
 
-  const blurFilterVal = blurEnabled && blurPx > 0
-    ? `blur(${blurPx}px) saturate(185%) contrast(105%) brightness(104%)`
+  const blurFilterVal = dwmBlurActive
+    ? `blur(${blurPx}px) saturate(${Math.round(145 + frostRatio * 55)}%) contrast(${Math.round(102 + frostRatio * 4)}%)`
     : 'none';
 
-  // Dynamic style calculation for realistic Apple Frosted Glass / Solid Dark / Light
+  // Dynamic style calculation for realistic Frosted Glass / Clear Translucency / Solid
+  // 底色透明度随 0~40px 连续变化，避免遮盖 Windows DWM 亚克力或使浅色页变成死白纸
+  const windowBgColor = isSolid
+    ? (isLight ? '#f8fafc' : '#0f1015')
+    : isClearGlass
+    ? (isLight ? 'rgba(255, 255, 255, 0.22)' : 'rgba(15, 20, 34, 0.24)')
+    : (isLight
+        ? `rgba(255, 255, 255, ${(0.22 + frostRatio * 0.44).toFixed(3)})`
+        : `rgba(15, 20, 34, ${(0.26 + frostRatio * 0.46).toFixed(3)})`);
+
   const dynamicBgStyle: React.CSSProperties = isOverlayOpen
     ? {
         backgroundColor: 'transparent',
@@ -410,17 +444,13 @@ function App() {
         boxShadow: 'none',
       }
     : {
-        backgroundColor: isSolid
-          ? (isLight ? '#f8fafc' : '#0f1015')
-          : (isLight
-              ? 'rgba(255, 255, 255, 0.72)'
-              : 'rgba(18, 22, 34, 0.76)'),
+        backgroundColor: windowBgColor,
         backdropFilter: blurFilterVal,
         WebkitBackdropFilter: blurFilterVal,
         boxShadow: isFloatingWindow && !isOverlayOpen
           ? (isLight
-              ? 'inset 0 1px 0 rgba(255, 255, 255, 0.75)'
-              : 'inset 0 1px 0 rgba(255, 255, 255, 0.15)')
+              ? 'inset 0 1px 0 rgba(255, 255, 255, 0.85)'
+              : 'inset 0 1px 0 rgba(255, 255, 255, 0.24)')
           : 'none',
       };
 
@@ -430,96 +460,73 @@ function App() {
 
   // Blur amount as a CSS variable so every glass surface (titlebar, dock,
   // panels, cards, inputs) follows the user's slider — not just the backdrop.
-  const glassVars = { '--glass-blur': `${blurPx}px` } as React.CSSProperties;
+  const glassVars = {
+    '--glass-blur': `${blurEnabled ? blurPx : 0}px`,
+    '--glass-frost-ratio': frostRatio.toFixed(3),
+  } as React.CSSProperties;
   const glassRootStyle = { ...dynamicBgStyle, ...glassVars };
+
+  const pageAnimClass =
+    navDirection === "right"
+      ? "page-in-right"
+      : navDirection === "left"
+      ? "page-in-left"
+      : "page-in";
 
   return (
     <div
       style={glassRootStyle}
-      className={`relative h-screen w-screen flex flex-col antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden select-none transition-[border-radius,border-color] duration-150 ${fontClass} ${fontSizeClass} ${textColorClass} ${
+      className={`relative h-screen w-screen flex flex-col antialiased selection:bg-[var(--accent)] selection:text-white overflow-hidden select-none transition-[border-radius,border-color,background-color] duration-150 ${fontClass} ${fontSizeClass} ${textColorClass} ${
         isOverlayOpen
           ? 'bg-transparent'
           : isFloatingWindow
-          ? 'rounded-[8px] border border-black/[0.08] dark:border-white/[0.14]'
+          ? 'rounded-[8px] border border-black/[0.08] dark:border-white/[0.16]'
           : 'rounded-none border-none'
       }`}
     >
-      {/* Aurora Backdrop — strictly clipped within window shell */}
+      {/* Aurora Backdrop — clean Vision prism glow strictly clipped within window shell */}
       {!isOverlayOpen && !isSolid && (
         <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden" style={{ willChange: 'transform' }}>
           <div
-            className="absolute inset-0 transition-opacity duration-500 aurora-field opacity-[0.15]"
+            className="absolute inset-0 transition-opacity duration-300 aurora-field"
             style={{
-              filter: `blur(${blurPx * 1.5}px) saturate(1.1)`,
+              opacity: isClearGlass ? 0.06 : Number(((isLight ? 0.14 : 0.12) + frostRatio * 0.22).toFixed(3)),
+              filter: `blur(${Math.max(12, blurPx * 1.4).toFixed(1)}px) saturate(1.15)`,
               transform: 'scale(1.04)',
-              transitionProperty: 'opacity',
-              transitionDuration: '500ms',
+              transitionProperty: 'opacity, filter',
+              transitionDuration: '300ms',
               transitionTimingFunction: 'ease',
             }}
           >
-            {/* 轻盈微弱的环境辉光（低不透明度，不遮挡底层 Windows DWM 硬件级磨砂与桌面内容） */}
+            {/* 方案 A · 克制青蓝 + 靛蓝液态棱镜极光，强度随磨砂滑杆平滑响应 */}
             <div
               className="absolute -top-24 -left-20 h-[32rem] w-[32rem] rounded-full aurora-blob pointer-events-none"
               style={{
                 background: isLight
-                  ? 'radial-gradient(circle, rgba(186,230,253,0.30) 0%, rgba(224,242,254,0.12) 45%, transparent 70%)'
-                  : 'radial-gradient(circle, rgba(255,255,255,0.02) 0%, rgba(148,163,184,0.01) 45%, transparent 70%)',
-                animation: 'aurora-drift 24s ease-in-out infinite alternate',
+                  ? 'radial-gradient(circle, rgba(56,189,248,0.34) 0%, rgba(186,230,253,0.14) 48%, transparent 72%)'
+                  : 'radial-gradient(circle, rgba(56,189,248,0.32) 0%, rgba(14,165,233,0.10) 48%, transparent 72%)',
+                animation: 'aurora-drift 22s ease-in-out infinite alternate',
               }}
             />
             <div
-              className="absolute top-1/3 -right-16 h-[28rem] w-[28rem] rounded-full aurora-blob pointer-events-none"
+              className="absolute -bottom-24 -right-16 h-[30rem] w-[30rem] rounded-full aurora-blob pointer-events-none"
               style={{
                 background: isLight
-                  ? 'radial-gradient(circle, rgba(233,213,255,0.25) 0%, rgba(243,232,255,0.10) 45%, transparent 70%)'
-                  : 'radial-gradient(circle, rgba(255,255,255,0.015) 0%, rgba(100,116,139,0.01) 45%, transparent 70%)',
-                animation: 'aurora-drift 28s ease-in-out infinite alternate-reverse',
-              }}
-            />
-            <div
-              className="absolute -bottom-20 left-1/4 h-[30rem] w-[30rem] rounded-full aurora-blob pointer-events-none"
-              style={{
-                background: isLight
-                  ? 'radial-gradient(circle, rgba(254,240,138,0.20) 0%, rgba(254,249,195,0.08) 45%, transparent 70%)'
-                  : 'radial-gradient(circle, rgba(255,255,255,0.018) 0%, rgba(148,163,184,0.01) 45%, transparent 70%)',
-                animation: 'aurora-drift 32s ease-in-out infinite alternate',
+                  ? 'radial-gradient(circle, rgba(129,140,248,0.28) 0%, rgba(224,231,255,0.12) 48%, transparent 72%)'
+                  : 'radial-gradient(circle, rgba(129,140,248,0.28) 0%, rgba(99,102,241,0.09) 48%, transparent 72%)',
+                animation: 'aurora-drift 26s ease-in-out infinite alternate-reverse',
               }}
             />
           </div>
-
-          {/* 物理级喷砂微磨砂颗粒光栅层 (Physical Sandblasted Frosted Glass Texture) */}
-          <div
-            className="absolute inset-0 transition-opacity duration-500 pointer-events-none opacity-40"
-            style={{
-              filter: `blur(${(blurPx * 0.35).toFixed(1)}px)`,
-              backgroundImage: isLight
-                ? 'radial-gradient(rgba(100, 116, 139, 0.08) 1px, transparent 1.2px)'
-                : 'radial-gradient(rgba(255, 255, 255, 0.15) 1px, transparent 1.2px)',
-              backgroundSize: '10px 10px',
-            }}
-          />
-          <div
-            className="absolute inset-0 transition-opacity duration-500 pointer-events-none opacity-30"
-            style={{
-              filter: `blur(${(blurPx * 0.25).toFixed(1)}px)`,
-              backgroundImage: isLight
-                ? 'radial-gradient(rgba(148, 163, 184, 0.06) 1.2px, transparent 1.8px)'
-                : 'radial-gradient(rgba(255, 255, 255, 0.10) 1.2px, transparent 1.8px)',
-              backgroundSize: '22px 22px',
-              backgroundPosition: '7px 9px',
-            }}
-          />
         </div>
       )}
 
-      {/* Real Frosted Glass Grain & Specular Top Reflection Layer */}
-      {blurEnabled && !isSolid && !isOverlayOpen && (
-        <>
-          {/* Frosted Micro-Grain Texture Overlay */}
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.1)_1px,transparent_1px)] [background-size:8px_8px] opacity-25 mix-blend-overlay z-[1]" />
-          {/* Physical Noise Texture (SVG feTurbulence) */}
-          <div className="glass-noise-tex pointer-events-none absolute inset-0 opacity-[0.07] mix-blend-soft-light z-[1]" />
-        </>
+      {/* Subtle Physical Prism Grain Layer — scales with frost intensity */}
+      {dwmBlurActive && !isOverlayOpen && (
+        <div
+          className="glass-noise-tex pointer-events-none absolute inset-0 mix-blend-soft-light z-[1]"
+          style={{ opacity: Number((0.02 + frostRatio * 0.05).toFixed(3)) }}
+        />
       )}
 
       {/* Hide the chrome during capture without destroying form/chat/settings
@@ -529,7 +536,7 @@ function App() {
             onTriggerCapture={() => setIsOverlayOpen(true)}
             hotkey={settings.hotkey || "F4"}
             onQuickSearch={() => setIsSpotlightOpen((v) => !v)}
-            onOpenAbout={() => setActiveTab("about")}
+            onOpenAbout={() => handleTabChange("about")}
             onRequestClose={handleRequestClose}
             onOpenQuickWindow={handleOpenQuickWindow}
             quickWindowHotkey={quickWindowHotkey}
@@ -559,13 +566,17 @@ function App() {
           <main className="relative flex-1 min-w-0 overflow-y-auto scrollbar-thin px-4 sm:px-6 pt-2 pb-[116px]">
             <div
               key={activeTab}
-              className={`page-in mx-auto h-full w-full ${
+              className={`${pageAnimClass} mx-auto w-full ${
+                activeTab === "ai" ? "h-full" : ""
+              } ${
                 activeTab === "translate"
                   ? "max-w-[1600px]"
                   : activeTab === "ai"
                   ? "max-w-[1400px]"
                   : activeTab === "vocabulary"
                   ? "max-w-[1300px]"
+                  : activeTab === "settings"
+                  ? "max-w-[1220px]"
                   : "max-w-5xl"
               }`}
             >
@@ -574,16 +585,16 @@ function App() {
                   key={`transfer_${transferred.seq}`}
                   settings={settings}
                   initialText={transferred.text}
-                  onOpenSettings={() => setActiveTab("settings")}
+                  onOpenSettings={() => handleTabChange("settings")}
                 />
               )}
-              {activeTab === "ai" && <AiChatPanel onOpenSettings={() => setActiveTab("settings")} />}
+              {activeTab === "ai" && <AiChatPanel onOpenSettings={() => handleTabChange("settings")} />}
               {activeTab === "vocabulary" && <HistoryPanel />}
               {activeTab === "search" && (
-                <SearchPanel settings={settings} onOpenSettings={() => setActiveTab("settings")} />
+                <SearchPanel settings={settings} onOpenSettings={() => handleTabChange("settings")} />
               )}
               {activeTab === "about" && (
-                <AboutPanel onOpenSettings={() => setActiveTab("settings")} />
+                <AboutPanel onOpenSettings={() => handleTabChange("settings")} />
               )}
               {activeTab === "settings" && (
                 <SettingsDashboard
@@ -596,7 +607,7 @@ function App() {
                   onStartCapture={() => setIsOverlayOpen(true)}
                   onTriggerSpotlight={() => setIsSpotlightOpen(true)}
                   onTriggerClipboard={handleTriggerClipboard}
-                  onOpenAbout={() => setActiveTab("about")}
+                  onOpenAbout={() => handleTabChange("about")}
                   onToggleWindow={() => {
                     setTriggerToast("主程序显隐逻辑联动运行中 (可按下录制的热键随时切换！)");
                     setTimeout(() => setTriggerToast(null), 3000);
@@ -611,7 +622,7 @@ function App() {
             <div className="pointer-events-auto">
               <Dock
                 activeTab={activeTab}
-                onTabChange={setActiveTab}
+                onTabChange={handleTabChange}
                 onTriggerCapture={() => setIsOverlayOpen(true)}
                 onTriggerClipboard={handleTriggerClipboard}
                 onTriggerSpotlight={() => setIsSpotlightOpen(true)}
@@ -632,15 +643,15 @@ function App() {
         }}
         onSendToMainWindow={(text) => {
           setTransferred((t) => ({ text, seq: t.seq + 1 }));
-          setActiveTab("translate");
+          handleTabChange("translate");
         }}
       />
 
       {/* 首次使用引导 */}
       <OnboardingModal isOpen={isOnboardingOpen} onClose={closeOnboarding} />
 
-      {/* 离线 OCR 模型未安装时的新手引导（自动探测，可「去下载」直达设置页） */}
-      <OcrModelGuideModal onGoDownload={goDownloadOcrModels} />
+      {/* 离线 OCR 模型未安装时的新手引导（待首次引导关闭后再弹出，避免双弹窗叠加） */}
+      <OcrModelGuideModal onGoDownload={goDownloadOcrModels} suppressed={isOnboardingOpen} />
 
       {/* Spotlight Instant Search Float Window */}
       <SpotlightModal

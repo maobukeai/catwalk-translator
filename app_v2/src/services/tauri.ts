@@ -718,11 +718,12 @@ export function detectLanguage(text: string): { detected: import('./types').Lang
   // whole transferred document into English. Count the dominant script.
   const hanCount = (text.match(/[\u3400-\u4dbf\u4e00-\u9fff]/g) || []).length;
   const latinCount = (text.match(/[A-Za-z\u00c0-\u024f]/g) || []).length;
+  const lowerLatinCount = (text.match(/[a-z]/g) || []).length;
   const cyrillicCount = (text.match(/[\u0400-\u04ff]/g) || []).length;
   if (cyrillicCount > Math.max(hanCount, latinCount)) {
     return { detected: 'ru', suggestedTarget: 'zh-CN' };
   }
-  if (hanCount > 0 && hanCount >= latinCount) {
+  if (hanCount > 0 && (hanCount >= latinCount || (!text.includes('\n') && latinCount <= 12 && lowerLatinCount <= 4))) {
     return { detected: 'zh-CN', suggestedTarget: 'en' };
   }
   return { detected: 'en', suggestedTarget: 'zh-CN' };
@@ -1504,16 +1505,37 @@ export async function cmdUniversalTranslate(
 export async function cmdQueryText(
   text: string,
   preset: string,
-  llmConfig?: LlmConfig | null
+  llmConfig?: LlmConfig | null,
+  options?: {
+    skipLlm?: boolean;
+    onlineEngines?: AppSettings['onlineEngines'];
+    presetDicts?: AppSettings['presetDicts'];
+    translationTiers?: AppSettings['translationTiers'];
+    style?: AppSettings['translationStyle'];
+  }
 ): Promise<import('./types').TextQueryResponse> {
   const trimmed = text.trim();
-  const univRes = await cmdUniversalTranslate({
-    text: trimmed,
-    sourceLang: 'auto',
-    targetLang: 'auto',
-    preset,
-    llmConfig,
-  });
+  const shouldLookupDict =
+    trimmed.length > 0 &&
+    !/[\u4e00-\u9fa5]/.test(trimmed) &&
+    trimmed.split(/\s+/).length <= 3;
+
+  // 查词首屏默认开启 skipLlm（保留 Rust 1.5s 快通道熔断）并与离线词典查询完全并发，消除长等待
+  const [univRes, dictHit] = await Promise.all([
+    cmdUniversalTranslate({
+      text: trimmed,
+      sourceLang: 'auto',
+      targetLang: 'auto',
+      preset,
+      llmConfig,
+      skipLlm: options?.skipLlm ?? true,
+      onlineEngines: options?.onlineEngines,
+      presetDicts: options?.presetDicts,
+      translationTiers: options?.translationTiers,
+      style: options?.style,
+    }),
+    shouldLookupDict ? cmdGeneralDictLookup(trimmed).catch(() => null) : Promise.resolve(null),
+  ]);
 
   const original = (univRes.original || trimmed).trim();
   const hasChinese = /[\u4e00-\u9fa5]/.test(original);
@@ -1526,26 +1548,19 @@ export async function cmdQueryText(
     let phoneticUk = '';
     let pos = hasChinese ? '常用词条 / 表达' : '通用 / 专业术语';
 
-    // 如果是英文字词，尝试优先从通用离线词典 (ECDICT) 提取真实国际音标与词性
-    if (!hasChinese && original.split(/\s+/).length <= 3) {
-      try {
-        const hit = await cmdGeneralDictLookup(original);
-        if (hit) {
-          if (hit.phonetic && hit.phonetic.trim()) {
-            const cleanPhonetic = hit.phonetic.replace(/^[/\[]|[/\]]$/g, '').trim();
-            phoneticUs = `/ ${cleanPhonetic} /`;
-            phoneticUk = `[ ${cleanPhonetic} ]`;
-          }
-          if (hit.definitions && hit.definitions.length > 0) {
-            const firstDef = hit.definitions[0];
-            const posMatch = firstDef.match(/^([a-zA-Z]+\.)\s*/);
-            if (posMatch) {
-              pos = posMatch[1];
-            }
-          }
+    // 如果是英文字词，复用并发查到的通用离线词典 (ECDICT) 结果提取真实国际音标与词性
+    if (!hasChinese && original.split(/\s+/).length <= 3 && dictHit) {
+      if (dictHit.phonetic && dictHit.phonetic.trim()) {
+        const cleanPhonetic = dictHit.phonetic.replace(/^[/\[]|[/\]]$/g, '').trim();
+        phoneticUs = `/ ${cleanPhonetic} /`;
+        phoneticUk = `[ ${cleanPhonetic} ]`;
+      }
+      if (dictHit.definitions && dictHit.definitions.length > 0) {
+        const firstDef = dictHit.definitions[0];
+        const posMatch = firstDef.match(/^([a-zA-Z]+\.)\s*/);
+        if (posMatch) {
+          pos = posMatch[1];
         }
-      } catch {
-        // ECDICT 查询失败或未安装时平滑降级
       }
     }
 

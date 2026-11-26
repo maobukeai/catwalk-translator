@@ -733,7 +733,7 @@ impl Default for AppSettings {
             hotkey: "F4".to_string(),
             spotlight_hotkey: Some("Alt+Space".to_string()),
             clipboard_hotkey: Some("Ctrl+Shift+C".to_string()),
-            toggle_window_hotkey: Some("Alt+W".to_string()),
+            toggle_window_hotkey: Some("Alt+Q".to_string()),
             quick_window_hotkey: Some("Alt+W".to_string()),
             capture_hotkey_enabled: Some(true),
             spotlight_hotkey_enabled: Some(false),

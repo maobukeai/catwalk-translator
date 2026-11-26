@@ -11,6 +11,9 @@ import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
 import { NetworkSettingsCard } from './NetworkSettingsCard';
 import { NetworkDiagCard } from './NetworkDiagCard';
+import { GlassSelect } from '../../Common/GlassSelect';
+import { useSlidingIndicator } from '../../../hooks/useSlidingIndicator';
+import { SlidingHighlight } from '../../Common/SlidingHighlight';
 import {
   cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall,
   cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart,
@@ -98,6 +101,10 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
 
   // 开机自启是 OS 级注册表/启动项状态（不存 settings.json），挂载时查询真实状态
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
+  const ocrEngineSlider = useSlidingIndicator<HTMLDivElement>(settings.ocrEngine ?? 'auto', [isLight]);
+  const primaryEngineSlider = useSlidingIndicator<HTMLDivElement>(settings.primaryTranslationEngine ?? 'auto', [isLight]);
+  const closeActionSlider = useSlidingIndicator<HTMLDivElement>(settings.closeAction ?? 'ask', [isLight]);
+  const miniCloseSlider = useSlidingIndicator<HTMLDivElement>(settings.miniWindowCloseAction ?? 'hide', [isLight]);
   useEffect(() => {
     let cancelled = false;
     cmdGetAutoStart().then((v) => { if (!cancelled) setAutoStartEnabled(v); });
@@ -116,8 +123,8 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
   return (
     <>
         <div className="space-y-4 animate-in fade-in duration-150">
-          <div className={`p-5 space-y-5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+          <div className={`settings-glass-card p-5 space-y-5 ${
+            isLight ? 'text-slate-800' : 'text-zinc-100'
           }`}>
             <div>
               <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
@@ -278,21 +285,22 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                   isLight ? 'bg-slate-50 border-slate-200' : 'bg-zinc-950/50 border-white/[0.05]'
                 }`}>
                   <div className={isLight ? 'text-slate-600 font-medium' : 'text-zinc-400 font-medium'}>默认词库 (Default Preset)</div>
-                    <select
+                    <GlassSelect
                       value={settings.defaultPreset || 'blender'}
-                      onChange={(e) => setDefaultPreset(e.target.value)}
-                      className={`mt-1.5 w-full rounded-lg border px-2.5 py-1.5 text-xs focus:border-blue-500 focus:outline-none cursor-pointer ${
-                        isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-950/80 border-white/[0.08] text-zinc-100'
-                      }`}
-                    >
-                      <option value="blender">Blender</option>
-                      <option value="substance">Substance Painter</option>
-                      <option value="unity">Unity</option>
-                      <option value="unreal">Unreal Engine</option>
-                      <option value="maya">Maya</option>
-                      <option value="houdini">Houdini</option>
-                      <option value="general">通用模式 (General)</option>
-                    </select>
+                      onChange={setDefaultPreset}
+                      fullWidth
+                      size="md"
+                      className="mt-1.5"
+                      options={[
+                        { value: 'blender', label: 'Blender' },
+                        { value: 'substance', label: 'Substance Painter' },
+                        { value: 'unity', label: 'Unity' },
+                        { value: 'unreal', label: 'Unreal Engine' },
+                        { value: 'maya', label: 'Maya' },
+                        { value: 'houdini', label: 'Houdini' },
+                        { value: 'general', label: '通用模式 (General)' },
+                      ]}
+                    />
                   </div>
                 <div className={`rounded-xl border p-3 text-xs ${
                   isLight ? 'bg-slate-50 border-slate-200' : 'bg-zinc-950/50 border-white/[0.05]'
@@ -331,7 +339,14 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                   <div className={`font-medium mb-2 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
                     OCR 识别引擎
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                  <div ref={ocrEngineSlider.containerRef} className="relative grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                    <SlidingHighlight
+                      rect={ocrEngineSlider.rect}
+                      isReady={ocrEngineSlider.isReady}
+                      variant="card"
+                      radiusClass="rounded-lg"
+                      testId="pref-ocr-engine-slider"
+                    />
                     {([
                       {
                         value: 'auto',
@@ -355,12 +370,15 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                       return (
                         <button
                           key={value}
+                          ref={ocrEngineSlider.registerItem(value)}
                           type="button"
                           onClick={() => setOcrEngine(value)}
                           title={desc}
-                          className={`text-left rounded-lg border px-2.5 py-2 transition-all cursor-pointer
+                          className={`relative z-10 text-left rounded-lg border px-2.5 py-2 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]
                             ${isSelected
-                              ? (isLight ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-blue-500/60 bg-blue-500/10 text-blue-300')
+                              ? ocrEngineSlider.isReady
+                                ? 'border-transparent bg-transparent'
+                                : (isLight ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-blue-500/60 bg-blue-500/10 text-blue-300')
                               : (isLight ? 'border-slate-200 hover:border-slate-400 text-slate-700' : 'border-white/[0.06] hover:border-white/20 text-zinc-300')
                             }`}
                         >
@@ -445,7 +463,14 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                   <div className={`font-medium mb-2 ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
                     首选翻译引擎
                   </div>
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div ref={primaryEngineSlider.containerRef} className="relative grid grid-cols-2 gap-1.5">
+                    <SlidingHighlight
+                      rect={primaryEngineSlider.rect}
+                      isReady={primaryEngineSlider.isReady}
+                      variant="card"
+                      radiusClass="rounded-lg"
+                      testId="pref-primary-engine-slider"
+                    />
                     {([
                       { value: 'auto', label: '自动', desc: '按优先级依次尝试（推荐）' },
                       { value: 'dict', label: '仅词典', desc: '查 CG 专业词典，最快·完全离线' },
@@ -456,12 +481,15 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                       return (
                         <button
                           key={value}
+                          ref={primaryEngineSlider.registerItem(value)}
                           type="button"
                           onClick={() => setPrimaryTranslationEngine(value as 'auto' | 'dict' | 'llm' | 'online')}
                           title={desc}
-                          className={`text-left rounded-lg border px-2.5 py-2 transition-all cursor-pointer
+                          className={`relative z-10 text-left rounded-lg border px-2.5 py-2 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]
                             ${isSelected
-                              ? (isLight ? 'border-violet-400 bg-violet-50 text-violet-700' : 'border-violet-500/60 bg-violet-500/10 text-violet-300')
+                              ? primaryEngineSlider.isReady
+                                ? 'border-transparent bg-transparent'
+                                : (isLight ? 'border-violet-400 bg-violet-50 text-violet-700' : 'border-violet-500/60 bg-violet-500/10 text-violet-300')
                               : (isLight ? 'border-slate-200 hover:border-slate-400 text-slate-700' : 'border-white/[0.06] hover:border-white/20 text-zinc-300')
                             }`}
                         >
@@ -492,7 +520,14 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                       系统控制
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div ref={closeActionSlider.containerRef} className="relative grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <SlidingHighlight
+                      rect={closeActionSlider.rect}
+                      isReady={closeActionSlider.isReady}
+                      variant="card"
+                      radiusClass="rounded-lg"
+                      testId="pref-close-action-slider"
+                    />
                     {([
                       {
                         value: 'ask',
@@ -514,12 +549,15 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                       return (
                         <button
                           key={value}
+                          ref={closeActionSlider.registerItem(value)}
                           type="button"
                           onClick={() => setCloseAction(value)}
                           title={desc}
-                          className={`text-left rounded-lg border p-2.5 transition-all cursor-pointer ${
+                          className={`relative z-10 text-left rounded-lg border p-2.5 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                             isSelected
-                              ? (isLight ? 'border-blue-500 bg-blue-50/80 text-blue-700 ring-1 ring-blue-500/20 shadow-2xs' : 'border-blue-500 bg-blue-500/15 text-blue-300 ring-1 ring-blue-500/30')
+                              ? closeActionSlider.isReady
+                                ? 'border-transparent bg-transparent'
+                                : (isLight ? 'border-blue-500 bg-blue-50/80 text-blue-700 ring-1 ring-blue-500/20 shadow-2xs' : 'border-blue-500 bg-blue-500/15 text-blue-300 ring-1 ring-blue-500/30')
                               : (isLight ? 'border-slate-200 hover:border-slate-300 bg-white text-slate-700' : 'border-white/[0.06] hover:border-white/15 bg-zinc-900/50 text-zinc-300')
                           }`}
                         >
@@ -556,7 +594,14 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                       快捷悬浮窗
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div ref={miniCloseSlider.containerRef} className="relative grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <SlidingHighlight
+                      rect={miniCloseSlider.rect}
+                      isReady={miniCloseSlider.isReady}
+                      variant="card"
+                      radiusClass="rounded-lg"
+                      testId="pref-mini-close-slider"
+                    />
                     {([
                       {
                         value: 'hide',
@@ -573,12 +618,15 @@ export const PreferencePanel: React.FC<PreferencePanelProps> = ({ onOpenAbout })
                       return (
                         <button
                           key={value}
+                          ref={miniCloseSlider.registerItem(value)}
                           type="button"
                           onClick={() => setMiniWindowCloseAction(value)}
                           title={desc}
-                          className={`text-left rounded-lg border p-2.5 transition-all cursor-pointer ${
+                          className={`relative z-10 text-left rounded-lg border p-2.5 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                             isSelected
-                              ? (isLight ? 'border-purple-500 bg-purple-50/80 text-purple-700 ring-1 ring-purple-500/20 shadow-2xs' : 'border-purple-500 bg-purple-500/15 text-purple-300 ring-1 ring-purple-500/30')
+                              ? miniCloseSlider.isReady
+                                ? 'border-transparent bg-transparent'
+                                : (isLight ? 'border-purple-500 bg-purple-50/80 text-purple-700 ring-1 ring-purple-500/20 shadow-2xs' : 'border-purple-500 bg-purple-500/15 text-purple-300 ring-1 ring-purple-500/30')
                               : (isLight ? 'border-slate-200 hover:border-slate-300 bg-white text-slate-700' : 'border-white/[0.06] hover:border-white/15 bg-zinc-900/50 text-zinc-300')
                           }`}
                         >

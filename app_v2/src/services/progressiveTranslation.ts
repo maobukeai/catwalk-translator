@@ -3,6 +3,7 @@ import type { LlmConfig, TranslationResult } from './types';
 
 export const FAST_TRANSLATION_TIMEOUT_MS = 12_000;
 export const LLM_TRANSLATION_TIMEOUT_MS = 30_000;
+export const LLM_BATCH_SIZE = 24;
 export const TRANSLATION_FAILURE_TIER = '翻译失败·点击重试';
 export const TRANSLATION_TIMEOUT_TIER = '翻译失败·超时·点击重试';
 
@@ -64,13 +65,13 @@ export function translatePhrasesProgressively(
   const fastBatchSize = Number.isFinite(options.batchSize)
     ? Math.max(1, Math.floor(options.batchSize!))
     : 4;
-  const batchSize = options.llmConfig ? unique.length : fastBatchSize;
+  const batchSize = options.llmConfig ? Math.min(unique.length, LLM_BATCH_SIZE) : fastBatchSize;
   const batches: string[][] = [];
   for (let start = 0; start < unique.length; start += batchSize) {
     batches.push(unique.slice(start, start + batchSize));
   }
   const defaultTimeout = options.llmConfig
-    ? LLM_TRANSLATION_TIMEOUT_MS
+    ? Math.max(LLM_TRANSLATION_TIMEOUT_MS, Math.min(90_000, batches.length * 20_000))
     : FAST_TRANSLATION_TIMEOUT_MS;
   const timeoutMs = Number.isFinite(options.timeoutMs)
     ? Math.max(0, options.timeoutMs!)

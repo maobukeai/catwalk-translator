@@ -23,6 +23,8 @@ import {
 } from '../../services/tauri';
 import { useAppTheme } from '../../hooks/useAppTheme';
 import { useSettingsStore } from '../../stores/useSettingsStore';
+import { useSlidingIndicator } from '../../hooks/useSlidingIndicator';
+import { SlidingHighlight } from '../Common/SlidingHighlight';
 
 interface ProgressInfo {
   received: number;
@@ -257,19 +259,16 @@ export const OcrModelsCard: React.FC = () => {
   const isActiveTabFullyInstalled =
     activeTabModels.length > 0 && activeTabInstalledCount === activeTabModels.length;
   const isCurrentTabActive = activeVersion === selectedTab && ocrEngine !== 'winrt';
+  const versionTabSlider = useSlidingIndicator<HTMLDivElement>(selectedTab, [models.length, activeVersion]);
 
   const currentTabConfig =
     VERSION_CONFIGS.find((c) => c.id === selectedTab) || VERSION_CONFIGS[0];
 
   return (
     <div
-      className="rounded-xl border p-4 space-y-4 shadow-sm"
+      className="settings-glass-card p-4 sm:p-5 space-y-4"
       id="ocr-models-card-anchor"
       data-testid="ocr-models-card"
-      style={{
-        borderColor: isLight ? 'rgba(148,163,184,0.35)' : 'rgba(255,255,255,0.12)',
-        background: isLight ? 'rgba(241,245,249,0.65)' : 'rgba(255,255,255,0.03)',
-      }}
     >
       {/* ── Card Header ── */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -309,8 +308,15 @@ export const OcrModelsCard: React.FC = () => {
         </button>
       </div>
 
-      {/* ── Version Tabs ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+      {/* ── Version Tabs (with Sliding Card Highlight) ── */}
+      <div ref={versionTabSlider.containerRef} className="relative grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+        <SlidingHighlight
+          rect={versionTabSlider.rect}
+          isReady={versionTabSlider.isReady}
+          variant="card"
+          radiusClass="rounded-xl"
+          testId="ocr-version-tab-slider"
+        />
         {VERSION_CONFIGS.map((cfg) => {
           const tabModels = models.filter((m) => getModelVersion(m) === cfg.id);
           const installedCount = tabModels.filter((m) => m.installed).length;
@@ -321,20 +327,25 @@ export const OcrModelsCard: React.FC = () => {
           return (
             <button
               key={cfg.id}
+              ref={versionTabSlider.registerItem(cfg.id)}
               type="button"
               onClick={() => {
                 initializedSelection.current = true;
                 setSelectedTab(cfg.id);
               }}
-              className={`flex flex-col p-3 rounded-xl border text-left transition-all duration-200 cursor-pointer relative overflow-hidden ${
+              className={`relative z-10 flex flex-col p-3 rounded-xl border text-left transition-colors duration-200 cursor-pointer overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                 isThisActive
-                  ? (isLight
-                      ? 'border-emerald-500/80 bg-emerald-50/70 shadow-sm ring-2 ring-emerald-500/20'
-                      : 'border-emerald-500/80 bg-emerald-500/10 shadow-sm ring-2 ring-emerald-500/20')
+                  ? isSelected && versionTabSlider.isReady
+                    ? 'border-transparent bg-transparent'
+                    : (isLight
+                        ? 'border-emerald-500/80 bg-emerald-50/70 shadow-sm ring-2 ring-emerald-500/20'
+                        : 'border-emerald-500/80 bg-emerald-500/10 shadow-sm ring-2 ring-emerald-500/20')
                   : isSelected
-                  ? (isLight
-                      ? 'border-violet-500 bg-violet-50/60 shadow-xs'
-                      : 'border-violet-500/80 bg-violet-600/10 shadow-xs')
+                  ? versionTabSlider.isReady
+                    ? 'border-transparent bg-transparent'
+                    : (isLight
+                        ? 'border-violet-500 bg-violet-50/60 shadow-xs'
+                        : 'border-violet-500/80 bg-violet-600/10 shadow-xs')
                   : (isLight
                       ? 'border-slate-200/90 hover:border-slate-300 bg-white/70 hover:bg-white'
                       : 'border-white/10 hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.05]')

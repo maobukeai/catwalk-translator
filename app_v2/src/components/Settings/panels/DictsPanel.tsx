@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
+import { GlassSelect } from '../../Common/GlassSelect';
 import { GeneralDictCard } from './GeneralDictCard';
 import {
   cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall,
@@ -353,8 +354,8 @@ export const DictsPanel: React.FC = () => {
           <OcrModelsCard />
 
           {/* 0. 离线词库引擎 (真实文件系统状态，无模拟下载) */}
-          <div className={`p-5 space-y-3.5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+          <div className={`settings-glass-card p-5 space-y-3.5 ${
+            isLight ? 'text-slate-800' : 'text-zinc-100'
           }`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-2.5 border-slate-200 dark:border-white/10">
               <div>
@@ -438,8 +439,8 @@ export const DictsPanel: React.FC = () => {
           </div>
 
           {/* 1. 内置 6 套 CG/3D 软件专属词库 */}
-          <div className={`p-5 space-y-4 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+          <div className={`settings-glass-card p-5 space-y-4 ${
+            isLight ? 'text-slate-800' : 'text-zinc-100'
           }`}>
             <div className="flex items-center justify-between">
               <div>
@@ -531,8 +532,8 @@ export const DictsPanel: React.FC = () => {
           </div>
 
           {/* 2. 用户自定义术语库 (增删改查 & 导入导出中心) */}
-          <div className={`p-5 space-y-4 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+          <div className={`settings-glass-card p-5 space-y-4 ${
+            isLight ? 'text-slate-800' : 'text-zinc-100'
           }`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3 border-slate-200 dark:border-white/10">
               <div>
@@ -897,25 +898,23 @@ export const DictsPanel: React.FC = () => {
                       <Tag className="h-3.5 w-3.5 text-purple-500 shrink-0" />
                       <span>分类 / 适用领域</span>
                     </div>
-                    <select
+                    <GlassSelect
                       value={formCategory}
-                      onChange={(e) => setFormCategory(e.target.value)}
-                      className={`w-full px-3.5 py-2.5 rounded-2xl border text-xs outline-none cursor-pointer font-medium transition ${
-                        isLight
-                          ? 'bg-slate-50 border-slate-300 text-slate-900 focus:bg-white focus:border-blue-600'
-                          : 'bg-zinc-950/80 border-white/15 text-white focus:border-blue-500'
-                      }`}
-                    >
-                      <option value="Blender">🧊 Blender</option>
-                      <option value="Substance">🎨 Substance Painter</option>
-                      <option value="Unity">🎮 Unity 引擎</option>
-                      <option value="Unreal Engine">⚡ Unreal Engine 5</option>
-                      <option value="Maya">🧩 Autodesk Maya</option>
-                      <option value="Houdini">🌀 Houdini 程序化</option>
-                      <option value="通用CG">💻 通用 CG / 3D 领域</option>
-                      <option value="代码技术">⚙️ 代码与技术名词</option>
-                      <option value="其他">📌 其他个人专属</option>
-                    </select>
+                      onChange={setFormCategory}
+                      fullWidth
+                      size="md"
+                      options={[
+                        { value: 'Blender', label: '🧊 Blender' },
+                        { value: 'Substance', label: '🎨 Substance Painter' },
+                        { value: 'Unity', label: '🎮 Unity 引擎' },
+                        { value: 'Unreal Engine', label: '⚡ Unreal Engine 5' },
+                        { value: 'Maya', label: '🧩 Autodesk Maya' },
+                        { value: 'Houdini', label: '🌀 Houdini 程序化' },
+                        { value: '通用CG', label: '💻 通用 CG / 3D 领域' },
+                        { value: '代码技术', label: '⚙️ 代码与技术名词' },
+                        { value: '其他', label: '📌 其他个人专属' },
+                      ]}
+                    />
                   </div>
 
                   <div>
@@ -965,9 +964,7 @@ export const DictsPanel: React.FC = () => {
         </div>
 
         {/* 自动识别前台 3D/CG 软件 → 切换对应专业词库 */}
-        <div className={`rounded-2xl border p-4 flex items-center justify-between gap-3 ${
-          isLight ? 'bg-white/70 border-slate-200' : 'bg-zinc-900/40 border-white/[0.07]'
-        }`} data-testid="auto-detect-preset-card">
+        <div className="settings-glass-card p-4 sm:p-5 flex items-center justify-between gap-3" data-testid="auto-detect-preset-card">
           <div className="min-w-0">
             <div className={`text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>智能词库 · 自动识别 3D 软件</div>
             <p className={`mt-1 text-[11px] leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>

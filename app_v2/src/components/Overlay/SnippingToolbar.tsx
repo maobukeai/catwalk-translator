@@ -19,7 +19,11 @@ import {
 } from 'lucide-react';
 import type { LanguageCode, AppSettings } from '../../services/types';
 import { useSettingsStore } from '../../stores/useSettingsStore';
+import { useAppTheme } from '../../hooks/useAppTheme';
 import { buildCaptureEngineChoices } from '../../services/engineOptions';
+import { GlassSelect } from '../Common/GlassSelect';
+import { useSlidingIndicator } from '../../hooks/useSlidingIndicator';
+import { SlidingHighlight } from '../Common/SlidingHighlight';
 
 export type AnnotationTool = 'rect' | 'arrow' | 'pen' | 'mosaic' | 'text' | null;
 
@@ -144,9 +148,11 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
 }) => {
   const storeSettings = useSettingsStore((s) => s.settings);
   const effectiveSettings = settingsProp || storeSettings;
+  const { isLight } = useAppTheme();
 
   // 与设置页下拉 / Tab 轮播同源：按当前配置动态生成 LLM 模型池 + 已开启在线引擎/词库
   const engineChoices = useMemo(() => buildCaptureEngineChoices(effectiveSettings), [effectiveSettings]);
+  const annotationToolSlider = useSlidingIndicator<HTMLDivElement>(activeTool);
 
   // ── 拖拽移动状态与逻辑 ──
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -222,9 +228,10 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
       onMouseDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      {/* ── 第 1 层: [翻译与阅读控制条] (核心动作、双语阅读、字号、语种与引擎) ─────────────── */}
+      {/* ── 第 1 层: [翻译与阅读控制条] (Vision 液态棱镜胶囊) ─────────────── */}
       <div
-        className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-md backdrop-blur-md rounded-xl py-1 px-2 flex items-center gap-1 max-w-[calc(100vw-24px)] overflow-x-auto scrollbar-none flex-nowrap shrink-0"
+        className="overlay-vision-pill rounded-full py-1 px-2 flex items-center gap-1 max-w-[calc(100vw-24px)] overflow-x-auto scrollbar-none flex-nowrap shrink-0"
+        style={{ color: 'var(--g-text-1)' }}
         onPointerDown={(e) => {
           if (e.target === e.currentTarget) handlePointerDownDrag(e);
         }}
@@ -238,10 +245,10 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
           data-testid="adjust-confirm-btn"
           onClick={onTranslate}
           disabled={isProcessing}
-          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-medium text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50 shrink-0"
+          className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-105 active:scale-95 text-white font-medium text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50 shrink-0"
           title="截图翻译 (文A / Enter)"
         >
-          <Languages className="w-3.5 h-3.5 text-emerald-100" />
+          <Languages className="w-3.5 h-3.5 text-emerald-50" />
           <span className="tracking-wide font-semibold">翻译</span>
         </button>
 
@@ -251,87 +258,103 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
           data-testid="btn-ocr"
           onClick={onOcr}
           disabled={isProcessing}
-          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-sky-500 hover:bg-sky-600 active:scale-95 text-white font-medium text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50 shrink-0"
+          className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-gradient-to-r from-sky-500 to-blue-500 hover:brightness-105 active:scale-95 text-white font-medium text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50 shrink-0"
           title="提取纯文本并复制到剪贴板 (OCR / A)"
         >
-          <FileText className="w-3.5 h-3.5 text-sky-100" />
+          <FileText className="w-3.5 h-3.5 text-sky-50" />
           <span className="tracking-wide font-semibold">提取</span>
         </button>
 
         {/* 细竖线分隔 */}
-        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+        <div className="w-[1px] h-3.5 mx-0.5 shrink-0" style={{ background: 'var(--g-border-strong)' }} />
 
-        {/* 3态分段胶囊按钮 [ 文 | 原 | 双 ] */}
-        <div className="flex items-center bg-slate-100/90 dark:bg-slate-800/90 p-0.5 rounded-lg border border-slate-200/60 dark:border-slate-700/60 shrink-0">
-          <button
-            type="button"
-            data-testid="view-mode-translated"
-            onClick={() => onSelectViewMode?.('translated')}
-            className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
-              viewMode === 'translated'
-                ? 'bg-sky-500 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400'
-            }`}
-            title="仅显示译文 (O)"
-          >
-            文
-          </button>
-          <button
-            type="button"
-            data-testid="view-mode-original"
-            onClick={() => onSelectViewMode?.('original')}
-            className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
-              viewMode === 'original'
-                ? 'bg-sky-500 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400'
-            }`}
-            title="仅显示原文 (O)"
-          >
-            原
-          </button>
-          <button
-            type="button"
-            data-testid="view-mode-bilingual"
-            onClick={() => onSelectViewMode?.('bilingual')}
-            className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
-              viewMode === 'bilingual'
-                ? 'bg-sky-500 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-sky-500 dark:hover:text-sky-400'
-            }`}
-            title="双语对照 (O)"
-          >
-            双
-          </button>
-        </div>
+        {/* 3态分段胶囊按钮 [ 文 | 原 | 双 ]（带弹性滑块过渡） */}
+        {(() => {
+          const viewModeIndex = viewMode === 'original' ? 1 : viewMode === 'bilingual' ? 2 : 0;
+          return (
+            <div
+              className="relative grid grid-cols-3 items-center p-0.5 rounded-full border shrink-0"
+              style={{ background: 'var(--g-surface-2)', borderColor: 'var(--g-border)' }}
+            >
+              <span
+                aria-hidden="true"
+                data-testid="view-mode-slider"
+                className="seg-pill-indicator pointer-events-none absolute top-0.5 bottom-0.5 left-0.5 rounded-full shadow-xs"
+                style={{
+                  width: 'calc((100% - 4px) / 3)',
+                  transform: `translate3d(${viewModeIndex * 100}%, 0, 0)`,
+                  background: 'var(--accent-soft)',
+                  border: '1px solid var(--accent-border)',
+                }}
+              />
+              <button
+                type="button"
+                data-testid="view-mode-translated"
+                onClick={() => onSelectViewMode?.('translated')}
+                className="relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-colors duration-150 cursor-pointer"
+                style={{ color: viewMode === 'translated' ? 'var(--accent-text)' : 'var(--g-text-2)' }}
+                title="仅显示译文 (O)"
+              >
+                文
+              </button>
+              <button
+                type="button"
+                data-testid="view-mode-original"
+                onClick={() => onSelectViewMode?.('original')}
+                className="relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-colors duration-150 cursor-pointer"
+                style={{ color: viewMode === 'original' ? 'var(--accent-text)' : 'var(--g-text-2)' }}
+                title="仅显示原文 (O)"
+              >
+                原
+              </button>
+              <button
+                type="button"
+                data-testid="view-mode-bilingual"
+                onClick={() => onSelectViewMode?.('bilingual')}
+                className="relative z-10 px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-colors duration-150 cursor-pointer"
+                style={{ color: viewMode === 'bilingual' ? 'var(--accent-text)' : 'var(--g-text-2)' }}
+                title="双语对照 (O)"
+              >
+                双
+              </button>
+            </div>
+          );
+        })()}
 
         {/* 🔊 朗读 按钮 */}
         <button
           type="button"
           data-testid="btn-speech"
           onClick={onSpeech}
-          className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer shrink-0 flex items-center justify-center"
+          className="p-1.5 rounded-full hover:bg-[var(--g-surface-3)] transition-all cursor-pointer shrink-0 flex items-center justify-center"
+          style={{ color: 'var(--accent-text)' }}
           title="语音朗读 (Space)"
         >
-          <Volume2 className="w-3.5 h-3.5 text-sky-500" />
+          <Volume2 className="w-3.5 h-3.5" />
         </button>
 
         {/* A⁻ | A⁺ 紧凑微型步进按钮组 */}
-        <div className="flex items-center bg-slate-100/90 dark:bg-slate-800/90 p-0.5 rounded-lg border border-slate-200/60 dark:border-slate-700/60 shrink-0">
+        <div
+          className="flex items-center p-0.5 rounded-full border shrink-0"
+          style={{ background: 'var(--g-surface-2)', borderColor: 'var(--g-border)' }}
+        >
           <button
             type="button"
             data-testid="btn-zoom-out"
             onClick={onZoomOut}
-            className="px-1.5 py-0.5 rounded text-[11px] font-bold hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition cursor-pointer"
+            className="px-1.5 py-0.5 rounded-full text-[11px] font-bold hover:bg-[var(--g-surface-3)] transition cursor-pointer"
+            style={{ color: 'var(--g-text-2)' }}
             title="缩小字号 (A⁻)"
           >
             A⁻
           </button>
-          <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5 shrink-0" />
+          <div className="w-[1px] h-3 mx-0.5 shrink-0" style={{ background: 'var(--g-border)' }} />
           <button
             type="button"
             data-testid="btn-zoom-in"
             onClick={onZoomIn}
-            className="px-1.5 py-0.5 rounded text-[11px] font-bold hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition cursor-pointer"
+            className="px-1.5 py-0.5 rounded-full text-[11px] font-bold hover:bg-[var(--g-surface-3)] transition cursor-pointer"
+            style={{ color: 'var(--g-text-2)' }}
             title="放大字号 (A⁺)"
           >
             A⁺
@@ -339,45 +362,47 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
         </div>
 
         {/* 细竖线分隔 */}
-        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+        <div className="w-[1px] h-3.5 mx-0.5 shrink-0" style={{ background: 'var(--g-border-strong)' }} />
 
         {/* 语种选择下拉框 */}
-        <select
+        <GlassSelect
           value={targetLang}
-          onChange={(e) => onSelectLanguage?.(e.target.value as LanguageCode)}
-          className="bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/60 dark:border-slate-700/60 rounded-lg text-[11px] px-1.5 py-0.5 font-medium text-slate-700 dark:text-slate-200 outline-none cursor-pointer hover:border-sky-400 transition shrink-0"
+          options={TARGET_LANG_OPTIONS.map((opt) => ({ value: opt.code, label: opt.label }))}
+          onChange={(val) => onSelectLanguage?.(val as LanguageCode)}
           title="切换目标语种"
-        >
-          {TARGET_LANG_OPTIONS.map((opt) => (
-            <option key={opt.code} value={opt.code}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          size="xs"
+          variant="pill"
+          menuMinWidth={150}
+          className="shrink-0"
+        />
 
         {/* 引擎选择极简下拉框 */}
-        <select
+        <GlassSelect
           value={selectedEngine}
-          onChange={(e) => onSelectEngine?.(e.target.value)}
-          className="bg-slate-100/90 dark:bg-slate-800/90 border border-slate-200/60 dark:border-slate-700/60 rounded-lg text-[11px] px-1.5 py-0.5 font-medium text-slate-700 dark:text-slate-200 outline-none cursor-pointer hover:border-sky-400 transition shrink-0 max-w-[96px]"
+          options={[{ value: engineChoices.auto.value, label: '🤖 智能极速' }]}
+          groups={engineChoices.groups.map((g) => ({
+            key: g.key,
+            label: g.label,
+            options: g.options.map((o) => ({ value: o.value, label: o.label })),
+          }))}
+          onChange={(val) => onSelectEngine?.(val)}
           title="切换翻译引擎 (Tab)"
-        >
-          <option value={engineChoices.auto.value}>🤖 智能极速</option>
-          {engineChoices.groups.map((g) => (
-            <optgroup key={g.key} label={g.label}>
-              {g.options.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+          size="xs"
+          variant="pill"
+          menuMinWidth={248}
+          triggerClassName="max-w-[116px]"
+          className="shrink-0"
+        />
 
         {/* 大模型深度精翻标注 */}
         {isAiRefining && (
           <div
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-600 dark:text-sky-400 text-[10px] font-semibold shrink-0 animate-pulse select-none ml-0.5"
+            className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0 animate-pulse select-none ml-0.5 border"
+            style={{
+              background: 'var(--accent-soft)',
+              borderColor: 'var(--accent-border)',
+              color: 'var(--accent-text)',
+            }}
             title="正在使用大模型后台异步润色中…"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-ping" />
@@ -387,7 +412,7 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
         {isAiRefined && !isAiRefining && (
           <div
             data-testid="ai-refined-badge"
-            className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-lg bg-gradient-to-r from-amber-500/15 via-indigo-500/15 to-sky-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-[10px] font-semibold shrink-0 animate-fade-in select-none shadow-xs ml-0.5"
+            className="flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500/15 via-indigo-500/15 to-sky-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-[10px] font-semibold shrink-0 animate-fade-in select-none shadow-xs ml-0.5"
             title={`大模型深度精翻已就绪${aiEngineName ? `: ${aiEngineName}` : ''}`}
           >
             <span className="text-[11px] leading-none">✨</span>
@@ -403,9 +428,10 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
         )}
       </div>
 
-      {/* ── 第 2 层: [截图标注与输出工具条] (手柄、标注工具、监控、速查与输出) ──────────── */}
+      {/* ── 第 2 层: [截图标注与输出工具条] (按用户要求严格保留原版纯图标样式 + Vision 胶囊壳) ──────────── */}
       <div
-        className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-xl backdrop-blur-md rounded-xl py-1 px-2 flex items-center gap-1 max-w-[calc(100vw-24px)] overflow-x-auto scrollbar-none flex-nowrap shrink-0"
+        className="overlay-vision-pill rounded-full py-1 px-2.5 flex items-center gap-1 max-w-[calc(100vw-24px)] overflow-x-auto scrollbar-none flex-nowrap shrink-0"
+        style={{ color: 'var(--g-text-1)' }}
         onPointerDown={(e) => {
           if (e.target === e.currentTarget) handlePointerDownDrag(e);
         }}
@@ -415,13 +441,13 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
       >
         {/* 品牌标签与拖拽把手 */}
         <div
-          className="flex items-center gap-1 px-1.5 py-0.5 select-none font-bold text-xs shrink-0 cursor-grab active:cursor-grabbing hover:bg-slate-100/90 dark:hover:bg-slate-800/90 rounded-lg transition-colors group"
+          className="flex items-center gap-1 px-1.5 py-0.5 select-none font-bold text-xs shrink-0 cursor-grab active:cursor-grabbing hover:bg-[var(--g-surface-3)] rounded-full transition-colors group"
           title="按住拖拽移动工具栏 · 按住鼠标左键划框 · 双击恢复默认位置"
           onPointerDown={handlePointerDownDrag}
           onMouseDown={handlePointerDownDrag}
           onDoubleClick={handleResetPosition}
         >
-          <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-sky-500 transition-colors shrink-0" />
+          <GripVertical className="w-3.5 h-3.5 group-hover:text-sky-500 transition-colors shrink-0" style={{ color: 'var(--g-text-3)' }} />
           <span className="text-xs shrink-0">🐾</span>
           <span className="font-extrabold bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 bg-clip-text text-transparent tracking-tight whitespace-nowrap text-[11px]">
             猫步
@@ -429,75 +455,102 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
         </div>
 
         {/* 细竖线分隔 */}
-        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+        <div className="w-[1px] h-3.5 mx-0.5 shrink-0" style={{ background: 'var(--g-border-strong)' }} />
 
-        {/* 5 大标注工具 */}
-        <div className="flex items-center gap-0.5 shrink-0">
+        {/* 5 大标注工具（纯图标，带弹性滑动高亮） */}
+        <div ref={annotationToolSlider.containerRef} className="relative flex items-center gap-0.5 shrink-0">
+          <SlidingHighlight
+            rect={annotationToolSlider.rect}
+            isReady={annotationToolSlider.isReady}
+            variant="solid"
+            radiusClass="rounded-full"
+            testId="annotation-tool-slider"
+          />
           <button
+            ref={annotationToolSlider.registerItem('rect')}
             type="button"
             data-testid="btn-tool-rect"
             onClick={() => onSelectTool(activeTool === 'rect' ? null : 'rect')}
-            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`relative z-10 p-1.5 rounded-full transition-colors cursor-pointer flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               activeTool === 'rect'
-                ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
-                : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+                ? annotationToolSlider.isReady
+                  ? 'text-white'
+                  : 'bg-[var(--accent)] text-white shadow-sm'
+                : 'hover:bg-[var(--g-surface-3)]'
             }`}
+            style={activeTool === 'rect' ? undefined : { color: 'var(--g-text-2)' }}
             title="矩形标注 (Rect)"
           >
             <Square className="w-3.5 h-3.5" />
           </button>
 
           <button
+            ref={annotationToolSlider.registerItem('arrow')}
             type="button"
             data-testid="btn-tool-arrow"
             onClick={() => onSelectTool(activeTool === 'arrow' ? null : 'arrow')}
-            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`relative z-10 p-1.5 rounded-full transition-colors cursor-pointer flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               activeTool === 'arrow'
-                ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
-                : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+                ? annotationToolSlider.isReady
+                  ? 'text-white'
+                  : 'bg-[var(--accent)] text-white shadow-sm'
+                : 'hover:bg-[var(--g-surface-3)]'
             }`}
+            style={activeTool === 'arrow' ? undefined : { color: 'var(--g-text-2)' }}
             title="箭头标注 (Arrow)"
           >
             <MoveUpRight className="w-3.5 h-3.5" />
           </button>
 
           <button
+            ref={annotationToolSlider.registerItem('pen')}
             type="button"
             data-testid="btn-tool-pen"
             onClick={() => onSelectTool(activeTool === 'pen' ? null : 'pen')}
-            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`relative z-10 p-1.5 rounded-full transition-colors cursor-pointer flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               activeTool === 'pen'
-                ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
-                : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+                ? annotationToolSlider.isReady
+                  ? 'text-white'
+                  : 'bg-[var(--accent)] text-white shadow-sm'
+                : 'hover:bg-[var(--g-surface-3)]'
             }`}
+            style={activeTool === 'pen' ? undefined : { color: 'var(--g-text-2)' }}
             title="画笔涂鸦 (Pen)"
           >
             <PenLine className="w-3.5 h-3.5" />
           </button>
 
           <button
+            ref={annotationToolSlider.registerItem('mosaic')}
             type="button"
             data-testid="btn-tool-mosaic"
             onClick={() => onSelectTool(activeTool === 'mosaic' ? null : 'mosaic')}
-            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`relative z-10 p-1.5 rounded-full transition-colors cursor-pointer flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               activeTool === 'mosaic'
-                ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
-                : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+                ? annotationToolSlider.isReady
+                  ? 'text-white'
+                  : 'bg-[var(--accent)] text-white shadow-sm'
+                : 'hover:bg-[var(--g-surface-3)]'
             }`}
+            style={activeTool === 'mosaic' ? undefined : { color: 'var(--g-text-2)' }}
             title="马赛克遮挡 (Mosaic)"
           >
             <Grid3X3 className="w-3.5 h-3.5" />
           </button>
 
           <button
+            ref={annotationToolSlider.registerItem('text')}
             type="button"
             data-testid="btn-tool-text"
             onClick={() => onSelectTool(activeTool === 'text' ? null : 'text')}
-            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`relative z-10 p-1.5 rounded-full transition-colors cursor-pointer flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               activeTool === 'text'
-                ? 'bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
-                : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+                ? annotationToolSlider.isReady
+                  ? 'text-white'
+                  : 'bg-[var(--accent)] text-white shadow-sm'
+                : 'hover:bg-[var(--g-surface-3)]'
             }`}
+            style={activeTool === 'text' ? undefined : { color: 'var(--g-text-2)' }}
             title="添加文字 (Text)"
           >
             <Type className="w-3.5 h-3.5" />
@@ -505,18 +558,19 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
         </div>
 
         {/* 细竖线分隔 */}
-        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+        <div className="w-[1px] h-3.5 mx-0.5 shrink-0" style={{ background: 'var(--g-border-strong)' }} />
 
-        {/* 辅助工具 */}
+        {/* 辅助工具（纯图标） */}
         <div className="flex items-center gap-0.5 shrink-0">
           <button
             type="button"
             onClick={onToggleWatch}
-            className={`p-1 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer shrink-0 flex items-center justify-center ${
+            className={`p-1.5 rounded-full transition-all cursor-pointer shrink-0 flex items-center justify-center ${
               watchMode
-                ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/40'
-                : ''
+                ? 'bg-emerald-500/20 text-emerald-500 border border-emerald-500/40'
+                : 'hover:bg-[var(--g-surface-3)]'
             }`}
+            style={watchMode ? undefined : { color: 'var(--g-text-2)' }}
             title="开启/关闭区域监控 (W)"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${watchMode ? 'animate-spin text-emerald-500' : ''}`} />
@@ -526,28 +580,35 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             type="button"
             data-testid="cheatsheet-btn"
             onClick={onCheatSheet}
-            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer shrink-0 flex items-center justify-center"
+            className="p-1.5 rounded-full hover:bg-[var(--g-surface-3)] transition-all cursor-pointer shrink-0 flex items-center justify-center"
+            style={{ color: 'var(--g-text-2)' }}
             title="快捷键速查 (? / F1)"
           >
-            <span className="w-3.5 h-3.5 rounded-full bg-slate-200/90 dark:bg-slate-700/90 flex items-center justify-center font-bold text-[9px]">?</span>
+            <span
+              className="w-3.5 h-3.5 rounded-full flex items-center justify-center font-bold text-[9px]"
+              style={{ background: 'var(--g-surface-3)', color: 'var(--g-text-1)' }}
+            >
+              ?
+            </span>
           </button>
         </div>
 
         {/* 细竖线分隔 */}
-        <div className="w-[1px] h-3.5 bg-slate-200 dark:bg-slate-700/80 mx-0.5 shrink-0" />
+        <div className="w-[1px] h-3.5 mx-0.5 shrink-0" style={{ background: 'var(--g-border-strong)' }} />
 
-        {/* 输出与退出操作 */}
+        {/* 输出与退出操作（纯图标） */}
         <div className="flex items-center gap-0.5 shrink-0">
           <button
             type="button"
             data-testid="btn-undo"
             onClick={onUndo}
             disabled={!canUndo}
-            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`p-1.5 rounded-full transition-all cursor-pointer flex items-center justify-center ${
               canUndo
-                ? 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
-                : 'opacity-30 cursor-not-allowed text-slate-400'
+                ? 'hover:bg-[var(--g-surface-3)]'
+                : 'opacity-30 cursor-not-allowed'
             }`}
+            style={{ color: canUndo ? 'var(--g-text-1)' : 'var(--g-text-3)' }}
             title="撤销上一步标注 (Ctrl+Z)"
           >
             <Undo2 className="w-3.5 h-3.5" />
@@ -557,11 +618,12 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             type="button"
             data-testid="btn-pin"
             onClick={onPin}
-            className={`p-1 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
+            className={`p-1.5 rounded-full transition-all cursor-pointer flex items-center justify-center ${
               isPinned
                 ? 'bg-amber-500 text-white shadow-sm ring-1 ring-amber-400/40'
-                : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+                : 'hover:bg-[var(--g-surface-3)]'
             }`}
+            style={isPinned ? undefined : { color: 'var(--g-text-2)' }}
             title={isPinned ? '已置顶固定 (Pin)' : '置顶贴图 (Pin)'}
           >
             <Pin className="w-3.5 h-3.5" />
@@ -571,7 +633,8 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             type="button"
             data-testid="btn-save"
             onClick={onSave}
-            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer flex items-center justify-center"
+            className="p-1.5 rounded-full hover:bg-[var(--g-surface-3)] transition-all cursor-pointer flex items-center justify-center"
+            style={{ color: 'var(--g-text-2)' }}
             title="保存截图为图片 (Ctrl+S)"
           >
             <Download className="w-3.5 h-3.5" />
@@ -581,7 +644,8 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             type="button"
             data-testid="btn-copy"
             onClick={onCopy}
-            className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all cursor-pointer flex items-center justify-center"
+            className="p-1.5 rounded-full hover:bg-[var(--g-surface-3)] transition-all cursor-pointer flex items-center justify-center"
+            style={{ color: 'var(--g-text-2)' }}
             title="复制截图到剪贴板 (Ctrl+C)"
           >
             <Copy className="w-3.5 h-3.5" />
@@ -591,7 +655,7 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             type="button"
             data-testid="adjust-cancel-btn"
             onClick={onCancel}
-            className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:text-rose-600 transition-all cursor-pointer flex items-center justify-center shrink-0"
+            className="p-1.5 rounded-full text-rose-500 hover:bg-rose-500/12 hover:text-rose-600 transition-all cursor-pointer flex items-center justify-center shrink-0"
             title="退出划词 (Esc / 鼠标右键)"
           >
             <X className="w-3.5 h-3.5" />
@@ -601,7 +665,7 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
             type="button"
             data-testid="btn-done"
             onClick={onConfirm}
-            className="p-1 px-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center shadow-sm shrink-0 ring-1 ring-emerald-400/30"
+            className="p-1.5 px-2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-105 active:scale-95 text-white transition-all cursor-pointer flex items-center justify-center shadow-sm shrink-0"
             title="完成并复制 (Enter)"
           >
             <Check className="w-3.5 h-3.5 stroke-[2.5]" />
@@ -611,19 +675,23 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
 
       {/* ── 标注工具子选项条 (颜色选择与粗细调整) ─────────────────────────── */}
       {activeTool && activeTool !== 'mosaic' && onSelectColor && onSelectStrokeWidth && (
-        <div className="bg-white/95 dark:bg-slate-900/95 border border-slate-200/90 dark:border-slate-800 shadow-md backdrop-blur-md rounded-lg px-2.5 py-1 flex items-center gap-2 text-xs animate-fade-in">
+        <div
+          className="overlay-vision-pill rounded-full px-3 py-1 flex items-center gap-2 text-xs animate-fade-in"
+          style={{ color: 'var(--g-text-1)' }}
+        >
           {/* 粗细选择 */}
-          <div className="flex items-center gap-1 pr-2 border-r border-slate-200 dark:border-slate-700/80">
+          <div className="flex items-center gap-1 pr-2 border-r" style={{ borderColor: 'var(--g-border)' }}>
             {STROKE_SIZES.map((sz) => (
               <button
                 key={sz.size}
                 type="button"
                 onClick={() => onSelectStrokeWidth(sz.size)}
-                className={`px-1.5 py-0.5 rounded text-[11px] font-semibold transition cursor-pointer ${
+                className={`px-2 py-0.5 rounded-full text-[11px] font-semibold transition cursor-pointer ${
                   strokeWidth === sz.size
-                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-xs'
-                    : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    ? 'bg-[var(--accent)] text-white shadow-xs'
+                    : 'hover:bg-[var(--g-surface-3)]'
                 }`}
+                style={strokeWidth === sz.size ? undefined : { color: 'var(--g-text-2)' }}
               >
                 {sz.label}
               </button>
@@ -637,8 +705,8 @@ export const SnippingToolbar: React.FC<SnippingToolbarProps> = ({
                 key={c}
                 type="button"
                 onClick={() => onSelectColor(c)}
-                className={`w-3.5 h-3.5 rounded-full border border-black/10 dark:border-white/20 transition-all cursor-pointer ${
-                  selectedColor === c ? 'scale-125 ring-2 ring-sky-500 ring-offset-1 dark:ring-offset-slate-900' : 'hover:scale-110'
+                className={`w-3.5 h-3.5 rounded-full border border-black/15 dark:border-white/25 transition-all cursor-pointer ${
+                  selectedColor === c ? 'scale-125 ring-2 ring-sky-500 ring-offset-1' : 'hover:scale-110'
                 }`}
                 style={{ backgroundColor: c }}
                 title={c}

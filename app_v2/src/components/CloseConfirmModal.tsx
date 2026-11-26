@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Power } from 'lucide-react';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useAppTheme } from '../hooks/useAppTheme';
 import { cmdExitApp, cmdHideMainWindow, isTauri } from '../services/tauri';
@@ -67,53 +68,64 @@ export const CloseConfirmModal: React.FC<CloseConfirmModalProps> = ({ isOpen, on
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4 animate-in fade-in duration-150"
+      className="vision-modal-backdrop fixed inset-0 z-[9999] flex items-center justify-center p-4 animate-in fade-in duration-150"
       onClick={onClose}
     >
       <div
-        className={`w-full max-w-[340px] rounded-2xl p-5 shadow-2xl transition-all animate-in zoom-in-95 duration-150 border select-none ${
-          isLight
-            ? 'bg-[#efefef] border-slate-300/80 text-slate-800'
-            : 'bg-[#25262b] border-white/10 text-slate-100'
+        className={`vision-modal-shell vision-modal-enter w-full max-w-[360px] rounded-[26px] p-6 select-none overflow-hidden ${
+          isLight ? 'text-slate-800' : 'text-slate-100'
         }`}
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
       >
-        <h3 className="text-[15px] font-bold tracking-tight">关闭窗口</h3>
-        <p className={`mt-3 text-[13px] leading-relaxed ${isLight ? 'text-slate-600' : 'text-zinc-300'}`}>
-          关闭窗口时希望做什么？
-        </p>
+        <div className="flex flex-col items-center text-center">
+          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-text)] shadow-inner">
+            <Power className="h-5 w-5" />
+          </div>
+          <h3 className="text-[16px] font-bold tracking-tight text-[var(--g-text-1)]">关闭窗口</h3>
+          <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--g-text-2)]">
+            关闭窗口时希望做什么？
+          </p>
+        </div>
 
-        <div className="mt-6 flex items-center justify-between">
-          <label className="flex items-center gap-2 cursor-pointer select-none text-[12.5px]">
+        <div className="mt-5 flex justify-center">
+          <label
+            className={`inline-flex items-center gap-2 cursor-pointer select-none rounded-full px-3.5 py-1.5 text-[12px] border transition ${
+              isLight
+                ? 'bg-white/75 border-slate-200/80 text-slate-700 hover:bg-white'
+                : 'bg-white/[0.05] border-white/10 text-zinc-200 hover:bg-white/[0.09]'
+            }`}
+          >
             <input
               type="checkbox"
               checked={rememberChoice}
               onChange={(e) => setRememberChoice(e.target.checked)}
-              className="h-4 w-4 rounded border-slate-400/80 text-blue-600 focus:ring-0 focus:outline-none cursor-pointer"
+              className="h-3.5 w-3.5 rounded accent-[var(--accent)] cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]"
             />
-            <span className={isLight ? 'text-slate-700' : 'text-zinc-200'}>记住选择</span>
+            <span>记住选择</span>
           </label>
+        </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleExitApp}
-              className={`rounded-lg px-3.5 py-1.5 text-xs font-medium transition cursor-pointer border shadow-2xs ${
-                isLight
-                  ? 'bg-white border-slate-300 hover:bg-slate-100 text-slate-700 active:bg-slate-200'
-                  : 'bg-zinc-800/80 border-white/10 hover:bg-zinc-700 text-zinc-200 active:bg-zinc-600'
-              }`}
-            >
-              退出程序
-            </button>
-            <button
-              type="button"
-              onClick={handleMinimizeToTray}
-              className="rounded-lg bg-[#0078d4] hover:bg-[#106ebe] active:bg-[#005a9e] text-white px-3.5 py-1.5 text-xs font-medium shadow-sm transition cursor-pointer"
-            >
-              最小化到托盘
-            </button>
-          </div>
+        <div className="mt-5 flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={handleExitApp}
+            className={`flex-1 rounded-full px-4 py-2 text-xs font-semibold transition cursor-pointer border active:scale-97 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+              isLight
+                ? 'bg-white/85 border-slate-200/90 hover:bg-white text-slate-700 shadow-2xs'
+                : 'bg-white/[0.06] border-white/12 hover:bg-white/[0.12] text-zinc-200'
+            }`}
+          >
+            退出程序
+          </button>
+          <button
+            type="button"
+            onClick={handleMinimizeToTray}
+            className="flex-1 rounded-full bg-gradient-to-r from-[var(--accent)] to-indigo-600 hover:brightness-110 text-white px-4 py-2 text-xs font-semibold shadow-sm shadow-sky-500/20 transition cursor-pointer active:scale-97 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]"
+          >
+            最小化到托盘
+          </button>
         </div>
       </div>
     </div>

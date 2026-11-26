@@ -34,6 +34,23 @@ export function isSuccessfulLlmTier(tier: string): boolean {
   return /llm api|ai 精翻|deepseek|openai|ollama|gemini|claude|qwen|通义|千问|glm|moonshot|kimi|groq|siliconflow/.test(value);
 }
 
+/** Whether a stage-2 block still needs progressive stage-3 LLM refinement. */
+export function shouldRefineCandidate(block: Pick<OverlayBlock, 'original' | 'sourceTier'>): boolean {
+  const orig = block.original.trim();
+  const tier = block.sourceTier || '';
+  if (orig.length < 2 || /^\d+([.,]\d+)?%?$/.test(orig)) return false;
+  if (
+    tier.includes('custom_dict') ||
+    tier.includes('标识符透传') ||
+    tier.includes('离线词库') ||
+    tier.includes('目标语言') ||
+    isSuccessfulLlmTier(tier)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** Rust preserves the original text on total failure; that is not a success. */
 export function hasUsableTranslation(result: Pick<TranslationResult, 'translated' | 'sourceTier'> | null | undefined): boolean {
   if (!result?.translated?.trim()) return false;

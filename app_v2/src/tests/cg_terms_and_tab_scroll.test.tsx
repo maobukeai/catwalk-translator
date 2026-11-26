@@ -151,5 +151,26 @@ describe('DualPaneTranslator CG Terminology & Tab Polish Test Suite', () => {
     const googleTab = screen.getByText('Google');
     expect(googleTab).toBeInTheDocument();
     expect(googleTab.closest('button')?.className).toContain('text-zinc-300');
+
+    // 验证「全部通道」快速切换菜单：点击展开并选中 Google 渠道后收起菜单且更新高亮
+    const pickerBtn = screen.getByTestId('engine-picker-btn');
+    pickerBtn.click();
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-picker-menu')).toBeInTheDocument();
+    });
+
+    const menu = screen.getByTestId('engine-picker-menu');
+    const googleMenuBtn = Array.from(menu.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Google')
+    );
+    expect(googleMenuBtn).toBeTruthy();
+    googleMenuBtn!.click();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('engine-picker-menu')).not.toBeInTheDocument();
+      expect(localStorage.getItem('maobu_preferred_engine')).toBe('Google');
+      expect(screen.getByText('Google').closest('button')?.className).toContain('text-white');
+    });
+    localStorage.removeItem('maobu_preferred_engine');
   });
 });

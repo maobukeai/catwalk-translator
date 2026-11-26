@@ -1,12 +1,16 @@
 import React, { useState, useRef, useEffect } from "react";
 import { ChevronDown, Check, Sparkles } from "lucide-react";
 import { useAppTheme } from "../../hooks/useAppTheme";
+import { useSlidingIndicator } from "../../hooks/useSlidingIndicator";
+import { SlidingHighlight } from "../Common/SlidingHighlight";
 
 export type TranslationStyleType = "literal" | "free" | "terminology";
 
 interface TranslationStyleDropdownProps {
   value?: TranslationStyleType;
   onChange: (style: TranslationStyleType) => void;
+  /** dropdown: 经典气泡下拉；segmented: 外露三段式滑动胶囊 */
+  variant?: "dropdown" | "segmented";
 }
 
 interface StyleOption {
@@ -36,24 +40,85 @@ const STYLE_OPTIONS: StyleOption[] = [
 export const TranslationStyleDropdown: React.FC<TranslationStyleDropdownProps> = ({
   value = "free",
   onChange,
+  variant = "dropdown",
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const { isLight } = useAppTheme();
+  const segSlider = useSlidingIndicator<HTMLDivElement>(variant === "segmented" ? value : null, [variant]);
 
   const selectedOption =
     STYLE_OPTIONS.find((opt) => opt.value === value) || STYLE_OPTIONS[1];
 
-  // Close on outside click
+  // Close on outside click or Escape
   useEffect(() => {
+    if (!isOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false);
       }
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setIsOpen(false);
+      }
+    };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  if (variant === "segmented") {
+    return (
+      <div
+        ref={segSlider.containerRef}
+        role="group"
+        aria-label="译文风格"
+        className="relative inline-flex items-center p-0.5 rounded-full border font-sans"
+        style={{
+          background: "var(--g-surface-2)",
+          borderColor: "var(--g-hairline)",
+          boxShadow: "var(--g-inset-top)",
+        }}
+      >
+        {/* 弹簧滑动高亮胶囊 */}
+        <SlidingHighlight
+          rect={segSlider.rect}
+          isReady={segSlider.isReady}
+          variant="solid"
+          radiusClass="rounded-full"
+          className="seg-pill-indicator"
+        />
+        {STYLE_OPTIONS.map((opt) => {
+          const isSelected = opt.value === value;
+          return (
+            <button
+              key={opt.value}
+              ref={segSlider.registerItem(opt.value)}
+              type="button"
+              aria-pressed={isSelected}
+              onClick={() => onChange(opt.value)}
+              title={`${opt.label}：${opt.desc}`}
+              className={`relative z-10 px-2.5 py-1 rounded-full text-[11.5px] transition-colors cursor-pointer whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                isSelected
+                  ? "text-white font-semibold"
+                  : isLight
+                  ? "text-slate-600 hover:text-slate-900 font-medium"
+                  : "text-zinc-300 hover:text-white font-medium"
+              }`}
+              style={isSelected && !segSlider.isReady ? { background: "var(--accent)" } : undefined}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div ref={containerRef} className="relative inline-flex items-center font-sans">
@@ -61,40 +126,30 @@ export const TranslationStyleDropdown: React.FC<TranslationStyleDropdownProps> =
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className={`flex items-center space-x-1.5 h-8 rounded-xl px-2.5 text-xs font-semibold transition shadow-xs cursor-pointer focus:outline-none ${
-          isLight
-            ? "bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 shadow-sm"
-            : "bg-zinc-800/90 hover:bg-zinc-700/80 text-zinc-200 border border-zinc-700/80"
-        } ${isOpen ? "border-blue-500 ring-2 ring-blue-500/20" : ""}`}
+        className={`vision-select-trigger flex items-center space-x-1.5 h-8 rounded-xl px-2.5 text-xs font-semibold cursor-pointer ${
+          isOpen ? "is-open" : ""
+        }`}
         title="AI 译文风格：直译贴近原文 · 流畅意译通顺 · 术语优先保持行业定名一致"
       >
         <Sparkles className="h-3.5 w-3.5 text-amber-500" />
         <span>{selectedOption.label}</span>
         <ChevronDown
-          className={`h-3.5 w-3.5 transition-transform duration-200 ${
-            isLight ? "text-slate-500" : "text-zinc-400"
-          } ${isOpen ? "rotate-180 text-blue-500" : ""}`}
+          className={`h-3.5 w-3.5 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+          style={{ color: isOpen ? "var(--accent-text)" : "var(--g-text-3)" }}
         />
       </button>
 
       {/* Popover Menu */}
       {isOpen && (
-        <div
-          className={`absolute top-full mt-2 z-[300] min-w-[200px] rounded-2xl p-1.5 shadow-2xl animate-in fade-in zoom-in-95 duration-150 border left-0 ${
-            isLight
-              ? "bg-white border-slate-300 text-slate-800 shadow-slate-900/15"
-              : "bg-[#181822] border-zinc-700 text-zinc-100 shadow-[0_16px_40px_rgba(0,0,0,0.85)]"
-          }`}
-        >
+        <div className="vision-select-popover absolute top-full mt-2 z-[300] min-w-[205px] left-0">
           <div
-            className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider border-b mb-1 flex items-center justify-between ${
-              isLight ? "text-slate-500 border-slate-200" : "text-zinc-400 border-zinc-800"
-            }`}
+            className="vision-select-group-label border-b mb-1 pb-1.5"
+            style={{ borderColor: "var(--g-hairline)" }}
           >
             <span>译文风格 / Style</span>
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {STYLE_OPTIONS.map((opt) => {
               const isSelected = opt.value === value;
               return (
@@ -105,33 +160,18 @@ export const TranslationStyleDropdown: React.FC<TranslationStyleDropdownProps> =
                     onChange(opt.value);
                     setIsOpen(false);
                   }}
-                  className={`flex items-center justify-between w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer ${
-                    isSelected
-                      ? isLight
-                        ? "bg-blue-50 text-blue-700 font-bold border border-blue-200"
-                        : "bg-blue-600/25 text-blue-300 font-bold border border-blue-400/40"
-                      : isLight
-                      ? "text-slate-700 hover:bg-slate-100 hover:text-slate-900"
-                      : "text-zinc-300 hover:bg-white/10 hover:text-white"
-                  }`}
+                  className={`vision-select-option ${isSelected ? "is-selected" : ""}`}
                 >
                   <div className="flex flex-col">
                     <span className="font-semibold">{opt.label}</span>
                     <span
-                      className={`text-[10px] ${
-                        isSelected
-                          ? isLight
-                            ? "text-blue-600/80"
-                            : "text-blue-300/80"
-                          : isLight
-                          ? "text-slate-400"
-                          : "text-zinc-500"
-                      }`}
+                      className="text-[10px] opacity-75"
+                      style={{ color: isSelected ? "var(--accent-text)" : "var(--g-text-3)" }}
                     >
                       {opt.desc}
                     </span>
                   </div>
-                  {isSelected && <Check className="h-3.5 w-3.5 ml-2 shrink-0 text-blue-500" />}
+                  {isSelected && <Check className="h-3.5 w-3.5 ml-2 shrink-0" style={{ color: "var(--accent-text)" }} />}
                 </button>
               );
             })}

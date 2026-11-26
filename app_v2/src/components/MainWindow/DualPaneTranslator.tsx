@@ -61,6 +61,9 @@ import type {
 } from "../../services/types";
 import { LanguageDropdown } from "./LanguageDropdown";
 import { TranslationStyleDropdown } from "./TranslationStyleDropdown";
+import { GlassSelect } from "../Common/GlassSelect";
+import { useSlidingIndicator } from "../../hooks/useSlidingIndicator";
+import { SlidingHighlight } from "../Common/SlidingHighlight";
 
 /** 汉化与精简来源渠道标签，让用户对当前使用的具体模型一目了然 */
 export function formatSourceTier(tier?: string): { label: string; isLlm: boolean; isDict: boolean } {
@@ -228,6 +231,35 @@ function getCgSoftwareHint(original: string, translated: string): string {
     return 'Substance / Blender 纹理烘焙：将高模细节与光照贴图渲染导出至低模贴图。';
   }
   return `通用 3D/CG 软件（Blender, Substance Painter, Maya, Unity）标准专业定名；英文 "${original || 'Term'}" 对应行业规范译名 "${translated || '译名'}"。`;
+}
+
+function normalizeForcedEngineKey(pref: string): string {
+  if (pref === '百度大模型') return 'baidu_llm';
+  if (pref === '百度') return 'baidu';
+  if (pref === 'CG 词库') return 'dict';
+  if (pref === '离线词库') return 'offline';
+  if (pref === '火山翻译') return 'volcengine';
+  if (pref === 'Papago') return 'papago';
+  if (pref === 'Lingva') return 'lingva';
+  return pref;
+}
+
+function isLlmChannelName(
+  name: string,
+  llmConfigs?: LlmConfig[],
+  llmConfig?: LlmConfig | null
+): boolean {
+  const lower = (name || '').toLowerCase();
+  if (!lower || lower === 'auto') return false;
+  if (lower.includes('深度翻译') || lower.includes('ai') || lower.includes('llm')) {
+    return true;
+  }
+  const pool = llmConfigs && llmConfigs.length > 0 ? llmConfigs : llmConfig ? [llmConfig] : [];
+  return pool.some(
+    (c) =>
+      (c.model && lower.includes(c.model.toLowerCase())) ||
+      (c.provider && lower.includes(c.provider.toLowerCase()))
+  );
 }
 
 interface ImageTranslateCardViewerProps {
@@ -569,6 +601,18 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       return 'auto';
     }
   });
+  const preferredEngineRef = useRef<string>(preferredEngine);
+  const updatePreferredEngine = useCallback((next: string) => {
+    preferredEngineRef.current = next;
+    setPreferredEngine(next);
+    try {
+      localStorage.setItem('maobu_preferred_engine', next);
+    } catch {}
+  }, []);
+  const responseRef = useRef<UniversalTranslationResponse | null>(response);
+  responseRef.current = response;
+  const selectedEngineIndexRef = useRef<number>(selectedEngineIndex);
+  selectedEngineIndexRef.current = selectedEngineIndex;
   const [retryingEngines, setRetryingEngines] = useState<Record<string, boolean>>({});
   const [isAiRefining, setIsAiRefining] = useState(false);
 
@@ -582,6 +626,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   const [imageItems, setImageItems] = useState<ImageQueueItem[]>([]);
   const [imageTranslateEngine, setImageTranslateEngine] = useState<string>('auto');
   const [imageViewMode, setImageViewMode] = useState<'overlay' | 'original' | 'bilingual' | 'text'>('overlay');
+  const imageViewModeSlider = useSlidingIndicator<HTMLDivElement>(imageViewMode, [imageItems.length]);
   const [copiedBlockIndex, setCopiedBlockIndex] = useState<string | null>(null);
   const [hoveredBlockKey, setHoveredBlockKey] = useState<string | null>(null);
   const [zoomModalItem, setZoomModalItem] = useState<ImageQueueItem | null>(null);
@@ -616,6 +661,10 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   const [copiedDeepKey, setCopiedDeepKey] = useState<string | null>(null);
   const [customAppliedText, setCustomAppliedText] = useState<string | null>(null);
   const [isComparisonCollapsed, setIsComparisonCollapsed] = useState(false);
+  const [isSwappingLang, setIsSwappingLang] = useState(false);
+  const [isCopilotOpen, setIsCopilotOpen] = useState(true);
+  const [copyAnimKey, setCopyAnimKey] = useState(0);
+  const swapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deepAnalysisTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [imageCopied, setImageCopied] = useState(false);
   const [exportingImage, setExportingImage] = useState(false);
@@ -635,10 +684,32 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
   // Tab row scroll refs & helpers
   const tabsRef = useRef<HTMLDivElement | null>(null);
+  const engineTabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const animFrameRef = useRef<number | null>(null);
+  const [isEngineMenuOpen, setIsEngineMenuOpen] = useState(false);
+  const engineMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isEngineMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (engineMenuRef.current && !engineMenuRef.current.contains(e.target as Node)) {
+        setIsEngineMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsEngineMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isEngineMenuOpen]);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const isDraggingRef = useRef(false);
+  const hasDraggedRef = useRef(false);
   const startXRef = useRef(0);
   const scrollLeftRef = useRef(0);
 
@@ -652,8 +723,26 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   useEffect(() => {
     updateScrollState();
     window.addEventListener("resize", updateScrollState);
-    return () => window.removeEventListener("resize", updateScrollState);
-  }, [response, updateScrollState]);
+    const el = tabsRef.current;
+    const ro =
+      el && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => updateScrollState())
+        : null;
+    if (el && ro) {
+      ro.observe(el);
+    }
+    return () => {
+      window.removeEventListener("resize", updateScrollState);
+      ro?.disconnect();
+    };
+  }, [response, isCopilotOpen, updateScrollState]);
+
+  useEffect(() => {
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (swapTimerRef.current) clearTimeout(swapTimerRef.current);
+    };
+  }, []);
 
   // Native non-passive wheel event listener to prevent vertical page scroll
   useEffect(() => {
@@ -705,6 +794,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!tabsRef.current) return;
     isDraggingRef.current = true;
+    hasDraggedRef.current = false;
     startXRef.current = e.pageX - tabsRef.current.offsetLeft;
     scrollLeftRef.current = tabsRef.current.scrollLeft;
   };
@@ -715,8 +805,11 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isDraggingRef.current || !tabsRef.current) return;
-    e.preventDefault();
     const x = e.pageX - tabsRef.current.offsetLeft;
+    if (Math.abs(x - startXRef.current) > 4) {
+      hasDraggedRef.current = true;
+    }
+    e.preventDefault();
     const walk = (x - startXRef.current) * 1.5;
     tabsRef.current.scrollLeft = scrollLeftRef.current - walk;
     updateScrollState();
@@ -725,7 +818,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   // ── 智能多模型与激活大模型通道解析 ──
   const resolveActiveLlm = useCallback((): LlmConfig | null => {
     // 1. 如果当前选中的引擎 Tab 是大模型/AI，尝试从选中的引擎名称匹配对应配置
-    const curEngine = response?.engines?.[selectedEngineIndex];
+    const curEngine = responseRef.current?.engines?.[selectedEngineIndexRef.current];
     if (curEngine && (curEngine.sourceTier?.toLowerCase().includes('llm') || curEngine.engineName.includes('AI') || curEngine.engineName.includes('大模型') || curEngine.engineName.includes('深度翻译'))) {
       if (settings.llmConfigs && settings.llmConfigs.length > 0) {
         const match = settings.llmConfigs.find(c =>
@@ -754,7 +847,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
     }
 
     return null;
-  }, [response?.engines, selectedEngineIndex, settings.llmConfigs, settings.llmConfig]);
+  }, [settings.llmConfigs, settings.llmConfig]);
 
   const activeLlm = resolveActiveLlm();
   const hasActiveLlm = Boolean(activeLlm);
@@ -954,6 +1047,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       setLoading(true);
       setTranslationError(null);
       setIsAiRefining(false);
+      setCustomAppliedText(null);
 
       const baseParams = {
         text: trimmed,
@@ -977,14 +1071,24 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         yandexFolderId: settings.yandexFolderId,
       };
 
-      let currentPref = preferredEngine;
-      try { currentPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine; } catch {}
+      const currentPref =
+        preferredEngineRef.current ||
+        (() => {
+          try {
+            return localStorage.getItem('maobu_preferred_engine') || 'auto';
+          } catch {
+            return 'auto';
+          }
+        })();
       const isAutoMode = currentPref === 'auto';
       const hasActiveLlm = !!(
         isConfiguredLlm(settings.llmConfig) ||
         settings.llmConfigs?.some(isConfiguredLlm)
       );
-      const isProgressive = isAutoMode && hasActiveLlm && settings.enableLlmProgressiveRefine !== false;
+      const isPinnedLlm =
+        !isAutoMode && isLlmChannelName(currentPref, settings.llmConfigs, settings.llmConfig);
+      // 无论是否固定了具体渠道，Stage-1 均启用 skipLlm，避免 Rust 端因 run_llm=true 关闭 1.5s 快通道熔断而长时间卡在骨架屏
+      const isProgressive = hasActiveLlm && settings.enableLlmProgressiveRefine !== false;
 
       const activeLlm = (settings.llmConfigs && settings.llmConfigs.length > 0)
         ? (settings.llmConfigs.find(c => c.enabled !== false && isConfiguredLlm(c)) || settings.llmConfigs.find(c => c.enabled !== false) || settings.llmConfig)
@@ -1016,7 +1120,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         );
       };
 
-      // ── Stage-0: 闪电先锋快通道 (与截图翻译完全一致的并发竞速，150ms 秒级直出上屏) ──
+      // ── Stage-0: 闪电先锋快通道 (自动模式走极速并发竞速；固定非 AI 渠道直接单渠道秒出，不等待其他慢引擎) ──
       if (isAutoMode) {
         tauriService.cmdTranslatePhrasesStyled(
           [trimmed],
@@ -1046,6 +1150,40 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   ],
                 };
               });
+              setSelectedEngineIndex(0);
+              setLoading(false);
+            }
+          })
+          .catch(() => {});
+      } else if (!isPinnedLlm) {
+        tauriService
+          .cmdUniversalTranslate({
+            ...baseParams,
+            forcedEngine: normalizeForcedEngineKey(currentPref),
+            skipLlm: true,
+          })
+          .then((pinnedRes) => {
+            if (seq !== translationSeqRef.current) return;
+            if (stage1DoneSeqRef.current === seq) return;
+            const validPinned = pinnedRes.engines?.find(
+              (e) =>
+                e.sourceTier !== 'Online (Retry)' &&
+                e.sourceTier !== 'Online (Unconfigured)' &&
+                !isFaultyOrUnconfiguredTranslation(e.translated) &&
+                e.translated.trim().length > 0
+            );
+            if (validPinned) {
+              setTranslationError(null);
+              setResponse((prev) => {
+                if (stage1DoneSeqRef.current === seq) return prev;
+                if (prev?.original === trimmed && prev.engines.length > 1) return prev;
+                return {
+                  ...pinnedRes,
+                  mainTranslation: validPinned.translated,
+                  engines: [validPinned],
+                };
+              });
+              setSelectedEngineIndex(0);
               setLoading(false);
             }
           })
@@ -1053,7 +1191,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
       }
 
       try {
-        // ── Stage-1: 全引擎多源对照 (带 1.2s 动态熔断截断，绝不拖垮首屏；未配置大模型时严格跳过 LLM) ──
+        // ── Stage-1: 全引擎多源对照 (带 1.2s 动态熔断截断，绝不拖垮首屏；大模型由 Stage-2 异步补充) ──
         const res = await tauriService.cmdUniversalTranslate({
           ...baseParams,
           skipLlm: isProgressive || !hasActiveLlm,
@@ -1065,68 +1203,155 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         }
 
         stage1DoneSeqRef.current = seq;
+        const latestPref = preferredEngineRef.current || currentPref;
 
         const resEngines = (isProgressive && hasActiveLlm)
           ? [placeholderEngine, ...res.engines.filter(e => !e.engineName.includes('深度翻译') && !e.engineName.includes('AI 深度') && e.sourceTier !== 'LLM API')]
           : res.engines;
 
-        setResponse((prev) => {
-          // 若已有先锋有效结果且新返回的 mainTranslation 处于重试或待配置态，优先保留先锋优质译文
-          let finalMain = res.mainTranslation;
-          const isResMainFaulty = isFaultyOrUnconfiguredTranslation(finalMain);
-          if (isResMainFaulty && prev?.original === trimmed && prev.mainTranslation && !isFaultyOrUnconfiguredTranslation(prev.mainTranslation)) {
-            return { ...res, mainTranslation: prev.mainTranslation, engines: [...prev.engines, ...resEngines] };
+        const mergePinnedFromPrev = (
+          prev: UniversalTranslationResponse | null,
+          incomingEngines: MultiEngineTranslation[],
+          pref: string
+        ): MultiEngineTranslation[] => {
+          if (!prev || prev.original !== trimmed || pref === 'auto') {
+            return incomingEngines;
           }
-          return {
-            ...res,
-            mainTranslation: finalMain,
-            engines: resEngines,
-          };
-        });
-
-        // 优先将选中 Tab 设定为用户固定的优先渠道（preferredEngine），若未固定或该渠道失败则智能优选首个有效引擎
-        let targetIdx = -1;
-        if (currentPref && currentPref !== 'auto') {
-          targetIdx = resEngines.findIndex((e) => {
-            const short = getShortEngineName(e.engineName).toLowerCase();
-            return (
-              short === currentPref.toLowerCase() &&
-              e.sourceTier !== 'Online (Retry)' &&
-              e.sourceTier !== 'LLM (Config Required)' &&
-              e.sourceTier !== 'Online (Unconfigured)' &&
-              !isFaultyOrUnconfiguredTranslation(e.translated)
-            );
-          });
-        }
-
-        if (targetIdx === -1) {
-          targetIdx = resEngines.findIndex(
+          const prefLower = pref.toLowerCase();
+          const prevPinned = prev.engines.find(
             (e) =>
-              e.translated === res.mainTranslation &&
+              !e.engineName.includes('⚡') &&
+              getShortEngineName(e.engineName).toLowerCase() === prefLower &&
               e.sourceTier !== 'Online (Retry)' &&
               e.sourceTier !== 'LLM (Config Required)' &&
-              e.sourceTier !== 'LLM (Generating)' &&
-              e.sourceTier !== 'Online (Unconfigured)' &&
-              !isFaultyOrUnconfiguredTranslation(e.translated)
-          );
-        }
-
-        if (targetIdx === -1) {
-          // 智能寻找首个真正有效的译文卡片（排除未配置、重试态以及生成中占位符）
-          targetIdx = resEngines.findIndex(
-            (e) =>
-              e.sourceTier !== 'Online (Retry)' &&
-              e.sourceTier !== 'LLM (Config Required)' &&
-              e.sourceTier !== 'LLM (Auth Error)' &&
-              e.sourceTier !== 'LLM (Quota Error)' &&
-              e.sourceTier !== 'LLM (Generating)' &&
               e.sourceTier !== 'Online (Unconfigured)' &&
               !isFaultyOrUnconfiguredTranslation(e.translated) &&
               e.translated.trim().length > 0
           );
-        }
+          if (!prevPinned) return incomingEngines;
+          const existingIdx = incomingEngines.findIndex(
+            (e) => getShortEngineName(e.engineName).toLowerCase() === prefLower
+          );
+          if (existingIdx === -1) {
+            return [...incomingEngines, prevPinned];
+          }
+          const existing = incomingEngines[existingIdx];
+          if (
+            existing.sourceTier === 'Online (Retry)' ||
+            isFaultyOrUnconfiguredTranslation(existing.translated)
+          ) {
+            const copy = [...incomingEngines];
+            copy[existingIdx] = prevPinned;
+            return copy;
+          }
+          return incomingEngines;
+        };
 
-        setSelectedEngineIndex(targetIdx >= 0 ? targetIdx : 0);
+        const findTargetIdx = (enginesList: MultiEngineTranslation[], pref: string, mainText: string) => {
+          let idx = -1;
+          const prefLower = pref.toLowerCase();
+          const prefIsLlm = pref !== 'auto' && isLlmChannelName(pref, settings.llmConfigs, settings.llmConfig);
+
+          if (pref && pref !== 'auto') {
+            if (prefIsLlm) {
+              idx = enginesList.findIndex(
+                (e) =>
+                  getShortEngineName(e.engineName).toLowerCase() === prefLower &&
+                  (e.sourceTier === 'LLM (Generating)' ||
+                    (!isFaultyOrUnconfiguredTranslation(e.translated) && e.translated.trim().length > 0))
+              );
+              if (idx === -1) {
+                idx = enginesList.findIndex(
+                  (e) => e.sourceTier === 'LLM (Generating)' || e.sourceTier === 'LLM API'
+                );
+              }
+            } else {
+              idx = enginesList.findIndex((e) => {
+                const short = getShortEngineName(e.engineName).toLowerCase();
+                return (
+                  short === prefLower &&
+                  e.sourceTier !== 'Online (Retry)' &&
+                  e.sourceTier !== 'LLM (Config Required)' &&
+                  e.sourceTier !== 'Online (Unconfigured)' &&
+                  !isFaultyOrUnconfiguredTranslation(e.translated)
+                );
+              });
+            }
+          }
+
+          if (idx === -1) {
+            idx = enginesList.findIndex(
+              (e) =>
+                e.translated === mainText &&
+                e.sourceTier !== 'Online (Retry)' &&
+                e.sourceTier !== 'LLM (Config Required)' &&
+                e.sourceTier !== 'LLM (Generating)' &&
+                e.sourceTier !== 'Online (Unconfigured)' &&
+                !isFaultyOrUnconfiguredTranslation(e.translated)
+            );
+          }
+
+          if (idx === -1) {
+            idx = enginesList.findIndex(
+              (e) =>
+                e.sourceTier !== 'Online (Retry)' &&
+                e.sourceTier !== 'LLM (Config Required)' &&
+                e.sourceTier !== 'LLM (Auth Error)' &&
+                e.sourceTier !== 'LLM (Quota Error)' &&
+                e.sourceTier !== 'LLM (Generating)' &&
+                e.sourceTier !== 'Online (Unconfigured)' &&
+                !isFaultyOrUnconfiguredTranslation(e.translated) &&
+                e.translated.trim().length > 0
+            );
+          }
+
+          return idx >= 0 ? idx : 0;
+        };
+
+        setResponse((prev) => {
+          const mergedEngines = mergePinnedFromPrev(prev, resEngines, latestPref);
+          const finalMain = res.mainTranslation;
+          const isResMainFaulty = isFaultyOrUnconfiguredTranslation(finalMain);
+          if (
+            isResMainFaulty &&
+            prev?.original === trimmed &&
+            prev.mainTranslation &&
+            !isFaultyOrUnconfiguredTranslation(prev.mainTranslation)
+          ) {
+            return {
+              ...res,
+              mainTranslation: prev.mainTranslation,
+              engines: prev.engines.some((e) => e.engineName.includes('⚡'))
+                ? [...prev.engines, ...mergedEngines]
+                : mergedEngines,
+            };
+          }
+          return {
+            ...res,
+            mainTranslation: finalMain,
+            engines: mergedEngines,
+          };
+        });
+
+        const prevSnapshot = responseRef.current;
+        const mergedSnapshot = mergePinnedFromPrev(prevSnapshot, resEngines, latestPref);
+        const mainForIdx =
+          isFaultyOrUnconfiguredTranslation(res.mainTranslation) &&
+          prevSnapshot?.original === trimmed &&
+          prevSnapshot.mainTranslation &&
+          !isFaultyOrUnconfiguredTranslation(prevSnapshot.mainTranslation)
+            ? prevSnapshot.mainTranslation
+            : res.mainTranslation;
+        const finalSnapshotEngines =
+          isFaultyOrUnconfiguredTranslation(res.mainTranslation) &&
+          prevSnapshot?.original === trimmed &&
+          prevSnapshot.mainTranslation &&
+          !isFaultyOrUnconfiguredTranslation(prevSnapshot.mainTranslation) &&
+          prevSnapshot.engines.some((e) => e.engineName.includes('⚡'))
+            ? [...prevSnapshot.engines, ...mergedSnapshot]
+            : mergedSnapshot;
+
+        setSelectedEngineIndex(findTargetIdx(finalSnapshotEngines, latestPref, mainForIdx));
 
         if (res.mainTranslation && !isFaultyOrUnconfiguredTranslation(res.mainTranslation)) {
           const tier = res.engines[0]?.sourceTier || 'Online Fallback';
@@ -1179,6 +1404,10 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   engineName: aiEngine.engineName.includes('✨') ? aiEngine.engineName : `✨ ${aiEngine.engineName}`,
                 };
 
+                const curPref = preferredEngineRef.current || 'auto';
+                const curPrefIsLlm =
+                  curPref !== 'auto' && isLlmChannelName(curPref, settings.llmConfigs, settings.llmConfig);
+
                 setResponse((prev) => {
                   if (!prev || seq !== translationSeqRef.current) return prev;
                   const filtered = prev.engines.filter(
@@ -1188,10 +1417,10 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                       e.sourceTier !== 'LLM API' &&
                       e.sourceTier !== 'LLM (Generating)'
                   );
-                  const curPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine;
-                  const newMain = (!isAiFaulty && (curPref === 'auto' || curPref.includes('深度翻译')))
-                    ? formattedAiEngine.translated
-                    : prev.mainTranslation;
+                  const newMain =
+                    !isAiFaulty && (curPref === 'auto' || curPrefIsLlm || curPref.includes('深度翻译'))
+                      ? formattedAiEngine.translated
+                      : prev.mainTranslation;
 
                   return {
                     ...prev,
@@ -1200,8 +1429,27 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   };
                 });
 
-                const curPref = localStorage.getItem('maobu_preferred_engine') || preferredEngine;
-                if (curPref === 'auto' && !isAiFaulty) {
+                const prevAiSnapshot = responseRef.current;
+                if (prevAiSnapshot) {
+                  const filteredSnap = prevAiSnapshot.engines.filter(
+                    (e) =>
+                      !e.engineName.includes('深度翻译') &&
+                      !e.engineName.includes('AI 深度') &&
+                      e.sourceTier !== 'LLM API' &&
+                      e.sourceTier !== 'LLM (Generating)'
+                  );
+                  const nextEnginesSnap = [formattedAiEngine, ...filteredSnap];
+                  if ((curPref === 'auto' && !isAiFaulty) || curPrefIsLlm) {
+                    setSelectedEngineIndex(0);
+                  } else if (curPref !== 'auto') {
+                    const matchedIdx = nextEnginesSnap.findIndex(
+                      (e) => getShortEngineName(e.engineName).toLowerCase() === curPref.toLowerCase()
+                    );
+                    if (matchedIdx >= 0) {
+                      setSelectedEngineIndex(matchedIdx);
+                    }
+                  }
+                } else if ((curPref === 'auto' && !isAiFaulty) || curPrefIsLlm) {
                   setSelectedEngineIndex(0);
                 }
 
@@ -1210,6 +1458,11 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 }
               } else {
                 console.info('[DualPaneTranslator] AI refine returned no engine in response, cleaning up placeholder');
+                const curPref = preferredEngineRef.current || 'auto';
+                const prevSnap = responseRef.current;
+                const filteredSnap = prevSnap
+                  ? prevSnap.engines.filter((e) => e.sourceTier !== 'LLM (Generating)')
+                  : [];
                 setResponse((prev) => {
                   if (!prev || seq !== translationSeqRef.current) return prev;
                   const filtered = prev.engines.filter(
@@ -1220,11 +1473,27 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     engines: filtered,
                   };
                 });
-                setSelectedEngineIndex((prevIdx) => (prevIdx > 0 ? prevIdx - 1 : 0));
+                if (curPref !== 'auto' && filteredSnap.length > 0) {
+                  const matchedIdx = filteredSnap.findIndex(
+                    (e) => getShortEngineName(e.engineName).toLowerCase() === curPref.toLowerCase()
+                  );
+                  if (matchedIdx >= 0) {
+                    setSelectedEngineIndex(matchedIdx);
+                  } else {
+                    setSelectedEngineIndex((prevIdx) => (prevIdx > 0 ? Math.min(prevIdx - 1, filteredSnap.length - 1) : 0));
+                  }
+                } else {
+                  setSelectedEngineIndex((prevIdx) => (prevIdx > 0 ? prevIdx - 1 : 0));
+                }
               }
             } catch (aiErr) {
               if (seq !== translationSeqRef.current) return;
               console.warn('[DualPaneTranslator] Progressive AI refine failed:', aiErr);
+              const curPref = preferredEngineRef.current || 'auto';
+              const prevSnap = responseRef.current;
+              const filteredSnap = prevSnap
+                ? prevSnap.engines.filter((e) => e.sourceTier !== 'LLM (Generating)')
+                : [];
               setResponse((prev) => {
                 if (!prev || seq !== translationSeqRef.current) return prev;
                 const filtered = prev.engines.filter(
@@ -1235,7 +1504,18 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   engines: filtered,
                 };
               });
-              setSelectedEngineIndex((prevIdx) => (prevIdx > 0 ? prevIdx - 1 : 0));
+              if (curPref !== 'auto' && filteredSnap.length > 0) {
+                const matchedIdx = filteredSnap.findIndex(
+                  (e) => getShortEngineName(e.engineName).toLowerCase() === curPref.toLowerCase()
+                );
+                if (matchedIdx >= 0) {
+                  setSelectedEngineIndex(matchedIdx);
+                } else {
+                  setSelectedEngineIndex((prevIdx) => (prevIdx > 0 ? Math.min(prevIdx - 1, filteredSnap.length - 1) : 0));
+                }
+              } else {
+                setSelectedEngineIndex((prevIdx) => (prevIdx > 0 ? prevIdx - 1 : 0));
+              }
             } finally {
               if (typeof window !== 'undefined' && seq === translationSeqRef.current) {
                 try {
@@ -1253,7 +1533,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         if (seq === translationSeqRef.current) setLoading(false);
       }
     },
-    [settings.defaultPreset, settings.llmConfig, settings.llmConfigs, settings.presetDicts, settings.onlineEngines, settings.translationTiers, settings.translationStyle, settings.enableLlmProgressiveRefine, settings.baiduAppId, settings.baiduSecret, settings.baiduLlmApiKey, settings.deeplApiKey, settings.deeplCustomUrl, settings.volcengineAccessKey, settings.volcengineSecretKey, settings.yandexApiKey, settings.yandexFolderId, preferredEngine]
+    [settings.defaultPreset, settings.llmConfig, settings.llmConfigs, settings.presetDicts, settings.onlineEngines, settings.translationTiers, settings.translationStyle, settings.enableLlmProgressiveRefine, settings.baiduAppId, settings.baiduSecret, settings.baiduLlmApiKey, settings.deeplApiKey, settings.deeplCustomUrl, settings.volcengineAccessKey, settings.volcengineSecretKey, settings.yandexApiKey, settings.yandexFolderId]
   );
 
   // 用户修改输入文本时的智能语种配对（仅当源语言为 auto 时在输入不同语种时自动配对目标语言，绝不干扰用户手动切换下拉框）
@@ -1318,6 +1598,10 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
   }, [sourceText, sourceLang, targetLang, performTranslation]);
 
   const handleSwapLanguages = () => {
+    setIsSwappingLang(true);
+    if (swapTimerRef.current) clearTimeout(swapTimerRef.current);
+    swapTimerRef.current = setTimeout(() => setIsSwappingLang(false), 380);
+
     if (sourceLang === "auto") {
       const { detected } = detectLanguage(sourceText);
       const nextTarget = detected;
@@ -1555,24 +1839,70 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
   const handleCopy = (textToCopy: string) => {
     if (!textToCopy) return;
-    navigator.clipboard.writeText(textToCopy);
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(textToCopy).catch(() => {});
+    }
     setCopied(true);
+    setCopyAnimKey((k) => k + 1);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleSelectEngineCard = (idx: number, text: string) => {
     setSelectedEngineIndex(idx);
+    setCustomAppliedText(null);
+    const engine = response?.engines?.[idx];
+    if (engine) {
+      updatePreferredEngine(getShortEngineName(engine.engineName));
+    }
     if (!text.includes('精翻中') && !text.includes('点击重试') && !text.includes('未配置') && !text.includes('需配置')) {
       handleCopy(text);
     }
 
-    if (tabsRef.current) {
-      const targetBtn = tabsRef.current.children[idx] as HTMLElement;
-      if (targetBtn) {
-        targetBtn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-      }
+    const targetBtn = engineTabRefs.current[`eng_${idx}`];
+    if (targetBtn) {
+      targetBtn.scrollIntoView?.({ behavior: "smooth", block: "nearest", inline: "center" });
     }
   };
+
+  const handleSelectAutoEngine = useCallback(() => {
+    updatePreferredEngine('auto');
+    setCustomAppliedText(null);
+    if (response?.engines && response.engines.length > 0) {
+      const isFaultyOrUnconfigured = (e: MultiEngineTranslation) =>
+        e.sourceTier === 'Online (Retry)' ||
+        e.sourceTier === 'LLM (Config Required)' ||
+        e.sourceTier === 'LLM (Auth Error)' ||
+        e.sourceTier === 'LLM (Quota Error)' ||
+        e.sourceTier === 'Online (Unconfigured)' ||
+        e.translated.includes('点击重试') ||
+        e.translated.includes('网络连接超时') ||
+        e.translated.includes('未配置') ||
+        e.translated.includes('需配置') ||
+        e.translated.includes('API Key') ||
+        e.translated.includes('额度不足') ||
+        e.translated.includes('鉴权失败') ||
+        !e.translated.trim();
+
+      let validIdx = response.engines.findIndex(
+        (e) => e.translated === response.mainTranslation && !isFaultyOrUnconfigured(e)
+      );
+      if (validIdx === -1) {
+        validIdx = response.engines.findIndex((e) => !isFaultyOrUnconfigured(e));
+      }
+      setSelectedEngineIndex(validIdx >= 0 ? validIdx : 0);
+    } else if (sourceText.trim() && !loading) {
+      performTranslation(sourceText, sourceLang, targetLang);
+    }
+  }, [updatePreferredEngine, response, sourceText, loading, performTranslation, sourceLang, targetLang]);
+
+  const handleSelectFixedEngine = useCallback(
+    (idx: number, shortName: string) => {
+      setSelectedEngineIndex(idx);
+      updatePreferredEngine(shortName);
+      setCustomAppliedText(null);
+    },
+    [updatePreferredEngine]
+  );
 
   const handleSpeech = (text: string, lang: string) => {
     if (!text) return;
@@ -1643,6 +1973,29 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
     settings.baiduAppId,
     settings.baiduSecret,
   ]);
+
+  useEffect(() => {
+    updateScrollState();
+  }, [enabledPlaceholderTabs.length, updateScrollState]);
+
+  const activeEngineTabKey = React.useMemo(() => {
+    if (preferredEngine === 'auto') return 'auto';
+    if (response?.engines && response.engines.length > 0) {
+      return `eng_${selectedEngineIndex}`;
+    }
+    const phIdx = enabledPlaceholderTabs.findIndex(
+      (tab) => tab.name.toLowerCase() === preferredEngine.toLowerCase()
+    );
+    return phIdx >= 0 ? `ph_${phIdx}` : null;
+  }, [preferredEngine, response?.engines, selectedEngineIndex, enabledPlaceholderTabs]);
+
+  const engineTabSlider = useSlidingIndicator<HTMLDivElement>(activeEngineTabKey, [
+    response?.engines?.length,
+    enabledPlaceholderTabs.length,
+    isCopilotOpen,
+  ]);
+
+
 
   const { isLight } = useAppTheme();
 
@@ -1734,9 +2087,11 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
 
       {/* 图片翻译结果面板（粘贴 / 拖入多张图片，批量排队翻译） */}
       {imageItems.length > 0 && (
-        <div className={`relative p-4 rounded-2xl border transition-colors ${
-          isLight ? 'bg-white/90 border-slate-200 shadow-sm' : 'bg-white/[0.04] border-white/10 backdrop-blur-md'
-        }`} data-testid="image-translate-panel">
+        <div
+          className="lg-panel relative p-4 rounded-2xl transition-colors"
+          style={{ background: 'var(--g-surface)' }}
+          data-testid="image-translate-panel"
+        >
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2 min-w-0">
               <ImageIcon className="h-4 w-4 text-sky-500 shrink-0" />
@@ -1751,16 +2106,29 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              {/* 视图模式切换：覆写 / 原图 / 双语 */}
-              <div className={`flex items-center p-0.5 rounded-lg border text-xs shrink-0 ${
-                isLight ? 'bg-slate-100/90 border-slate-200' : 'bg-white/5 border-white/10'
-              }`}>
+              {/* 视图模式切换：覆写 / 原图 / 双语 / 纯文（带弹性滑动高亮） */}
+              <div
+                ref={imageViewModeSlider.containerRef}
+                className={`relative flex items-center p-0.5 rounded-lg border text-xs shrink-0 ${
+                  isLight ? 'bg-slate-100/90 border-slate-200' : 'bg-white/5 border-white/10'
+                }`}
+              >
+                <SlidingHighlight
+                  rect={imageViewModeSlider.rect}
+                  isReady={imageViewModeSlider.isReady}
+                  variant="solid"
+                  radiusClass="rounded-md"
+                  testId="image-view-mode-slider"
+                />
                 <button
+                  ref={imageViewModeSlider.registerItem('overlay')}
                   type="button"
                   onClick={() => setImageViewMode('overlay')}
-                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                  className={`relative z-10 px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                     imageViewMode === 'overlay'
-                      ? 'bg-sky-500 text-white shadow-xs'
+                      ? imageViewModeSlider.isReady
+                        ? 'text-white font-semibold'
+                        : 'bg-sky-500 text-white shadow-xs'
                       : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                   title="原位覆写 (高质感磨砂自适应排版)"
@@ -1769,11 +2137,14 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   <span>覆写</span>
                 </button>
                 <button
+                  ref={imageViewModeSlider.registerItem('original')}
                   type="button"
                   onClick={() => setImageViewMode('original')}
-                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                  className={`relative z-10 px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                     imageViewMode === 'original'
-                      ? 'bg-sky-500 text-white shadow-xs'
+                      ? imageViewModeSlider.isReady
+                        ? 'text-white font-semibold'
+                        : 'bg-sky-500 text-white shadow-xs'
                       : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                   title="纯净原图 (临时隐藏翻译以对比原图)"
@@ -1782,11 +2153,14 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   <span>原图</span>
                 </button>
                 <button
+                  ref={imageViewModeSlider.registerItem('bilingual')}
                   type="button"
                   onClick={() => setImageViewMode('bilingual')}
-                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                  className={`relative z-10 px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                     imageViewMode === 'bilingual'
-                      ? 'bg-sky-500 text-white shadow-xs'
+                      ? imageViewModeSlider.isReady
+                        ? 'text-white font-semibold'
+                        : 'bg-sky-500 text-white shadow-xs'
                       : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                   title="双语对照 (原位展示原文与译文)"
@@ -1795,11 +2169,14 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   <span>双语</span>
                 </button>
                 <button
+                  ref={imageViewModeSlider.registerItem('text')}
                   type="button"
                   onClick={() => setImageViewMode('text')}
-                  className={`px-2 py-1 rounded-md text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                  className={`relative z-10 px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                     imageViewMode === 'text'
-                      ? 'bg-sky-500 text-white shadow-xs'
+                      ? imageViewModeSlider.isReady
+                        ? 'text-white font-semibold'
+                        : 'bg-sky-500 text-white shadow-xs'
                       : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                   title="纯译文排版 (像文章一样通读完整译文段落)"
@@ -1810,15 +2187,18 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
               </div>
 
               {/* 引擎切换下拉菜单（动态联动所有已配置 AI 模型池、在线渠道与专业词库） */}
-              <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border shrink-0 transition-colors ${
-                isLight ? 'bg-slate-100/90 border-slate-200 text-slate-700' : 'bg-white/5 border-white/10 text-zinc-300'
-              }`}>
-                <Globe className="h-3.5 w-3.5 text-sky-500 shrink-0" />
-                <span className="text-[11px] text-slate-400 font-medium shrink-0 whitespace-nowrap">通道:</span>
-                <select
+              <div className="flex items-center gap-1.5 text-xs shrink-0">
+                <span className="text-[11px] font-medium shrink-0 whitespace-nowrap" style={{ color: 'var(--g-text-3)' }}>通道:</span>
+                <GlassSelect
                   value={imageTranslateEngine}
-                  onChange={async (e) => {
-                    const newEngine = e.target.value;
+                  icon={<Globe className="h-3.5 w-3.5 text-sky-500" />}
+                  options={[{ value: imageEngineChoices.auto.value, label: imageEngineChoices.auto.label }]}
+                  groups={imageEngineChoices.groups.map((g) => ({
+                    key: g.key,
+                    label: g.label,
+                    options: g.options.map((o) => ({ value: o.value, label: o.label })),
+                  }))}
+                  onChange={async (newEngine) => {
                     setImageTranslateEngine(newEngine);
                     setImageItems((prev) =>
                       prev.map((it) => ({
@@ -1831,32 +2211,12 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                       await translateImageItem(it, newEngine);
                     }
                   }}
-                  className={`bg-transparent outline-hidden text-xs font-semibold cursor-pointer shrink-0 min-w-[130px] max-w-[240px] truncate ${
-                    isLight ? 'text-slate-800' : 'text-zinc-100'
-                  }`}
                   title="切换图片翻译通道并立即重译"
-                >
-                  <option value={imageEngineChoices.auto.value} className={isLight ? 'bg-white text-slate-800' : 'bg-zinc-900 text-zinc-100'}>
-                    {imageEngineChoices.auto.label}
-                  </option>
-                  {imageEngineChoices.groups.map((g) => (
-                    <optgroup
-                      key={g.key}
-                      label={g.label}
-                      className={isLight ? 'bg-slate-100 text-slate-900 font-bold' : 'bg-zinc-800 text-zinc-200 font-bold'}
-                    >
-                      {g.options.map((o) => (
-                        <option
-                          key={o.value}
-                          value={o.value}
-                          className={isLight ? 'bg-white text-slate-800 font-normal' : 'bg-zinc-900 text-zinc-100 font-normal'}
-                        >
-                          {o.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
+                  size="sm"
+                  variant="rounded"
+                  menuMinWidth={250}
+                  triggerClassName="min-w-[130px] max-w-[230px]"
+                />
               </div>
 
               {imageItems.some((it) => (it.result?.blocks || []).length > 0) && (
@@ -2123,61 +2483,94 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         </div>
       )}
 
-      {/* Top Language Bar */}
-      <div className={`relative z-30 flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-2xl border transition-colors ${
-        isLight
-          ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800'
-          : 'bg-white/[0.04] border-white/10 backdrop-blur-md text-zinc-100'
-      }`}>
-        <LanguageDropdown
-          label="源语言"
-          value={sourceLang}
-          options={SUPPORTED_LANGUAGES}
-          onChange={setSourceLang}
-          detectedName={detectedLangName}
-          quickCodes={["auto", "en", "zh-CN", "ja"]}
-        />
-
-        <button
-          type="button"
-          onClick={handleSwapLanguages}
-          className={`flex items-center justify-center h-8 w-8 rounded-xl border transition shadow-xs cursor-pointer active:scale-95 ${
-            isLight
-              ? 'bg-slate-100 hover:bg-blue-600 hover:text-white border-slate-300 text-slate-700'
-              : 'bg-zinc-800/80 hover:bg-blue-600 hover:text-white border-white/[0.08] text-zinc-300'
-          }`}
-          title="互换源语言与目标语言"
+      {/* Top Language Bridge + Exposed Segmented Style + AI Copilot Toggle */}
+      <div
+        className={`lg-panel relative z-30 flex flex-wrap items-center justify-between gap-2.5 p-2.5 rounded-2xl transition-colors ${
+          isLight ? 'text-slate-800' : 'text-zinc-100'
+        }`}
+        style={{ background: 'var(--g-surface)' }}
+      >
+        {/* 方案 A 紧凑语言胶囊桥 */}
+        <div
+          className="flex flex-wrap items-center gap-1.5 p-1 rounded-full border"
+          style={{
+            background: 'var(--g-surface-2)',
+            borderColor: 'var(--g-hairline)',
+          }}
         >
-          <ArrowRightLeft className="h-3.5 w-3.5" />
-        </button>
+          <LanguageDropdown
+            label="源语言"
+            value={sourceLang}
+            options={SUPPORTED_LANGUAGES}
+            onChange={setSourceLang}
+            detectedName={detectedLangName}
+            quickCodes={["auto", "en", "zh-CN", "ja"]}
+            compact
+          />
 
-        {/* 译文风格：LLM 翻译的直译 / 流畅 / 术语优先 */}
-        <TranslationStyleDropdown
-          value={settings.translationStyle || 'free'}
-          onChange={setTranslationStyle}
-        />
+          <button
+            type="button"
+            onClick={handleSwapLanguages}
+            className={`flex items-center justify-center h-7 w-7 rounded-full border transition cursor-pointer active:scale-95 ${
+              isSwappingLang ? 'animate-swap-spin' : ''
+            } ${
+              isLight
+                ? 'hover:bg-[var(--accent)] hover:text-white text-slate-700'
+                : 'hover:bg-[var(--accent)] hover:text-white text-zinc-300'
+            }`}
+            style={{
+              background: 'var(--g-surface)',
+              borderColor: 'var(--g-hairline)',
+            }}
+            title="互换源语言与目标语言"
+          >
+            <ArrowRightLeft className="h-3.5 w-3.5" />
+          </button>
 
-        <LanguageDropdown
-          label="目标语言"
-          value={targetLang}
-          options={SUPPORTED_LANGUAGES.filter((l) => l.code !== "auto")}
-          onChange={setTargetLang}
-          quickCodes={["zh-CN", "en", "ja", "ko"]}
-          align="right"
-        />
+          <LanguageDropdown
+            label="目标语言"
+            value={targetLang}
+            options={SUPPORTED_LANGUAGES.filter((l) => l.code !== "auto")}
+            onChange={setTargetLang}
+            quickCodes={["zh-CN", "en", "ja", "ko"]}
+            align="right"
+            compact
+          />
+        </div>
+
+        {/* 右侧：方案 C 外露三段式风格胶囊 + AI 副驾抽屉开关 */}
+        <div className="flex flex-wrap items-center gap-2">
+          <TranslationStyleDropdown
+            variant="segmented"
+            value={settings.translationStyle || 'free'}
+            onChange={setTranslationStyle}
+          />
+
+          <button
+            type="button"
+            data-testid="toggle-copilot-btn"
+            aria-expanded={isCopilotOpen}
+            onClick={() => setIsCopilotOpen((v) => !v)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition cursor-pointer active:scale-95"
+            style={{
+              background: isCopilotOpen ? 'var(--accent-soft)' : 'var(--g-surface-2)',
+              borderColor: isCopilotOpen ? 'var(--accent-border)' : 'var(--g-hairline)',
+              color: isCopilotOpen ? 'var(--accent-text)' : 'var(--g-text-2)',
+            }}
+            title={isCopilotOpen ? "收起右侧 AI 深度解析副驾" : "展开右侧 AI 深度解析副驾"}
+          >
+            <Sparkles className={`h-3.5 w-3.5 ${deepLoading ? 'animate-spin' : ''}`} />
+            <span>AI 副驾</span>
+            <span className="text-[10px] opacity-75">{isCopilotOpen ? '已展开' : '已收起'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Main Dual-Pane Section */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Main Workspace: Dual Glass Islands + Collapsible AI Copilot Drawer (900px+ 默认左右并排) */}
+      <div className="flex flex-col min-[900px]:flex-row gap-4 items-stretch">
+        <div className="flex-1 min-w-0 grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Left Pane: Source Input */}
-        <div className={`flex flex-col h-[clamp(260px,40vh,540px)] p-4 rounded-2xl border transition-all ${
-          isLight
-            ? 'bg-white/70 border-white/80 shadow-md backdrop-blur-md shadow-slate-900/5 focus-within:border-sky-500/50'
-            : 'bg-white/[0.04] border-white/10 shadow-lg backdrop-blur-md shadow-black/20 focus-within:border-sky-400/40'
-        }`}
-        style={{
-          boxShadow: isLight ? 'var(--g-inset-top), var(--g-shadow-soft)' : 'var(--g-inset-top), var(--g-shadow-soft)',
-        }}>
+        <div className="translator-pane flex flex-col h-[clamp(270px,42vh,540px)] p-4 rounded-2xl">
           <div className={`flex items-center justify-between pb-2 border-b text-xs ${
             isLight ? 'border-black/5 text-slate-700' : 'border-white/5 text-zinc-300'
           }`}>
@@ -2276,67 +2669,69 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
         </div>
 
         {/* Right Pane: Translation Output */}
-        <div className={`flex flex-col h-[clamp(260px,40vh,540px)] p-4 relative rounded-2xl border transition-all ${
-          isLight
-            ? 'bg-white/70 border-white/80 shadow-md backdrop-blur-md shadow-slate-900/5'
-            : 'bg-white/[0.04] border-white/10 shadow-lg backdrop-blur-md shadow-black/20'
-        }`}
-        style={{
-          boxShadow: isLight ? 'var(--g-inset-top), var(--g-shadow-soft)' : 'var(--g-inset-top), var(--g-shadow-soft)',
-        }}>
+        <div className="translator-pane flex flex-col h-[clamp(270px,42vh,540px)] p-4 relative rounded-2xl">
           <div className={`flex items-center justify-between pb-2 border-b text-xs ${
             isLight ? 'border-black/5' : 'border-white/5'
           }`}>
-            <div className="relative flex items-center flex-1 min-w-0 pr-2">
+            <div className="flex items-center flex-1 min-w-0 gap-1 pr-2">
+              {canScrollLeft && (
+                <button
+                  type="button"
+                  onClick={() => handleElasticScroll(-120)}
+                  className={`p-1 rounded-full shadow-xs shrink-0 z-10 cursor-pointer transition ${
+                    isLight ? 'bg-white text-slate-800 border border-slate-200 hover:bg-slate-100' : 'bg-zinc-800 text-zinc-100 border border-white/10 hover:bg-zinc-700'
+                  }`}
+                  title="向左滚动"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+              )}
+
               <div
-                ref={tabsRef}
+                ref={(el) => {
+                  (tabsRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+                  engineTabSlider.containerRef.current = el;
+                }}
                 onScroll={updateScrollState}
                 onMouseDown={handleMouseDown}
                 onMouseLeave={handleMouseLeaveOrUp}
                 onMouseUp={handleMouseLeaveOrUp}
                 onMouseMove={handleMouseMove}
-                className="flex items-center space-x-1.5 overflow-x-auto pr-1 flex-nowrap scrollbar-none select-none cursor-grab active:cursor-grabbing flex-1 min-w-0 py-0.5"
+                onClickCapture={(e) => {
+                  if (hasDraggedRef.current) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    hasDraggedRef.current = false;
+                  }
+                }}
+                className="relative flex items-center space-x-1 overflow-x-auto p-0.5 rounded-full border flex-nowrap scrollbar-none select-none cursor-grab active:cursor-grabbing flex-1 min-w-0"
+                style={{
+                  background: 'var(--g-surface-2)',
+                  borderColor: 'var(--g-hairline)',
+                }}
               >
+                <SlidingHighlight
+                  rect={engineTabSlider.rect}
+                  isReady={engineTabSlider.isReady}
+                  variant="solid"
+                  radiusClass="rounded-full"
+                  testId="translator-engine-tab-slider"
+                />
                 {/* 智能优选 切换标签 */}
                 <button
-                  type="button"
-                  onClick={() => {
-                    setPreferredEngine('auto');
-                    try { localStorage.setItem('maobu_preferred_engine', 'auto'); } catch {}
-                    if (response?.engines && response.engines.length > 0) {
-                      const isFaultyOrUnconfigured = (e: import('../../services/types').MultiEngineTranslation) =>
-                        e.sourceTier === 'Online (Retry)' ||
-                        e.sourceTier === 'LLM (Config Required)' ||
-                        e.sourceTier === 'LLM (Auth Error)' ||
-                        e.sourceTier === 'LLM (Quota Error)' ||
-                        e.sourceTier === 'Online (Unconfigured)' ||
-                        e.translated.includes('点击重试') ||
-                        e.translated.includes('网络连接超时') ||
-                        e.translated.includes('未配置') ||
-                        e.translated.includes('需配置') ||
-                        e.translated.includes('API Key') ||
-                        e.translated.includes('额度不足') ||
-                        e.translated.includes('鉴权失败') ||
-                        !e.translated.trim();
-
-                      let validIdx = response.engines.findIndex(
-                        (e) => e.translated === response.mainTranslation && !isFaultyOrUnconfigured(e)
-                      );
-                      if (validIdx === -1) {
-                        validIdx = response.engines.findIndex((e) => !isFaultyOrUnconfigured(e));
-                      }
-                      setSelectedEngineIndex(validIdx >= 0 ? validIdx : 0);
-                    } else if (sourceText.trim()) {
-                      performTranslation(sourceText, sourceLang, targetLang);
-                    }
+                  ref={(el) => {
+                    engineTabRefs.current['auto'] = el;
+                    engineTabSlider.registerItem('auto')(el);
                   }}
+                  type="button"
+                  onClick={handleSelectAutoEngine}
                   title="智能多级自动择优推荐 (点击清除固定渠道)"
-                  className={`px-2.5 py-1 rounded-full font-medium transition cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                  className={`relative z-10 px-2.5 py-1 rounded-full font-medium transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5 focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${
                     preferredEngine === 'auto'
-                      ? "text-white shadow-sm font-bold"
-                      : (isLight ? "text-slate-600 hover:text-slate-950 hover:bg-slate-200/80" : "text-zinc-300 hover:text-white hover:bg-white/10")
+                      ? "text-white font-bold focus-visible:ring-white/80"
+                      : (isLight ? "text-slate-600 hover:text-slate-950 hover:bg-white/50 focus-visible:ring-blue-500/70" : "text-zinc-300 hover:text-white hover:bg-white/5 focus-visible:ring-blue-500/70")
                   }`}
-                  style={preferredEngine === 'auto' ? { background: 'var(--accent)' } : undefined}
+                  style={preferredEngine === 'auto' && !engineTabSlider.isReady ? { background: 'var(--accent)', boxShadow: '0 2px 8px rgba(37, 99, 235, 0.28)' } : undefined}
                 >
                   <Sparkles className={`h-3.5 w-3.5 ${preferredEngine === 'auto' ? 'text-white' : 'opacity-70'}`} />
                   <span>智能推荐</span>
@@ -2362,25 +2757,30 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     const isSelected = selectedEngineIndex === idx && preferredEngine !== 'auto';
                     return (
                       <button
+                        ref={(el) => {
+                          engineTabRefs.current[`eng_${idx}`] = el;
+                          engineTabSlider.registerItem(`eng_${idx}`)(el);
+                        }}
                         key={idx}
                         type="button"
-                        onClick={() => {
-                          setSelectedEngineIndex(idx);
-                          setPreferredEngine(shortName);
-                          try {
-                            localStorage.setItem('maobu_preferred_engine', shortName);
-                          } catch {}
-                        }}
+                        onClick={() => handleSelectFixedEngine(idx, shortName)}
                         title={`${eng.engineName} - 点击固定为此渠道优先显示`}
-                        className={`px-2.5 py-1 rounded-full font-medium transition cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                        className={`relative z-10 px-2.5 py-1 rounded-full font-medium transition-colors duration-150 cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5 focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${
                           isSelected
-                            ? "text-white shadow-sm font-bold"
-                            : (isLight ? "text-slate-600 hover:text-slate-950 hover:bg-slate-200/80" : "text-zinc-300 hover:text-white hover:bg-white/10")
+                            ? "text-white font-bold focus-visible:ring-white/80"
+                            : (isLight ? "text-slate-600 hover:text-slate-950 hover:bg-white/50 focus-visible:ring-blue-500/70" : "text-zinc-300 hover:text-white hover:bg-white/5 focus-visible:ring-blue-500/70")
                         }`}
-                        style={isSelected ? { background: isRetry ? '#d97706' : isGenerating ? '#9333ea' : 'var(--accent)' } : undefined}
+                        style={
+                          isSelected && !engineTabSlider.isReady
+                            ? {
+                                background: isRetry ? '#d97706' : isGenerating ? '#9333ea' : 'var(--accent)',
+                                boxShadow: '0 2px 8px rgba(15, 23, 42, 0.16)',
+                              }
+                            : undefined
+                        }
                       >
-                        <EngineIcon className={`h-3.5 w-3.5 ${isGenerating ? 'text-purple-400 animate-pulse' : isRetry ? 'text-amber-300' : isCg ? 'text-cyan-300' : (isSelected ? 'text-white/90' : 'opacity-70')}`} strokeWidth={2} />
-                        <span>{shortName}</span>
+                        <EngineIcon className={`h-3.5 w-3.5 shrink-0 ${isGenerating ? 'text-purple-400 animate-pulse' : isRetry ? 'text-amber-300' : isCg ? 'text-cyan-300' : (isSelected ? 'text-white/90' : 'opacity-70')}`} strokeWidth={2} />
+                        <span className="max-w-[118px] truncate">{shortName}</span>
                         {isGenerating && (
                           <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-ping" title="大模型深度精翻中..." />
                         )}
@@ -2399,22 +2799,26 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     const isPreferred = preferredEngine.toLowerCase() === tab.name.toLowerCase();
                     return (
                       <button
+                        ref={(el) => {
+                          engineTabRefs.current[`ph_${idx}`] = el;
+                          engineTabSlider.registerItem(`ph_${idx}`)(el);
+                        }}
                         key={tab.name}
                         type="button"
                         onClick={() => {
-                          setPreferredEngine(tab.name);
-                          try { localStorage.setItem('maobu_preferred_engine', tab.name); } catch {}
+                          updatePreferredEngine(tab.name);
+                          setCustomAppliedText(null);
                         }}
                         title={`${tab.name} - 点击固定为此渠道优先显示`}
-                        className={`px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer transition ${
+                        className={`relative z-10 px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer transition-colors duration-150 focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${
                           isPreferred
-                            ? "font-bold text-white shadow-sm"
-                            : (isLight ? "font-medium text-slate-600 hover:bg-slate-200/80" : "font-medium text-zinc-300 hover:bg-white/10")
+                            ? "font-bold text-white focus-visible:ring-white/80"
+                            : (isLight ? "font-medium text-slate-600 hover:text-slate-950 hover:bg-white/50 focus-visible:ring-blue-500/70" : "font-medium text-zinc-300 hover:text-white hover:bg-white/5 focus-visible:ring-blue-500/70")
                         }`}
-                        style={isPreferred ? { background: 'var(--accent)' } : undefined}
+                        style={isPreferred && !engineTabSlider.isReady ? { background: 'var(--accent)', boxShadow: '0 2px 8px rgba(15, 23, 42, 0.16)' } : undefined}
                       >
-                        <TabIcon className={`h-3.5 w-3.5 ${isPreferred ? '' : 'opacity-70'}`} />
-                        <span>{tab.name}</span>
+                        <TabIcon className={`h-3.5 w-3.5 shrink-0 ${isPreferred ? '' : 'opacity-70'}`} />
+                        <span className="max-w-[118px] truncate">{tab.name}</span>
                         {isPreferred && <span className="text-[10px]">📌</span>}
                       </button>
                     );
@@ -2422,30 +2826,133 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                 )}
               </div>
 
-              {canScrollLeft && (
-                <button
-                  type="button"
-                  onClick={() => handleElasticScroll(-120)}
-                  className={`absolute left-0 top-1/2 -translate-y-1/2 p-1 rounded-full shadow-md z-20 cursor-pointer transition ${
-                    isLight ? 'bg-white text-slate-800 border border-slate-200 hover:bg-slate-100' : 'bg-zinc-800 text-zinc-100 border border-white/10 hover:bg-zinc-700'
-                  }`}
-                  title="向左滚动"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                </button>
-              )}
-
               {canScrollRight && (
                 <button
                   type="button"
                   onClick={() => handleElasticScroll(120)}
-                  className={`absolute right-0 top-1/2 -translate-y-1/2 p-1 rounded-full shadow-md z-20 cursor-pointer transition ${
+                  className={`p-1 rounded-full shadow-xs shrink-0 z-10 cursor-pointer transition ${
                     isLight ? 'bg-white text-slate-800 border border-slate-200 hover:bg-slate-100' : 'bg-zinc-800 text-zinc-100 border border-white/10 hover:bg-zinc-700'
                   }`}
                   title="向右滚动"
                 >
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
+              )}
+            </div>
+
+            {/* 全部翻译通道一键快速切换面板 */}
+            <div ref={engineMenuRef} className="relative shrink-0">
+              <button
+                type="button"
+                data-testid="engine-picker-btn"
+                aria-expanded={isEngineMenuOpen}
+                aria-haspopup="menu"
+                onClick={() => setIsEngineMenuOpen((prev) => !prev)}
+                title="展开全部翻译通道快速切换"
+                className={`px-2 py-1 rounded-full text-[11px] font-medium border flex items-center gap-1 cursor-pointer transition ${
+                  isEngineMenuOpen
+                    ? 'text-white border-transparent shadow-sm'
+                    : (isLight ? 'text-slate-700 hover:text-slate-950 hover:bg-white/80' : 'text-zinc-200 hover:text-white hover:bg-white/10')
+                }`}
+                style={
+                  isEngineMenuOpen
+                    ? { background: 'var(--accent)' }
+                    : { background: 'var(--g-surface-2)', borderColor: 'var(--g-hairline)' }
+                }
+              >
+                <Layers className="h-3 w-3 opacity-85" />
+                <span>{response?.engines?.length ? `${response.engines.length}通道` : `${enabledPlaceholderTabs.length}通道`}</span>
+                <ChevronDown className={`h-3 w-3 transition-transform duration-150 ${isEngineMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {isEngineMenuOpen && (
+                <div
+                  role="menu"
+                  data-testid="engine-picker-menu"
+                  className="vision-select-popover absolute right-0 top-full mt-1.5 z-40 w-60"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      handleSelectAutoEngine();
+                      setIsEngineMenuOpen(false);
+                      engineTabRefs.current['auto']?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                    }}
+                    className={`vision-select-option ${preferredEngine === 'auto' ? 'is-selected' : ''}`}
+                  >
+                    <span className="flex items-center gap-2 truncate">
+                      <Sparkles className="h-3.5 w-3.5 shrink-0 opacity-80" />
+                      <span className="truncate">智能推荐（自动择优）</span>
+                    </span>
+                    {preferredEngine === 'auto' && <Check className="h-3.5 w-3.5 shrink-0" />}
+                  </button>
+
+                  <div className="vision-select-divider" />
+
+                  <div className="max-h-60 overflow-y-auto space-y-0.5 pr-0.5">
+                    {response?.engines && response.engines.length > 0 ? (
+                      response.engines.map((eng, idx) => {
+                        const isGenerating = eng.sourceTier === 'LLM (Generating)';
+                        const isRetry =
+                          eng.sourceTier === 'Online (Retry)' ||
+                          eng.translated.includes('点击重试') ||
+                          eng.translated.includes('网络连接超时');
+                        const shortName = getShortEngineName(eng.engineName);
+                        const EngineIcon = getEngineIcon(shortName);
+                        const isSelected = selectedEngineIndex === idx && preferredEngine !== 'auto';
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              handleSelectFixedEngine(idx, shortName);
+                              setIsEngineMenuOpen(false);
+                              engineTabRefs.current[`eng_${idx}`]?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                            }}
+                            className={`vision-select-option ${isSelected ? 'is-selected' : ''}`}
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <EngineIcon className="h-3.5 w-3.5 shrink-0 opacity-80" />
+                              <span className="truncate">{shortName}</span>
+                            </span>
+                            <span className="flex items-center gap-1 shrink-0">
+                              {isGenerating && <span className="text-[10px] text-purple-500">生成中</span>}
+                              {isRetry && <span className="text-[10px] text-amber-500">超时</span>}
+                              {isSelected && <Check className="h-3.5 w-3.5" />}
+                            </span>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      enabledPlaceholderTabs.map((tab, idx) => {
+                        const TabIcon = tab.icon;
+                        const isPreferred = preferredEngine.toLowerCase() === tab.name.toLowerCase();
+                        return (
+                          <button
+                            key={tab.name}
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              updatePreferredEngine(tab.name);
+                              setCustomAppliedText(null);
+                              setIsEngineMenuOpen(false);
+                              engineTabRefs.current[`ph_${idx}`]?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                            }}
+                            className={`vision-select-option ${isPreferred ? 'is-selected' : ''}`}
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <TabIcon className="h-3.5 w-3.5 shrink-0 opacity-80" />
+                              <span className="truncate">{tab.name}</span>
+                            </span>
+                            {isPreferred && <Check className="h-3.5 w-3.5 shrink-0" />}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
               )}
             </div>
 
@@ -2468,14 +2975,21 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
               </div>
             )}
             {loading ? (
-              <div className="space-y-3 py-1 animate-pulse">
-                <div className={`h-4 rounded ${isLight ? 'bg-slate-200' : 'bg-slate-700/50'} w-3/4 mb-2`} />
-                <div className={`h-4 rounded ${isLight ? 'bg-slate-200' : 'bg-slate-700/50'} w-1/2 mb-2`} />
-                <div className={`h-4 rounded ${isLight ? 'bg-slate-200' : 'bg-slate-700/50'} w-5/6 mb-2`} />
-                <div className={`h-4 rounded ${isLight ? 'bg-slate-200' : 'bg-slate-700/50'} w-2/3 mb-2`} />
+              <div className="space-y-3 py-1">
+                <div className="flex items-center gap-1.5 text-[11px] font-medium mb-1" style={{ color: 'var(--accent-text)' }}>
+                  <Sparkles className="h-3.5 w-3.5 animate-pulse" />
+                  <span>正在汇聚多引擎与术语译文...</span>
+                </div>
+                <div className="liquid-shimmer-bar h-4 rounded-md w-3/4" />
+                <div className="liquid-shimmer-bar h-4 rounded-md w-1/2" />
+                <div className="liquid-shimmer-bar h-4 rounded-md w-5/6" />
+                <div className="liquid-shimmer-bar h-4 rounded-md w-2/3" />
               </div>
             ) : currentTranslationText ? (
-              <div className="relative inline-block w-full">
+              <div
+                key={`${selectedEngineIndex}_${preferredEngine}_${settings.translationStyle || 'free'}`}
+                className="animate-trans-in relative inline-block w-full"
+              >
                 {isCurrentCgTerm && (
                   <div className="flex items-center space-x-2 mb-2">
                     <div
@@ -2607,242 +3121,21 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     </p>
                   );
                 })()}
-
-                {/* ── AI 深度解析微流（三风格改写、词汇拆解、场景例句）── */}
-                {sourceText.trim() && currentTranslationText && (
-                  <div className="mt-4 pt-4 border-t border-slate-200/80 dark:border-white/10 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className={`text-xs font-semibold uppercase tracking-wider flex items-center space-x-1.5 ${isLight ? "text-slate-500" : "text-zinc-400"}`}>
-                        <Sparkles className="h-3.5 w-3.5 text-blue-500" />
-                        <span>AI 深度解析 · 重点词汇拆解与地道例句</span>
-                      </div>
-                      {hasActiveLlm && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (response?.mainTranslation) {
-                              loadDeepAnalysis(sourceText, response.mainTranslation, sourceLang, targetLang, true);
-                            }
-                          }}
-                          disabled={deepLoading}
-                          className={`flex items-center space-x-1 text-[11px] font-medium px-2 py-0.5 rounded-lg border transition cursor-pointer ${
-                            isLight
-                              ? "bg-slate-50 border-slate-200 text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700"
-                              : "bg-white/[0.03] border-white/10 text-zinc-400 hover:bg-white/[0.08] hover:border-white/20 hover:text-sky-300"
-                          } disabled:opacity-50`}
-                          title="重新请求大模型生成重点词汇拆解与地道场景例句"
-                        >
-                          <RotateCcw className={`h-3 w-3 ${deepLoading ? "animate-spin text-blue-500" : ""}`} />
-                          <span>{deepLoading ? "AI 分析中..." : "✨ 刷新解析"}</span>
-                        </button>
-                      )}
-                    </div>
-
-                    {/* AI 深度解析加载骨架屏 */}
-                    {deepLoading && (
-                      <div className={`p-3.5 rounded-xl border space-y-2.5 animate-pulse ${
-                        isLight ? "bg-blue-50/40 border-blue-200/60" : "bg-blue-950/20 border-blue-500/20"
-                      }`}>
-                        <div className="flex items-center space-x-2 text-xs font-medium text-blue-600 dark:text-sky-400">
-                          <Sparkles className="h-3.5 w-3.5 animate-spin" />
-                          <span>AI 大模型正在拆解重点词汇与语境例句...</span>
-                        </div>
-                        <div className="space-y-2 pt-1">
-                          <div className={`h-3 rounded-md w-4/5 ${isLight ? "bg-slate-200" : "bg-white/10"}`} />
-                          <div className={`h-3 rounded-md w-3/5 ${isLight ? "bg-slate-200" : "bg-white/10"}`} />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 模块 1: 重点词汇与专业术语拆解 */}
-                    {!deepLoading && deepAnalysis && deepAnalysis.vocabulary && deepAnalysis.vocabulary.length > 0 && (
-                      <div className="space-y-1.5 pt-1">
-                        <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
-                          <span className="flex items-center gap-1">
-                            <span>📚</span> 重点词汇与专业术语拆解
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setDeepSectionCollapsed(p => ({ ...p, vocab: !p.vocab }))}
-                            className="hover:text-blue-500 transition cursor-pointer"
-                            title={deepSectionCollapsed.vocab ? "展开词汇拆解" : "收起词汇拆解"}
-                          >
-                            {deepSectionCollapsed.vocab ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
-                          </button>
-                        </div>
-                        {!deepSectionCollapsed.vocab && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {deepAnalysis.vocabulary.map((v, idx) => (
-                              <div
-                                key={idx}
-                                className={`p-2 rounded-xl border text-xs flex items-center justify-between gap-1.5 ${
-                                  isLight ? "bg-slate-50 border-slate-200/90 text-slate-800" : "bg-white/[0.03] border-white/8 text-zinc-200"
-                                }`}
-                              >
-                                <div className="space-y-0.5 min-w-0 flex-1">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="font-bold text-blue-600 dark:text-sky-400">{v.word}</span>
-                                    {v.phonetic && (
-                                      <span className="text-[10px] font-mono text-slate-500 dark:text-zinc-400">{v.phonetic}</span>
-                                    )}
-                                    {v.pos && (
-                                      <span className="text-[10px] px-1 py-0.2 rounded font-mono bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-zinc-300">
-                                        {v.pos}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <p className="text-[11px] opacity-85 truncate" title={v.meaning}>
-                                    {v.meaning}
-                                  </p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => handleSpeech(v.word, /[\u4e00-\u9fa5]/.test(v.word) ? 'zh-CN' : 'en-US')}
-                                  className={`p-1 rounded-md border shrink-0 transition cursor-pointer ${
-                                    isLight ? "bg-white border-slate-200 hover:bg-slate-100 text-slate-600" : "bg-white/5 border-white/10 hover:bg-white/15 text-zinc-300"
-                                  }`}
-                                  title="发音"
-                                >
-                                  <Volume2 className="h-3 w-3" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* 模块 3: 真实场景双语例句 */}
-                    {!deepLoading && deepAnalysis && deepAnalysis.examples && deepAnalysis.examples.length > 0 && (
-                      <div className="space-y-1.5 pt-1">
-                        <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
-                          <span className="flex items-center gap-1">
-                            <span>💬</span> 真实场景双语例句
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setDeepSectionCollapsed(p => ({ ...p, examples: !p.examples }))}
-                            className="hover:text-blue-500 transition cursor-pointer"
-                            title={deepSectionCollapsed.examples ? "展开场景例句" : "收起场景例句"}
-                          >
-                            {deepSectionCollapsed.examples ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
-                          </button>
-                        </div>
-                        {!deepSectionCollapsed.examples && (
-                          <div className="space-y-1.5">
-                            {deepAnalysis.examples.map((ex, idx) => {
-                              const copyKey = `ex_${idx}`;
-                              const isCopied = copiedDeepKey === copyKey;
-                              return (
-                                <div
-                                  key={idx}
-                                  className={`p-2.5 rounded-xl border text-xs leading-relaxed space-y-1 ${
-                                    isLight ? "bg-slate-50/80 border-slate-200/90 text-slate-700" : "bg-white/[0.03] border-white/8 text-zinc-300"
-                                  }`}
-                                >
-                                  <div className="flex items-start justify-between gap-2">
-                                    <p className={`font-medium ${isLight ? "text-slate-900" : "text-zinc-100"}`}>{ex.en}</p>
-                                    <div className="flex items-center space-x-1 shrink-0">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleSpeech(ex.en, 'en-US')}
-                                        className={`p-1 rounded-md border transition cursor-pointer ${
-                                          isLight ? "bg-white border-slate-200 hover:bg-slate-100 text-slate-600" : "bg-white/5 border-white/10 hover:bg-white/15 text-zinc-300"
-                                        }`}
-                                        title="朗读例句"
-                                      >
-                                        <Volume2 className="h-3 w-3" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleCopyDeepText(copyKey, `${ex.en}\n${ex.zh}`)}
-                                        className={`p-1 rounded-md border transition cursor-pointer ${
-                                          isLight ? "bg-white border-slate-200 hover:bg-slate-100 text-slate-600" : "bg-white/5 border-white/10 hover:bg-white/15 text-zinc-300"
-                                        }`}
-                                        title="复制双语例句"
-                                      >
-                                        {isCopied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-                                      </button>
-                                    </div>
-                                  </div>
-                                  <p className={`text-[11px] ${isLight ? "text-slate-500" : "text-zinc-400"}`}>{ex.zh}</p>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* 失败与重试提示卡片（消除留白与失联感） */}
-                    {!deepLoading && !deepAnalysis && deepError && (
-                      <div
-                        className={`p-3 rounded-xl border flex items-center justify-between text-xs transition ${
-                          isLight
-                            ? "bg-amber-50/70 border-amber-200 text-amber-800"
-                            : "bg-amber-500/[0.08] border-amber-400/20 text-amber-300"
-                        }`}
-                      >
-                        <div className="flex items-center space-x-2">
-                          <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
-                          <span>{deepError}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (response?.mainTranslation) {
-                              loadDeepAnalysis(sourceText, response.mainTranslation, sourceLang, targetLang, true);
-                            }
-                          }}
-                          className={`px-2.5 py-1 rounded-lg font-medium border text-[11px] transition cursor-pointer flex items-center space-x-1 ${
-                            isLight
-                              ? "bg-white hover:bg-amber-50 border-amber-300 text-amber-800 shadow-xs"
-                              : "bg-white/10 hover:bg-white/15 border-amber-400/30 text-amber-200"
-                          }`}
-                        >
-                          <RotateCcw className="h-3 w-3" />
-                          <span>重新解析</span>
-                        </button>
-                      </div>
-                    )}
-
-                    {/* 未配置大模型指引横幅 */}
-                    {!deepLoading && !deepAnalysis && !deepError && !hasActiveLlm && (
-                      <button
-                        type="button"
-                        onClick={onOpenSettings}
-                        className={`w-full p-2.5 rounded-xl border flex items-center justify-between text-xs transition cursor-pointer group ${
-                          isLight
-                            ? "bg-gradient-to-r from-blue-50/70 to-indigo-50/70 border-blue-200 hover:border-blue-400 text-blue-800 shadow-xs"
-                            : "bg-gradient-to-r from-blue-500/[0.08] to-indigo-500/[0.08] border-blue-400/20 hover:border-blue-400/40 text-sky-300 shadow-sm"
-                        }`}
-                      >
-                        <div className="flex items-center space-x-2">
-                          <Sparkles className="h-3.5 w-3.5 text-blue-500 dark:text-sky-400" />
-                          <span className="font-medium">连接 AI 大模型，即可自动解锁重点词汇拆解与地道场景例句</span>
-                        </div>
-                        <div className="flex items-center space-x-1 font-semibold group-hover:translate-x-0.5 transition-transform text-blue-600 dark:text-sky-300">
-                          <span>去配置</span>
-                          <ChevronRight className="h-3.5 w-3.5" />
-                        </div>
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
             ) : (
               <div className={`h-full flex flex-col items-center justify-center text-center space-y-2 ${
                 isLight ? 'text-slate-500' : 'text-zinc-400'
               }`}>
                 <Languages className={`h-8 w-8 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`} />
-                <p className="text-sm font-medium">左侧输入或粘贴内容，右侧实时展现翻译结果</p>
+                <p className="text-sm font-medium">输入或粘贴内容，此处实时展现翻译结果</p>
                 <p className={`text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>支持 Google、MyMemory、CG 离线词库与 AI 大模型多引擎</p>
               </div>
             )}
           </div>
 
+          {(currentTranslationText || (response?.engines && response.engines.length > 0)) && (
           <div className={`flex items-center justify-between gap-3 pt-2 border-t text-xs ${
-            isLight ? 'border-slate-200' : 'border-zinc-800/60'
+            isLight ? 'border-black/5' : 'border-white/5'
           }`}>
             <div className="flex items-center gap-2 shrink-0">
               {currentTranslationText && (
@@ -2852,18 +3145,20 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     onClick={() => handleSpeech(currentTranslationText, targetLang)}
                     className={`p-1.5 rounded-lg border transition cursor-pointer shrink-0 ${
                       isSpeaking
-                        ? "bg-blue-600/30 border-blue-400 text-blue-600"
-                        : (isLight ? "bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800" : "bg-zinc-800/80 hover:bg-zinc-700 border-zinc-700 text-zinc-200")
+                        ? "bg-blue-600/30 border-blue-400 text-blue-500"
+                        : "hover:bg-[var(--g-surface-3)]"
                     }`}
+                    style={!isSpeaking ? { background: 'var(--g-surface-2)', borderColor: 'var(--g-hairline)', color: 'var(--g-text-1)' } : undefined}
                     title="朗读译文发音"
                   >
                     <Volume2 className={`h-4 w-4 ${isSpeaking ? "animate-pulse" : ""}`} />
                   </button>
 
                   <button
+                    key={copyAnimKey}
                     type="button"
                     onClick={() => handleCopy(currentTranslationText)}
-                    className="flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-500 text-white font-medium px-3 py-1.5 rounded-lg transition shadow-sm cursor-pointer whitespace-nowrap shrink-0"
+                    className={`lg-btn lg-btn-primary px-3 py-1.5 rounded-lg text-xs whitespace-nowrap shrink-0 ${copyAnimKey > 0 ? 'animate-copy-pop' : ''}`}
                   >
                     {copied ? (
                       <>
@@ -2881,11 +3176,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   <button
                     type="button"
                     onClick={handlePinTranslation}
-                    className={`flex items-center space-x-1.5 font-medium px-3 py-1.5 rounded-lg border transition cursor-pointer whitespace-nowrap shrink-0 ${
-                      isLight
-                        ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
-                        : 'bg-zinc-800/80 hover:bg-zinc-700 border-zinc-700 text-zinc-200'
-                    }`}
+                    className="lg-btn px-3 py-1.5 rounded-lg text-xs whitespace-nowrap shrink-0"
                     title="贴图到桌面（置顶小窗，可拖拽 / 滚轮缩放）"
                     data-testid="pin-translation-button"
                   >
@@ -2896,11 +3187,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                     type="button"
                     onClick={() => void handleExportImage()}
                     disabled={exportingImage}
-                    className={`flex items-center space-x-1.5 font-medium px-3 py-1.5 rounded-lg border transition cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0 ${
-                      isLight
-                        ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-800'
-                        : 'bg-zinc-800/80 hover:bg-zinc-700 border-zinc-700 text-zinc-200'
-                    }`}
+                    className="lg-btn px-3 py-1.5 rounded-lg text-xs disabled:opacity-60 whitespace-nowrap shrink-0"
                     title="导出为分享图片（保存到 图片库/猫步翻译/exports）"
                     data-testid="export-image-button"
                   >
@@ -2912,22 +3199,276 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
             </div>
 
             <div
-              className="text-[11px] text-zinc-400 font-medium whitespace-nowrap truncate min-w-0 text-right"
-              title={response?.engines?.length ? `已汇聚 ${response.engines.length} 个引擎对照结果` : undefined}
+              className="text-[11px] font-medium whitespace-nowrap truncate min-w-0 text-right"
+              style={{ color: 'var(--g-text-3)' }}
+              title={
+                response?.engines?.length
+                  ? (preferredEngine === 'auto' && currentEngine
+                      ? `智能优选 · ${getShortEngineName(currentEngine.engineName)} · 已汇聚 ${response.engines.length} 个引擎对照结果`
+                      : `已汇聚 ${response.engines.length} 个引擎对照结果`)
+                  : undefined
+              }
             >
               {response?.engines && response.engines.length > 0 && (
-                <span>已汇聚 {response.engines.length} 个引擎对照结果</span>
+                <span>
+                  {preferredEngine === 'auto' && currentEngine
+                    ? `智能优选 · ${getShortEngineName(currentEngine.engineName)} · 已汇聚 ${response.engines.length} 源`
+                    : `已汇聚 ${response.engines.length} 个引擎对照结果`}
+                </span>
               )}
             </div>
           </div>
+          )}
         </div>
+        </div>
+
+        {/* 方案 C 右侧可折叠「AI 深度副驾抽屉」（词汇拆解与地道例句独立展示，不挤占译文栏高度） */}
+        {sourceText.trim() && currentTranslationText && isCopilotOpen && (
+          <aside
+            data-testid="ai-copilot-drawer"
+            className="translator-pane animate-card-in min-[900px]:w-[268px] lg:w-[300px] xl:w-[340px] 2xl:w-[360px] shrink-0 rounded-2xl p-4 flex flex-col gap-3 max-h-[540px] overflow-y-auto scrollbar-thin"
+          >
+            <div className="flex items-center justify-between pb-2 border-b" style={{ borderColor: 'var(--g-hairline)' }}>
+              <div className={`text-xs font-semibold uppercase tracking-wider flex items-center space-x-1.5 ${isLight ? "text-slate-600" : "text-zinc-300"}`}>
+                <Sparkles className="h-3.5 w-3.5" style={{ color: 'var(--accent-text)' }} />
+                <span>AI 深度解析 · 重点词汇拆解与地道例句</span>
+              </div>
+              {hasActiveLlm && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (response?.mainTranslation) {
+                      loadDeepAnalysis(sourceText, response.mainTranslation, sourceLang, targetLang, true);
+                    }
+                  }}
+                  disabled={deepLoading}
+                  className="flex items-center space-x-1 text-[11px] font-medium px-2 py-0.5 rounded-lg border transition cursor-pointer disabled:opacity-50 hover:bg-[var(--g-surface-3)] shrink-0"
+                  style={{
+                    background: 'var(--g-surface-2)',
+                    borderColor: 'var(--g-hairline)',
+                    color: 'var(--g-text-2)',
+                  }}
+                  title="重新请求大模型生成重点词汇拆解与地道场景例句"
+                >
+                  <RotateCcw className={`h-3 w-3 ${deepLoading ? "animate-spin text-blue-500" : ""}`} />
+                  <span>{deepLoading ? "AI 分析中..." : "✨ 刷新解析"}</span>
+                </button>
+              )}
+            </div>
+
+            {/* AI 深度解析流光骨架屏 */}
+            {deepLoading && (
+              <div
+                className="p-3.5 rounded-xl border space-y-2.5"
+                style={{
+                  background: 'var(--g-surface-2)',
+                  borderColor: 'var(--accent-border)',
+                }}
+              >
+                <div className="flex items-center space-x-2 text-xs font-medium" style={{ color: 'var(--accent-text)' }}>
+                  <Sparkles className="h-3.5 w-3.5 animate-spin" />
+                  <span>AI 大模型正在拆解重点词汇与语境例句...</span>
+                </div>
+                <div className="space-y-2 pt-1">
+                  <div className="liquid-shimmer-bar h-3 rounded-md w-4/5" />
+                  <div className="liquid-shimmer-bar h-3 rounded-md w-3/5" />
+                </div>
+              </div>
+            )}
+
+            {/* 模块 1: 重点词汇与专业术语拆解 */}
+            {!deepLoading && deepAnalysis && deepAnalysis.vocabulary && deepAnalysis.vocabulary.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
+                  <span className="flex items-center gap-1">
+                    <span>📚</span> 重点词汇与专业术语拆解
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setDeepSectionCollapsed(p => ({ ...p, vocab: !p.vocab }))}
+                    className="hover:text-blue-500 transition cursor-pointer"
+                    title={deepSectionCollapsed.vocab ? "展开词汇拆解" : "收起词汇拆解"}
+                  >
+                    {deepSectionCollapsed.vocab ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+                  </button>
+                </div>
+                {!deepSectionCollapsed.vocab && (
+                  <div className="space-y-2">
+                    {deepAnalysis.vocabulary.map((v, idx) => (
+                      <div
+                        key={idx}
+                        className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-1.5 ${
+                          isLight ? "text-slate-800" : "text-zinc-200"
+                        }`}
+                        style={{
+                          background: 'var(--g-surface-2)',
+                          borderColor: 'var(--g-hairline)',
+                        }}
+                      >
+                        <div className="space-y-0.5 min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-blue-600 dark:text-sky-400">{v.word}</span>
+                            {v.phonetic && (
+                              <span className="text-[10px] font-mono text-slate-500 dark:text-zinc-400">{v.phonetic}</span>
+                            )}
+                            {v.pos && (
+                              <span className="text-[10px] px-1 py-0.2 rounded font-mono bg-slate-200/80 dark:bg-white/10 text-slate-600 dark:text-zinc-300">
+                                {v.pos}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] opacity-85 truncate" title={v.meaning}>
+                            {v.meaning}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleSpeech(v.word, /[\u4e00-\u9fa5]/.test(v.word) ? 'zh-CN' : 'en-US')}
+                          className={`p-1 rounded-md border shrink-0 transition cursor-pointer ${
+                            isLight ? "bg-white/80 border-slate-200 hover:bg-white text-slate-600" : "bg-white/5 border-white/10 hover:bg-white/15 text-zinc-300"
+                          }`}
+                          title="发音"
+                        >
+                          <Volume2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 模块 3: 真实场景双语例句 */}
+            {!deepLoading && deepAnalysis && deepAnalysis.examples && deepAnalysis.examples.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
+                  <span className="flex items-center gap-1">
+                    <span>💬</span> 真实场景双语例句
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setDeepSectionCollapsed(p => ({ ...p, examples: !p.examples }))}
+                    className="hover:text-blue-500 transition cursor-pointer"
+                    title={deepSectionCollapsed.examples ? "展开场景例句" : "收起场景例句"}
+                  >
+                    {deepSectionCollapsed.examples ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+                  </button>
+                </div>
+                {!deepSectionCollapsed.examples && (
+                  <div className="space-y-1.5">
+                    {deepAnalysis.examples.map((ex, idx) => {
+                      const copyKey = `ex_${idx}`;
+                      const isCopied = copiedDeepKey === copyKey;
+                      return (
+                        <div
+                          key={idx}
+                          className={`p-2.5 rounded-xl border text-xs leading-relaxed space-y-1 ${
+                            isLight ? "text-slate-700" : "text-zinc-300"
+                          }`}
+                          style={{
+                            background: 'var(--g-surface-2)',
+                            borderColor: 'var(--g-hairline)',
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className={`font-medium ${isLight ? "text-slate-900" : "text-zinc-100"}`}>{ex.en}</p>
+                            <div className="flex items-center space-x-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleSpeech(ex.en, 'en-US')}
+                                className={`p-1 rounded-md border transition cursor-pointer ${
+                                  isLight ? "bg-white/80 border-slate-200 hover:bg-white text-slate-600" : "bg-white/5 border-white/10 hover:bg-white/15 text-zinc-300"
+                                }`}
+                                title="朗读例句"
+                              >
+                                <Volume2 className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyDeepText(copyKey, `${ex.en}\n${ex.zh}`)}
+                                className={`p-1 rounded-md border transition cursor-pointer ${
+                                  isLight ? "bg-white/80 border-slate-200 hover:bg-white text-slate-600" : "bg-white/5 border-white/10 hover:bg-white/15 text-zinc-300"
+                                }`}
+                                title="复制双语例句"
+                              >
+                                {isCopied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                              </button>
+                            </div>
+                          </div>
+                          <p className={`text-[11px] ${isLight ? "text-slate-500" : "text-zinc-400"}`}>{ex.zh}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 失败与重试提示卡片 */}
+            {!deepLoading && !deepAnalysis && deepError && (
+              <div
+                className={`p-3 rounded-xl border flex items-center justify-between gap-2 text-xs transition ${
+                  isLight
+                    ? "bg-amber-50/70 border-amber-200 text-amber-800"
+                    : "bg-amber-500/[0.08] border-amber-400/20 text-amber-300"
+                }`}
+              >
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
+                  <span>{deepError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (response?.mainTranslation) {
+                      loadDeepAnalysis(sourceText, response.mainTranslation, sourceLang, targetLang, true);
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded-lg font-medium border text-[11px] transition cursor-pointer flex items-center space-x-1 shrink-0 ${
+                    isLight
+                      ? "bg-white hover:bg-amber-50 border-amber-300 text-amber-800 shadow-xs"
+                      : "bg-white/10 hover:bg-white/15 border-amber-400/30 text-amber-200"
+                  }`}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  <span>重新解析</span>
+                </button>
+              </div>
+            )}
+
+            {/* 未配置大模型指引横幅 */}
+            {!deepLoading && !deepAnalysis && !deepError && !hasActiveLlm && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className={`w-full p-3 rounded-xl border flex items-center justify-between text-xs transition cursor-pointer group text-left gap-2 ${
+                  isLight
+                    ? "bg-gradient-to-r from-blue-50/70 to-indigo-50/70 border-blue-200 hover:border-blue-400 text-blue-800 shadow-xs"
+                    : "bg-gradient-to-r from-blue-500/[0.08] to-indigo-500/[0.08] border-blue-400/20 hover:border-blue-400/40 text-sky-300 shadow-sm"
+                }`}
+              >
+                <div className="flex items-center space-x-2">
+                  <Sparkles className="h-3.5 w-3.5 text-blue-500 dark:text-sky-400 shrink-0" />
+                  <span className="font-medium leading-relaxed">连接 AI 大模型，即可自动解锁重点词汇拆解与地道场景例句</span>
+                </div>
+                <div className="flex items-center space-x-1 font-semibold group-hover:translate-x-0.5 transition-transform text-blue-600 dark:text-sky-300 shrink-0">
+                  <span>去配置</span>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </div>
+              </button>
+            )}
+          </aside>
+        )}
       </div>
 
       {/* Multi-Engine Side-by-Side Comparison Cards (When available) */}
       {response && response.engines.length > 1 && (
-        <div className={`rounded-2xl p-4 space-y-3 border transition-colors ${
-          isLight ? 'bg-white/90 border-slate-200 shadow-sm text-slate-800' : 'glass-panel text-zinc-100'
-        }`}>
+        <div
+          className={`lg-panel rounded-2xl p-4 space-y-3 transition-colors ${
+            isLight ? 'text-slate-800' : 'text-zinc-100'
+          }`}
+          style={{ background: 'var(--g-surface)' }}
+        >
           <div className={`flex items-center justify-between text-xs font-bold border-b pb-2 ${
             isLight ? 'text-slate-800 border-slate-200' : 'text-zinc-300 border-zinc-800'
           }`}>
@@ -2991,7 +3532,7 @@ export const DualPaneTranslator: React.FC<DualPaneTranslatorProps> = ({
                   onClick={() => !isGenerating && handleSelectEngineCard(idx, engine.translated)}
                   onMouseEnter={() => setHoveredCgCardIndex(idx)}
                   onMouseLeave={() => setHoveredCgCardIndex(null)}
-                  className={`p-3.5 rounded-xl border transition-all cursor-pointer group flex flex-col justify-between relative ${
+                  className={`animate-card-in p-3.5 rounded-xl border transition-all duration-200 hover:-translate-y-0.5 cursor-pointer group flex flex-col justify-between relative ${
                     isSelected
                       ? (isLight
                           ? (isGenerating

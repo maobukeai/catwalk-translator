@@ -525,6 +525,22 @@ pub(crate) fn clean_ocr_text(raw: &str) -> String {
             }
         }
     }
+    let is_ui_symbol_noise = |c: char| matches!(
+        c,
+        '☐' | '☑' | '☒' | '□' | '■' | '☆' | '★' | '◇' | '◆' | '☰' | '≡' | '▷' | '▶' | '▽' | '▼'
+    );
+    while cleaned.chars().next().is_some_and(is_ui_symbol_noise) {
+        let rest: String = cleaned.chars().skip(1).collect::<String>().trim_start().to_string();
+        if rest.is_empty() { break; }
+        cleaned = rest;
+    }
+    while cleaned.chars().last().is_some_and(is_ui_symbol_noise) {
+        let mut v: Vec<char> = cleaned.chars().collect();
+        v.pop();
+        let rest: String = v.into_iter().collect::<String>().trim_end().to_string();
+        if rest.is_empty() { break; }
+        cleaned = rest;
+    }
     match cleaned.as_str() {
         "若色" => "着色".to_string(),
         "治染" | "沧染" => "渲染".to_string(),
@@ -541,6 +557,9 @@ mod clean_text_tests {
     fn repairs_conservative_common_ui_confusions() {
         assert_eq!(clean_ocr_text("若色"), "着色");
         assert_eq!(clean_ocr_text("沧染"), "渲染");
+        assert_eq!(clean_ocr_text("☐ 系统"), "系统");
+        assert_eq!(clean_ocr_text("☆重新打开快速上手清单"), "重新打开快速上手清单");
+        assert_eq!(clean_ocr_text("• 条目"), "• 条目");
         assert_eq!(
             clean_ocr_text("à(末保存) - Blender 5.2.1 LTS"),
             "(未保存) - Blender 5.2.1 LTS"
@@ -3769,7 +3788,7 @@ pub fn execute_native_ocr_with_engine(
             execute_native_ocr(crop_bmp_bytes)
         }
         "onnx" => {
-            if onnx_available() {
+            if onnx_available() || crate::onnx_ocr::model_files_present() {
                 let eng = crate::onnx_ocr::get_engine();
                 let onnx_result = eng.recognize_bmp(crop_bmp_bytes);
                 drop(eng);

@@ -598,5 +598,18 @@ describe('overlayLayout AABB Collision & Tooltip Algorithms', () => {
       expect(getCardTextColor('#14181e', 'rgb(0,0,0)')).toBe('#ffffff');
       expect(getCardTextColor('rgb(240,240,240)', '#000000')).toBe('#000000');
     });
+
+    it('normalizes coherent vertical sidebar menu heights while ignoring inflated outliers', () => {
+      const heights = estimateDenseRowFontHeights([
+        { original: '常规', logicalX: 80, logicalY: 80, logicalW: 48, logicalH: 20 },
+        { original: '网络与代理', logicalX: 82, logicalY: 112, logicalW: 76, logicalH: 18 },
+        { original: '指纹质量', logicalX: 84, logicalY: 140, logicalW: 65, logicalH: 18 },
+        { original: '模型服务', logicalX: 80, logicalY: 188, logicalW: 71, logicalH: 26 },
+        { original: '同步与迁移', logicalX: 84, logicalY: 266, logicalW: 74, logicalH: 18 },
+      ]);
+      expect(heights[3]).toBeCloseTo(18 * 1.15);
+      expect(heights[1]).toBe(18);
+      expect(heights[4]).toBe(18);
+    });
   });
 });

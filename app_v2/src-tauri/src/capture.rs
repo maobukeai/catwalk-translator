@@ -229,9 +229,25 @@ pub fn capture_desktop_payload() -> Result<ScreenCapturePayload, String> {
             height = GetSystemMetrics(SM_CYSCREEN);
         }
 
-        // Detect DPI scale factor from screen DC
+        // Prefer the DPI of the virtual-desktop origin monitor (where the
+        // overlay window anchors on multi-monitor setups), falling back to primary DC DPI.
+        let origin_dpi_scale = {
+            use windows::Win32::Foundation::POINT;
+            use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
+            use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+            let monitor = MonitorFromPoint(POINT { x: vx, y: vy }, MONITOR_DEFAULTTONEAREST);
+            let mut dpi_x: u32 = 96;
+            let mut _dpi_y: u32 = 96;
+            if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut _dpi_y).is_ok()
+                && dpi_x >= 48
+            {
+                Some(dpi_x as f64 / 96.0)
+            } else {
+                None
+            }
+        };
         let dpi = GetDeviceCaps(screen_dc, LOGPIXELSX);
-        let scale_factor = (dpi as f64) / 96.0;
+        let scale_factor = origin_dpi_scale.unwrap_or_else(|| (dpi as f64) / 96.0);
 
         if width <= 0 || height <= 0 {
             ReleaseDC(std::ptr::null_mut(), screen_dc);

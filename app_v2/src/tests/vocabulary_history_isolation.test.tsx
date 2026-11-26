@@ -106,7 +106,7 @@ describe('Vocabulary and History physical separation', () => {
     await screen.findByText('Subsurface Scattering');
 
     // Click "🕒 查询历史" subtab
-    const historySubTabBtn = screen.getByText('🕒 查询历史').closest('button') as HTMLElement;
+    const historySubTabBtn = screen.getByTestId('subtab-history');
     fireEvent.click(historySubTabBtn);
 
     // Now all items should be visible
@@ -127,7 +127,7 @@ describe('Vocabulary and History physical separation', () => {
     await screen.findByText('Subsurface Scattering');
 
     // Switch to history tab
-    const historySubTabBtn = screen.getByText('🕒 查询历史').closest('button') as HTMLElement;
+    const historySubTabBtn = screen.getByTestId('subtab-history');
     fireEvent.click(historySubTabBtn);
     await screen.findByText('Hello World');
 
@@ -151,7 +151,7 @@ describe('Vocabulary and History physical separation', () => {
     expect(screen.getByText('Ambient Occlusion')).toBeInTheDocument();
 
     // Switch back to "⭐ 我的生词本"
-    const vocabTabBtn = screen.getByText('⭐ 我的生词本').closest('button') as HTMLElement;
+    const vocabTabBtn = screen.getByTestId('subtab-vocabulary');
     fireEvent.click(vocabTabBtn);
 
     // Favorites are still intact in Vocabulary tab
@@ -211,7 +211,7 @@ describe('Vocabulary and History physical separation', () => {
     });
 
     // Switch to "查询历史" tab - both items are STILL there!
-    const historySubTabBtn = screen.getByText('🕒 查询历史').closest('button') as HTMLElement;
+    const historySubTabBtn = screen.getByTestId('subtab-history');
     fireEvent.click(historySubTabBtn);
 
     await screen.findByText('Subsurface Scattering');
@@ -224,7 +224,7 @@ describe('Vocabulary and History physical separation', () => {
     render(<HistoryPanel />);
 
     // Switch to history tab
-    const historySubTabBtn = screen.getByText('🕒 查询历史').closest('button') as HTMLElement;
+    const historySubTabBtn = screen.getByTestId('subtab-history');
     fireEvent.click(historySubTabBtn);
     await screen.findByText('Hello World');
 
@@ -245,7 +245,7 @@ describe('Vocabulary and History physical separation', () => {
     fireEvent.click(favBtn);
 
     // Switch back to "⭐ 我的生词本"
-    const vocabTabBtn = screen.getByText('⭐ 我的生词本').closest('button') as HTMLElement;
+    const vocabTabBtn = screen.getByTestId('subtab-vocabulary');
     fireEvent.click(vocabTabBtn);
 
     // Now Hello World and Random OCR snippet are in Vocabulary tab!
@@ -281,7 +281,7 @@ describe('Vocabulary and History physical separation', () => {
     });
 
     // Check in "查询历史" - it's also gone from history!
-    const historySubTabBtn = screen.getByText('🕒 查询历史').closest('button') as HTMLElement;
+    const historySubTabBtn = screen.getByTestId('subtab-history');
     fireEvent.click(historySubTabBtn);
 
     await screen.findByText('Ambient Occlusion');

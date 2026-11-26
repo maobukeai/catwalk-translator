@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { useSettingsStore } from '../../../stores/useSettingsStore';
 import { useAppTheme } from '../../../hooks/useAppTheme';
+import { useSlidingIndicator } from '../../../hooks/useSlidingIndicator';
+import { SlidingHighlight } from '../../Common/SlidingHighlight';
 import {
   cmdGetOcrEngineStatus, cmdFetchLlmModels, cmdOfflineStatus, cmdOfflineInstall,
   cmdOfflineUninstall, cmdGetAutoStart, cmdSetAutoStart, cmdResetWindowSize,
@@ -49,14 +51,19 @@ export const AppearancePanel: React.FC = () => {
 
   const appearance = settings.appearance || DEFAULT_APPEARANCE_FALLBACK;
   void setAppearance;
-  const activeTheme = appearance.theme || 'system';
+  const activeTheme = (appearance.theme as string) === 'fluent-dark' ? 'dark' : (appearance.theme || 'system');
+  const themeSlider = useSlidingIndicator<HTMLDivElement>(activeTheme, [isLight]);
+  const fontFamilySlider = useSlidingIndicator<HTMLDivElement>(appearance.fontFamily || 'system', [isLight]);
+  const fontSizeSlider = useSlidingIndicator<HTMLDivElement>(appearance.fontSize || 'medium', [isLight]);
 
   return (
     <>
         <div className="space-y-4 animate-in fade-in duration-150">
-          <div className={`p-5 space-y-5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
-          }`}>
+          <div
+            className={`settings-glass-card p-5 space-y-5 transition-colors ${
+              isLight ? 'text-slate-800' : 'text-zinc-100'
+            }`}
+          >
             <div>
               <div className={`flex items-center space-x-2 text-sm font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>
                 <Palette className="h-4 w-4 text-purple-400" />
@@ -68,9 +75,10 @@ export const AppearancePanel: React.FC = () => {
             </div>
 
             {/* 1. Live Preview Card 实时效果预览 (紧凑型设计，减少垂直占用) */}
-            <div className={`relative overflow-hidden rounded-xl border p-3 space-y-2.5 shadow-xs transition-all ${
-              isLight ? 'border-slate-300/80 bg-white/45 backdrop-blur-md' : 'border-white/10 bg-zinc-950/80'
-            }`}>
+            <div
+              className="lg-panel relative overflow-hidden rounded-xl p-3 space-y-2.5 transition-all"
+              style={{ background: 'var(--g-surface-2)' }}
+            >
               <div className={`flex flex-wrap items-center justify-between gap-1.5 border-b pb-2 relative z-10 ${
                 isLight ? 'border-slate-200' : 'border-white/[0.08]'
               }`}>
@@ -193,30 +201,40 @@ export const AppearancePanel: React.FC = () => {
               </div>
             </div>
 
-            {/* 2. Theme Selector (3 Tiles) */}
+            {/* 2. Theme Selector (3 Tiles with 2D Sliding Card Highlight) */}
             <div className="space-y-2">
               <label className={`block text-xs font-bold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>视觉主题模式</label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div ref={themeSlider.containerRef} className="relative grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <SlidingHighlight
+                  rect={themeSlider.rect}
+                  isReady={themeSlider.isReady}
+                  variant="card"
+                  radiusClass="rounded-xl"
+                  testId="appearance-theme-slider"
+                />
                 {[
                   { id: 'system', name: '跟随系统', sub: 'System', icon: Monitor, desc: '自动同步 OS 模式' },
                   { id: 'light', name: '明亮浅色', sub: 'Light', icon: Sun, desc: '清爽通透苹果浅色' },
                   { id: 'dark', name: '经典深色', sub: 'Dark', icon: Moon, desc: '高级深邃苹果暗黑' },
                 ].map((item) => {
-                  const isSelected = (appearance.theme === item.id) || (item.id === 'dark' && appearance.theme === ('fluent-dark' as any));
+                  const isSelected = activeTheme === item.id;
                   const ItemIcon = item.icon;
                   return (
                     <button
                       key={item.id}
+                      ref={themeSlider.registerItem(item.id)}
                       type="button"
                       onClick={() => setThemeMode(item.id as ThemeMode)}
-                      className={`flex flex-col items-start p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      className={`relative z-10 flex flex-col items-start p-3.5 rounded-xl border text-left transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                         isSelected
-                          ? (isLight
-                              ? 'bg-blue-50/90 border-2 border-blue-600 shadow-md shadow-blue-500/10'
-                              : 'bg-blue-600/20 border-blue-500 text-white shadow-md ring-1 ring-blue-500/50')
+                          ? themeSlider.isReady
+                            ? 'border-transparent bg-transparent'
+                            : (isLight
+                                ? 'bg-blue-50/85 border-2 border-blue-600 shadow-md shadow-blue-500/10'
+                                : 'bg-blue-600/20 border-blue-500 text-white shadow-md ring-1 ring-blue-500/50')
                           : (isLight
-                              ? 'bg-white/70 border border-slate-200/90 text-slate-800 hover:bg-white/90 hover:border-slate-300'
-                              : 'bg-white/[0.04] border-white/[0.08] text-zinc-300 hover:bg-white/[0.08] hover:border-zinc-700')
+                              ? 'bg-[var(--g-surface-2)] border-[var(--g-border-strong)] text-slate-800 hover:bg-[var(--g-surface-3)]'
+                              : 'bg-[var(--g-surface)] border-[var(--g-border)] text-zinc-300 hover:bg-[var(--g-surface-2)] hover:border-zinc-700')
                       }`}
                     >
                       <div className="flex items-center justify-between w-full">
@@ -253,9 +271,11 @@ export const AppearancePanel: React.FC = () => {
               </div>
 
               {(appearance.enableBlur ?? true) && (
-                <div className={`space-y-2 p-3.5 rounded-xl border ${
-                  isLight ? 'bg-slate-100/90 border-slate-200 text-slate-900' : 'bg-zinc-950/60 border-white/[0.06] text-zinc-300'
-                }`}>
+                <div
+                  className={`lg-inset space-y-2 p-3.5 rounded-xl transition-colors ${
+                    isLight ? 'text-slate-900' : 'text-zinc-300'
+                  }`}
+                >
                   <div className="flex justify-between text-xs">
                     <span className="font-semibold">磨砂模糊程度调节 (Frosted Glass Blur)</span>
                     <span className="font-mono text-blue-600 font-bold">
@@ -279,10 +299,17 @@ export const AppearancePanel: React.FC = () => {
               )}
             </div>
 
-            {/* 4. Font Family Selector */}
+            {/* 4. Font Family Selector (2D Sliding Card Highlight) */}
             <div className={`space-y-2 pt-3 border-t ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
               <label className={`block text-xs font-bold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>字体样式 (Font Family)</label>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              <div ref={fontFamilySlider.containerRef} className="relative grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <SlidingHighlight
+                  rect={fontFamilySlider.rect}
+                  isReady={fontFamilySlider.isReady}
+                  variant="card"
+                  radiusClass="rounded-xl"
+                  testId="appearance-font-slider"
+                />
                 {[
                   { id: 'system', name: '系统默认', sub: 'System UI', fontStyle: "'Segoe UI Variable Text', system-ui, -apple-system, Segoe UI, Roboto, 'Microsoft YaHei UI', 'PingFang SC', sans-serif" },
                   { id: 'yahei', name: '微软雅黑', sub: 'Microsoft YaHei', fontStyle: "'Microsoft YaHei UI', 'Microsoft YaHei', '微软雅黑', 'PingFang SC', sans-serif" },
@@ -294,16 +321,19 @@ export const AppearancePanel: React.FC = () => {
                   return (
                     <button
                       key={f.id}
+                      ref={fontFamilySlider.registerItem(f.id)}
                       type="button"
                       onClick={() => setFontFamilyOption(f.id as FontFamilyOption)}
-                      className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                      className={`relative z-10 p-2.5 rounded-xl border text-center transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                         isSelected
-                          ? (isLight
-                              ? 'bg-blue-50/90 border-2 border-blue-600 text-blue-950 shadow-md shadow-blue-500/10'
-                              : 'bg-blue-600/20 border-blue-500 text-white ring-1 ring-blue-500/40 shadow-sm')
+                          ? fontFamilySlider.isReady
+                            ? 'border-transparent bg-transparent'
+                            : (isLight
+                                ? 'bg-blue-50/85 border-2 border-blue-600 text-blue-950 shadow-md shadow-blue-500/10'
+                                : 'bg-blue-600/20 border-blue-500 text-white ring-1 ring-blue-500/40 shadow-sm')
                           : (isLight
-                              ? 'bg-slate-100/90 border border-slate-200 text-slate-800 hover:bg-slate-200/80 hover:border-slate-300'
-                              : 'bg-zinc-950/50 border-white/[0.06] text-zinc-300 hover:bg-zinc-900 hover:border-zinc-700')
+                              ? 'bg-[var(--g-surface-2)] border-[var(--g-border-strong)] text-slate-800 hover:bg-[var(--g-surface-3)]'
+                              : 'bg-[var(--g-surface)] border-[var(--g-border)] text-zinc-300 hover:bg-[var(--g-surface-2)] hover:border-zinc-700')
                       }`}
                     >
                       <div className={`text-xs font-bold truncate ${isLight ? (isSelected ? 'text-blue-950 font-extrabold' : 'text-slate-900') : 'text-white'}`} style={{ fontFamily: f.fontStyle }}>
@@ -316,12 +346,22 @@ export const AppearancePanel: React.FC = () => {
               </div>
             </div>
 
-            {/* 5. Font Size Selector */}
+            {/* 5. Font Size Selector (Sliding Segmented Pill) */}
             <div className={`space-y-2 pt-3 border-t ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
               <label className={`block text-xs font-bold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>字号大小 (Font Size)</label>
-              <div className={`flex items-center space-x-1.5 p-1.5 rounded-xl border ${
-                isLight ? 'bg-slate-200/80 border-slate-300/80' : 'bg-zinc-950/80 border-white/[0.08]'
-              }`}>
+              <div
+                ref={fontSizeSlider.containerRef}
+                className={`relative flex items-center space-x-1.5 p-1.5 rounded-xl border ${
+                  isLight ? 'bg-slate-200/80 border-slate-300/80' : 'bg-zinc-950/80 border-white/[0.08]'
+                }`}
+              >
+                <SlidingHighlight
+                  rect={fontSizeSlider.rect}
+                  isReady={fontSizeSlider.isReady}
+                  variant="solid"
+                  radiusClass="rounded-lg"
+                  testId="appearance-fontsize-slider"
+                />
                 {[
                   { id: 'small', label: '小 (13px)' },
                   { id: 'medium', label: '标准 (14px)' },
@@ -332,11 +372,14 @@ export const AppearancePanel: React.FC = () => {
                   return (
                     <button
                       key={s.id}
+                      ref={fontSizeSlider.registerItem(s.id)}
                       type="button"
                       onClick={() => setFontSizeOption(s.id as FontSizeOption)}
-                      className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      className={`relative z-10 flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                         isSelected
-                          ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-sm border border-blue-400/40 font-bold'
+                          ? fontSizeSlider.isReady
+                            ? 'text-white font-bold'
+                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-sm border border-blue-400/40 font-bold'
                           : (isLight ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-300/60' : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.06]')
                       }`}
                     >

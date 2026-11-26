@@ -1,6 +1,7 @@
 import React from 'react';
 import type { OverlayBlock } from '../../services/types';
 import { isDenseProseLayout } from '../../services/overlayDisplayPolicy';
+import { isSuccessfulLlmTier } from '../../services/pipelineDiagnostics';
 
 interface YoudaoResultPanelProps {
   blocks: import('../../services/types').OverlayBlock[];
@@ -71,30 +72,32 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
   const srcLabel = srcHasCJK ? '中文' : 'English';
   const targetLabel = targetLang === 'auto' ? (srcHasCJK ? 'English' : '中文') : targetLang;
   const isAiRefined = blocks.some(
-    (b) => b.sourceTier && (b.sourceTier.includes('✨') || b.sourceTier.includes('AI 精翻') || b.sourceTier.includes('LLM'))
+    (b) => !b.translationFailed && !!b.sourceTier && isSuccessfulLlmTier(b.sourceTier)
   );
 
   return (
     <div
-      className={`overlay-panel absolute flex flex-col overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-2xl ${
-        isLight
-          ? 'bg-white/95 border-slate-300 text-slate-800'
-          : 'bg-slate-900/92 border-white/15 text-zinc-100'
-      }`}
-      style={{ left, top, width: panelW, maxHeight: estH, zIndex: 230 }}
+      className="overlay-panel vision-modal-shell animate-modal-pop absolute flex flex-col overflow-hidden rounded-[20px]"
+      style={{ left, top, width: panelW, maxHeight: estH, zIndex: 230, color: 'var(--g-text-1)' }}
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >
       {/* Panel header */}
-      <div className={`flex items-center justify-between gap-2 px-4 py-2.5 border-b shrink-0 ${
-        isLight ? 'border-slate-200 bg-slate-100/70' : 'border-white/10 bg-white/[0.04]'
-      }`}>
+      <div
+        className="flex items-center justify-between gap-2 px-4 py-2.5 border-b shrink-0"
+        style={{ borderColor: 'var(--g-hairline)', background: 'var(--g-surface-2)' }}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm">🖼️</span>
-          <span className={`text-xs font-bold ${isLight ? 'text-slate-800' : 'text-white'}`}>截图翻译</span>
-          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full border ${
-            isLight ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-blue-500/15 border-blue-400/30 text-sky-300'
-          }`}>
+          <span className="text-xs font-bold">截图翻译</span>
+          <span
+            className="text-[10px] font-mono px-2 py-0.5 rounded-full border font-semibold"
+            style={{
+              background: 'var(--accent-soft)',
+              borderColor: 'var(--accent-border)',
+              color: 'var(--accent-text)',
+            }}
+          >
             {srcLabel} → {targetLabel}
           </span>
           {isAiRefined && (
@@ -103,16 +106,14 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
             </span>
           )}
           {translating && (
-            <span className="text-[10px] font-mono text-sky-400 animate-pulse">翻译中…</span>
+            <span className="text-[10px] font-mono animate-pulse" style={{ color: 'var(--accent-text)' }}>翻译中…</span>
           )}
         </div>
         <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={onSwitchMode}
-            className={`px-2 py-1 rounded-lg text-[10px] font-semibold border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
+            className="lg-btn !px-2.5 !py-1 !rounded-full text-[10px] font-semibold cursor-pointer"
             title="切换为原位覆盖模式 (M)"
           >
             🃏 原位模式
@@ -120,7 +121,7 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className={`p-1 rounded-lg transition cursor-pointer ${isLight ? 'text-slate-400 hover:text-rose-600' : 'text-zinc-400 hover:text-rose-400'}`}
+            className="lg-btn lg-btn-ghost !p-1.5 !rounded-full hover:text-rose-500 transition cursor-pointer"
             title="关闭划词 (Esc)"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -136,11 +137,10 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
         <div className={dualColumn ? 'grid grid-cols-[2fr_3fr]' : 'flex flex-col'}>
           {/* Source column (or top section when narrow) */}
           <div
-            className={`px-4 py-3 space-y-1 ${dualColumn ? 'border-r' : 'border-b'} ${
-              isLight ? 'border-slate-200 bg-slate-50/70' : 'border-white/[0.07] bg-black/25'
-            }`}
+            className={`px-4 py-3 space-y-1 ${dualColumn ? 'border-r' : 'border-b'}`}
+            style={{ borderColor: 'var(--g-hairline)', background: isLight ? 'rgba(15, 23, 42, 0.025)' : 'rgba(0, 0, 0, 0.16)' }}
           >
-            <div className={`flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider pb-1 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
+            <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider pb-1" style={{ color: 'var(--g-text-3)' }}>
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-400" />
               原文
             </div>
@@ -151,11 +151,19 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
                   key={i}
                   data-row-index={i}
                   data-row-side="src"
-                  className={`rounded-md px-2 py-1.5 transition-colors cursor-default ${hovered ? (isLight ? 'bg-sky-100/90' : 'bg-sky-500/15') : ''}`}
+                  className="rounded-lg px-2.5 py-1.5 transition-all cursor-default border-l-2"
+                  style={
+                    hovered
+                      ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)' }
+                      : { borderColor: 'transparent' }
+                  }
                   onMouseEnter={() => onHover(i)}
                   onMouseLeave={() => onHover(null)}
                 >
-                  <p className={`${denseProse ? 'text-[13px] font-normal break-words' : 'text-[11.5px] font-mono break-all'} leading-relaxed ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                  <p
+                    className={`${denseProse ? 'text-[13px] font-normal break-words' : 'text-[11.5px] font-mono break-all'} leading-relaxed`}
+                    style={{ color: 'var(--g-text-2)' }}
+                  >
                     {b.original}
                   </p>
                 </div>
@@ -165,8 +173,8 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
 
           {/* Translation column (or bottom section when narrow) */}
           <div className="px-4 py-3 space-y-1">
-            <div className={`flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider pb-1 ${isLight ? 'text-blue-500' : 'text-sky-400'}`}>
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
+            <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-wider pb-1" style={{ color: 'var(--accent-text)' }}>
+              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: 'var(--accent)' }} />
               译文
             </div>
             {blocks.map((b, i) => {
@@ -176,15 +184,21 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
                   key={i}
                   data-row-index={i}
                   data-row-side="dst"
-                  className={`rounded-md px-2 py-1.5 transition-colors cursor-default ${hovered ? (isLight ? 'bg-sky-100/90' : 'bg-sky-500/15') : ''}`}
+                  className="rounded-lg px-2.5 py-1.5 transition-all cursor-default border-l-2"
+                  style={
+                    hovered
+                      ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)' }
+                      : { borderColor: 'transparent' }
+                  }
                   onMouseEnter={() => onHover(i)}
                   onMouseLeave={() => onHover(null)}
                 >
-                  <p className={`${denseProse ? 'text-[14px] font-normal' : 'text-[15px] font-semibold'} leading-relaxed break-words ${
-                    b.translated
-                      ? (isLight ? 'text-slate-900' : 'text-white')
-                      : (isLight ? 'text-slate-400 italic' : 'text-zinc-500 italic')
-                  }`}>
+                  <p
+                    className={`${denseProse ? 'text-[14px] font-normal' : 'text-[15px] font-semibold'} leading-relaxed break-words ${
+                      b.translated ? '' : 'italic opacity-60'
+                    }`}
+                    style={{ color: b.translated ? 'var(--g-text-1)' : 'var(--g-text-3)' }}
+                  >
                     {b.translated || '识别完成，翻译接管中…'}
                   </p>
                 </div>
@@ -195,16 +209,15 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
       </div>
 
       {/* Toolbar */}
-      <div className={`flex items-center justify-between gap-2 px-4 py-2.5 border-t shrink-0 ${
-        isLight ? 'border-slate-200 bg-slate-100/70' : 'border-white/10 bg-white/[0.04]'
-      }`}>
-        <div className="flex items-center gap-1.5">
+      <div
+        className="flex items-center justify-between gap-2 px-4 py-2.5 border-t shrink-0"
+        style={{ borderColor: 'var(--g-hairline)', background: 'var(--g-surface-2)' }}
+      >
+        <div className="flex items-center gap-1.5 flex-wrap">
           <button
             type="button"
             onClick={() => onCopyText(translatedText)}
-            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${
-              isLight ? 'bg-blue-600 hover:bg-blue-500 text-white border-blue-500' : 'bg-blue-600 hover:bg-blue-500 text-white border-blue-400'
-            }`}
+            className="lg-btn lg-btn-primary !px-3 !py-1.5 !rounded-full text-[11px] font-semibold cursor-pointer"
             title="复制全部译文"
           >
             📋 复制译文
@@ -212,9 +225,7 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
           <button
             type="button"
             onClick={() => onCopyText(sourceText)}
-            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
+            className="lg-btn !px-2.5 !py-1.5 !rounded-full text-[11px] font-medium cursor-pointer"
             title="复制全部原文"
           >
             📄 原文
@@ -222,9 +233,7 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
           <button
             type="button"
             onClick={() => onSpeech(allTranslated ? translatedText : sourceText)}
-            className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
+            className="lg-btn !px-2.5 !py-1.5 !rounded-full text-[11px] font-medium cursor-pointer"
             title="朗读"
           >
             🔊
@@ -232,9 +241,7 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
           <button
             type="button"
             onClick={onRetranslate}
-            className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
+            className="lg-btn !px-2.5 !py-1.5 !rounded-full text-[11px] font-medium cursor-pointer"
             title="重新翻译"
           >
             🔄
@@ -242,9 +249,7 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
           <button
             type="button"
             onClick={onPin}
-            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
+            className="lg-btn !px-2.5 !py-1.5 !rounded-full text-[11px] font-medium cursor-pointer"
             title="贴图到桌面（置顶小窗，可拖拽/滚轮缩放）"
             data-testid="pin-all-button"
           >
@@ -253,15 +258,13 @@ const YoudaoResultPanel: React.FC<YoudaoResultPanelProps> = ({
           <button
             type="button"
             onClick={() => void onExportImage()}
-            className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border transition cursor-pointer ${
-              isLight ? 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200' : 'bg-white/[0.06] border-white/10 text-zinc-300 hover:bg-white/[0.12]'
-            }`}
+            className="lg-btn !px-2.5 !py-1.5 !rounded-full text-[11px] font-medium cursor-pointer"
             title="导出为分享图片（保存到 图片库/猫步翻译/exports）"
           >
             🖼 导出图片
           </button>
         </div>
-        <span className={`text-[10px] font-mono ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
+        <span className="text-[10px] font-mono shrink-0" style={{ color: 'var(--g-text-3)' }}>
           {blocks.length} 段 · 悬停联动原文位置
         </span>
       </div>

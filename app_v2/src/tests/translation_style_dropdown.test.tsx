@@ -35,4 +35,22 @@ describe("TranslationStyleDropdown Component", () => {
 
     expect(handleChange).toHaveBeenCalledWith("terminology");
   });
+
+  it("supports segmented variant with exposed style pills and sliding indicator", () => {
+    const handleChange = vi.fn();
+    const { container } = render(
+      <TranslationStyleDropdown variant="segmented" value="free" onChange={handleChange} />
+    );
+
+    expect(container.querySelector(".seg-pill-indicator")).toBeInTheDocument();
+    const literalBtn = screen.getByRole("button", { name: "直译" });
+    const freeBtn = screen.getByRole("button", { name: "流畅" });
+    const termBtn = screen.getByRole("button", { name: "术语优先" });
+
+    expect(freeBtn).toHaveAttribute("aria-pressed", "true");
+    expect(literalBtn).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(termBtn);
+    expect(handleChange).toHaveBeenCalledWith("terminology");
+  });
 });

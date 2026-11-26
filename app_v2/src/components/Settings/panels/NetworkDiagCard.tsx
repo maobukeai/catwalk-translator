@@ -32,9 +32,7 @@ export const NetworkDiagCard: React.FC = () => {
     !ok ? 'text-rose-500' : ms < 500 ? 'text-emerald-500' : ms < 1500 ? 'text-amber-500' : 'text-orange-500';
 
   return (
-    <div className={`rounded-2xl border p-4 ${
-      isLight ? 'bg-white/70 border-slate-200' : 'bg-zinc-900/40 border-white/[0.07]'
-    }`} data-testid="network-diag-card">
+    <div className="settings-glass-card p-4 sm:p-5" data-testid="network-diag-card">
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-emerald-500" />

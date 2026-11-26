@@ -48,42 +48,50 @@ export const ClipboardToast: React.FC<ClipboardToastProps> = ({ payload, onClose
   };
 
   return (
-    <div className="fixed bottom-6 right-6 z-[350] max-w-sm w-full animate-in slide-in-from-bottom-5 fade-in duration-200">
+    <div className="fixed bottom-6 right-6 z-[350] max-w-sm w-full">
       <div
-        className="lg-surface rounded-2xl p-4 shadow-2xl space-y-2.5 transition-all border"
-        style={{
-          background: 'var(--g-surface-solid)',
-          borderColor: 'var(--g-border-strong)',
-          color: 'var(--g-text-1)',
-        }}
+        key={payload.id}
+        className={`vision-toast-shell vision-modal-enter rounded-[22px] p-4 space-y-2.5 overflow-hidden ${
+          isLight ? 'text-slate-800' : 'text-zinc-100'
+        }`}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-blue-500/20 text-blue-400">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+            <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-text)] shrink-0">
               <ClipboardCheck className="h-3.5 w-3.5" />
             </div>
-            <span className="text-xs font-bold tracking-wide">剪贴板速译</span>
+            <span className="text-xs font-bold tracking-wide text-[var(--g-text-1)] shrink-0">
+              剪贴板速译
+            </span>
             {payload.fromWatch && (
               <span
                 data-testid="clipboard-watch-badge"
-                className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-emerald-500/15 text-emerald-400 border-emerald-400/30"
+                className={`text-[10px] font-mono px-2 py-0.5 rounded-full border font-semibold shrink-0 ${
+                  isLight
+                    ? 'bg-emerald-50/90 text-emerald-700 border-emerald-200/80'
+                    : 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30'
+                }`}
                 title="来自被动监听：复制外文即自动翻译"
               >
                 自动监听
               </span>
             )}
-            <span className="text-[10px] font-mono px-2 py-0.2 rounded-full border bg-blue-500/15 text-sky-300 border-blue-400/30">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-[var(--accent-soft)] text-[var(--accent-text)] border-[var(--accent-border)] truncate max-w-[120px]">
               {payload.sourceTier}
             </span>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             {payload.fromWatch && onDisableWatch && (
               <button
                 type="button"
                 data-testid="disable-watch-btn"
                 onClick={onDisableWatch}
-                className="p-1 rounded-lg text-zinc-400 hover:text-amber-400 transition"
+                className={`p-1 rounded-full transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                  isLight
+                    ? 'text-slate-400 hover:bg-amber-500/12 hover:text-amber-600'
+                    : 'text-zinc-400 hover:bg-amber-500/15 hover:text-amber-300'
+                }`}
                 title="关闭剪贴板被动监听（可在设置中重新开启）"
               >
                 <Sparkles className="h-3.5 w-3.5" />
@@ -92,7 +100,12 @@ export const ClipboardToast: React.FC<ClipboardToastProps> = ({ payload, onClose
             <button
               type="button"
               onClick={onClose}
-              className="p-1 rounded-lg text-zinc-400 hover:text-white transition"
+              className={`p-1 rounded-full transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                isLight
+                  ? 'text-slate-400 hover:bg-slate-200/70 hover:text-slate-700'
+                  : 'text-zinc-400 hover:bg-white/10 hover:text-white'
+              }`}
+              title="关闭提示"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -100,23 +113,29 @@ export const ClipboardToast: React.FC<ClipboardToastProps> = ({ payload, onClose
         </div>
 
         <div className="space-y-1">
-          <p className="text-[11px] font-mono line-clamp-1 opacity-70">
+          <p className="text-[11px] font-mono line-clamp-1 text-[var(--g-text-3)]">
             “{payload.original}”
           </p>
           <div className="flex items-start justify-between gap-2 pt-0.5">
-            <p className="text-xs font-bold leading-relaxed flex-1 text-blue-400">
+            <p className="text-[12.5px] font-bold leading-relaxed flex-1 text-[var(--accent-text)]">
               {payload.translated}
             </p>
             <button
               type="button"
               onClick={handleCopy}
-              className="p-1 rounded-md border text-[10px] bg-white/5 hover:bg-white/10 border-white/10 text-zinc-300 flex items-center space-x-1 cursor-pointer shrink-0"
+              className={`p-1.5 rounded-full border text-[10px] flex items-center cursor-pointer shrink-0 transition active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                isLight
+                  ? 'bg-white/85 hover:bg-white border-slate-200/80 text-slate-600 shadow-2xs'
+                  : 'bg-white/[0.06] hover:bg-white/[0.12] border-white/12 text-zinc-200'
+              }`}
               title="复制译文"
             >
-              {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+              {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
             </button>
           </div>
         </div>
+
+        <div className="vision-toast-life pointer-events-none" />
       </div>
     </div>
   );

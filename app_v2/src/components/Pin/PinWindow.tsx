@@ -4,6 +4,8 @@ import {
   PanelRightClose,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Check,
   Trash2,
@@ -34,6 +36,8 @@ import { PinBlock, PinPayload, PinEngineOption, LlmConfig } from "../../services
 import { speakText } from "../../services/tts";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppTheme } from "../../hooks/useAppTheme";
+import { useSlidingIndicator } from "../../hooks/useSlidingIndicator";
+import { SlidingHighlight } from "../Common/SlidingHighlight";
 import { PinChatView } from "./PinChatView";
 
 const QUICK_SCENARIOS = [
@@ -117,6 +121,79 @@ function cleanEngineName(raw: string): string {
   return name;
 }
 
+/** 贴图卡片底部多引擎对比滑块行：继承全站 SlidingHighlight 弹性动效 */
+function PinEngineSwitcherRow({
+  blockIndex,
+  engineOptions,
+  selectedEngineName,
+  sourceTier,
+  translated,
+  isLight,
+  onSelectEngine,
+}: {
+  blockIndex: number;
+  engineOptions: PinEngineOption[];
+  selectedEngineName?: string;
+  sourceTier?: string;
+  translated?: string;
+  isLight: boolean;
+  onSelectEngine: (idx: number, opt: PinEngineOption) => void;
+}) {
+  const activeIdx = engineOptions.findIndex(
+    (opt) => (selectedEngineName || sourceTier) === opt.engineName || translated === opt.translated
+  );
+  const slider = useSlidingIndicator<HTMLDivElement>(activeIdx >= 0 ? String(activeIdx) : null, [
+    engineOptions.length,
+    isLight,
+    translated,
+  ]);
+
+  return (
+    <div
+      ref={slider.containerRef}
+      className="relative flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 select-none"
+      data-testid="multi-engine-scroll-row"
+    >
+      <SlidingHighlight
+        rect={slider.rect}
+        isReady={slider.isReady}
+        variant="glass"
+        radiusClass="rounded-lg"
+        testId="pin-engine-slider"
+      />
+      {engineOptions.map((opt, optIdx) => {
+        const isSelected = optIdx === activeIdx;
+        return (
+          <button
+            key={optIdx}
+            ref={slider.registerItem(String(optIdx))}
+            type="button"
+            onClick={() => onSelectEngine(blockIndex, opt)}
+            className={`relative z-10 shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10.5px] transition-colors cursor-pointer select-none active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+              isSelected
+                ? slider.isReady
+                  ? isLight
+                    ? "border-transparent text-[var(--accent-text)] font-bold"
+                    : "border-transparent text-sky-300 font-bold"
+                  : isLight
+                    ? "bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs font-bold"
+                    : "bg-indigo-500/20 border-indigo-500/50 text-indigo-200 shadow-2xs font-bold"
+                : isLight
+                  ? "bg-white/60 hover:bg-white/90 text-slate-600 border-slate-200/70 font-medium"
+                  : "bg-white/[0.04] hover:bg-white/[0.08] text-zinc-300 border-white/[0.07] font-medium"
+            }`}
+            title={`点击切换为主译文\n【${opt.engineName}】：${opt.translated}`}
+            data-testid={`engine-option-${optIdx}`}
+          >
+            <span className="truncate max-w-[140px]">{opt.engineName}</span>
+            {isSelected && <Check className="w-3 h-3 text-[var(--accent)] shrink-0" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function PinWindowApp() {
   const { isLight } = useAppTheme();
   const [payload, setPayload] = useState<PinPayload | null>(null);
@@ -131,6 +208,7 @@ export function PinWindowApp() {
   // 双模态切换：'translate' 极速快译 / 'chat' AI 对话
   const [activeTab, setActiveTab] = useState<"translate" | "chat">("translate");
   const [chatContextTerm, setChatContextTerm] = useState<string | null>(null);
+  const modeTabSlider = useSlidingIndicator<HTMLDivElement>(!collapsed ? activeTab : null, [collapsed, isLight]);
 
   // 获取 URL hash 中的 pin id
   const rawId = typeof window !== "undefined"
@@ -740,8 +818,8 @@ export function PinWindowApp() {
       const monRight = monitor.position.x + monitor.size.width;
       const monBottom = monitor.position.y + monitor.size.height;
 
-      const capsulePhysW = Math.round(26 * scale);
-      const capsulePhysH = Math.round(88 * scale);
+      const capsulePhysW = Math.round(38 * scale);
+      const capsulePhysH = Math.round(108 * scale);
 
       const targetX = targetEdge === "left" ? monLeft : monRight - capsulePhysW;
       const targetY = Math.max(monTop + 20, Math.min(monBottom - capsulePhysH - 60, currentPos.y));
@@ -991,41 +1069,74 @@ export function PinWindowApp() {
     height: 520,
   };
 
-  // ── 若处于靠边收纳态且未悬停展开：渲染屏幕边缘极简微型胶囊拉手 ──
+  // ── 若处于靠边收纳态且未悬停展开：渲染方案 1 Vision 液态棱镜微胶囊拉手（预留透明安全区防阴影裁切） ──
   if (dockEdge && !isHoverExpanded) {
     return (
       <div
-        className={`flex h-screen w-screen select-none cursor-pointer flex-col items-center justify-between py-2 transition-colors duration-200 overflow-hidden bg-clip-padding ${
-          isLight
-            ? "bg-white border border-slate-300/90 text-slate-800 shadow-md hover:bg-slate-50"
-            : "bg-[#0f1219] border border-white/20 text-zinc-100 shadow-md hover:bg-[#151922]"
-        } ${
-          dockEdge === "left"
-            ? "rounded-r-2xl border-l-0 pl-0.5"
-            : "rounded-l-2xl border-r-0 pr-0.5"
+        className={`flex h-screen w-screen bg-transparent items-center select-none overflow-hidden ${
+          dockEdge === "left" ? "justify-start py-2 pr-2" : "justify-end py-2 pl-2"
         }`}
-        onMouseEnter={() => void handleHoverExpand()}
-        onClick={() => void handleHoverExpand()}
-        title="猫步悬浮查词 · 鼠标移入自动滑出展开"
-        data-testid="dock-handle-capsule"
       >
-        <div className="flex flex-col items-center gap-1.5 pt-0.5">
-          <span className="text-xs select-none">🐱</span>
+        <div
+          className={`pin-dock-capsule ${
+            dockEdge === "left"
+              ? "pin-dock-capsule-left rounded-r-[16px] border-l-0"
+              : "pin-dock-capsule-right rounded-l-[16px] border-r-0"
+          } flex h-[92px] w-[30px] hover:w-[34px] cursor-pointer flex-col items-center justify-between py-2.5 px-1 bg-clip-padding ${
+            isLight ? "text-slate-700" : "text-zinc-200"
+          }`}
+          onMouseEnter={() => void handleHoverExpand()}
+          onClick={() => void handleHoverExpand()}
+          title="猫步悬浮查词 · 鼠标移入自动滑出展开"
+          data-testid="dock-handle-capsule"
+        >
+          {/* 顶部：精绘矢量猫爪 SVG（保留 sr-only 兼容无障碍与既有单测） */}
+          <div className="flex items-center justify-center">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={isLight ? "text-slate-700" : "text-zinc-200"}
+              aria-hidden="true"
+              data-testid="pin-dock-paw-icon"
+            >
+              <circle cx="11" cy="4" r="1.5" fill="currentColor" stroke="none" />
+              <circle cx="18" cy="8" r="1.5" fill="currentColor" stroke="none" />
+              <circle cx="20" cy="14" r="1.5" fill="currentColor" stroke="none" />
+              <circle cx="5" cy="9" r="1.5" fill="currentColor" stroke="none" />
+              <path
+                d="M9 11a4.5 4.5 0 0 1 6.5 1.8c.9 1.7 1.3 4.2-.6 5.5-1.5 1-3-.2-4.6-.2s-3.1 1.2-4.4.1c-1.5-1.2-.5-4.1.8-5.5A4.5 4.5 0 0 1 9 11Z"
+                fill="currentColor"
+                fillOpacity="0.16"
+              />
+            </svg>
+            <span className="sr-only">🐱</span>
+          </div>
+
+          {/* 中部：竖向呼吸微光灯柱（翻译态蓝光 / 对话态紫光） */}
           <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              isLight
-                ? "bg-indigo-500 shadow-[0_0_6px_rgba(99,102,241,0.6)]"
-                : "bg-indigo-400 shadow-[0_0_6px_rgba(129,140,248,0.7)]"
+            data-testid="pin-dock-light-bar"
+            className={`pin-dock-breathe-bar w-[3px] h-[18px] rounded-full ${
+              activeTab === "chat"
+                ? "bg-gradient-to-b from-violet-400 to-indigo-500 shadow-[0_0_8px_rgba(139,92,246,0.75)]"
+                : "bg-gradient-to-b from-sky-400 to-[var(--accent)] shadow-[0_0_8px_rgba(0,113,227,0.65)]"
             }`}
           />
+
+          {/* 底部：细线矢量 Chevron 展开指示 */}
+          <div className="flex items-center justify-center text-[var(--accent-text)]">
+            {dockEdge === "left" ? (
+              <ChevronRight className="w-3 h-3" strokeWidth={2.4} />
+            ) : (
+              <ChevronLeft className="w-3 h-3" strokeWidth={2.4} />
+            )}
+          </div>
         </div>
-        <span
-          className={`text-[9px] font-bold tracking-tighter pb-0.5 ${
-            isLight ? "text-indigo-600" : "text-indigo-300"
-          }`}
-        >
-          {dockEdge === "left" ? "▶" : "◀"}
-        </span>
       </div>
     );
   }
@@ -1033,11 +1144,9 @@ export function PinWindowApp() {
   return (
     <div
       ref={rootRef}
-      className={`relative flex h-full min-h-screen w-full flex-col overflow-hidden rounded-2xl transition-colors duration-200 bg-clip-padding ${
-        isLight
-          ? "border border-slate-200/90 bg-white text-slate-800 shadow-2xl"
-          : "border border-white/10 bg-[#0c0e15] text-zinc-100 shadow-2xl"
-      } ${!collapsed ? "min-h-[480px]" : ""}`}
+      className={`pin-vision-shell relative flex h-full min-h-screen w-full flex-col overflow-hidden transition-colors duration-200 bg-clip-padding ${
+        collapsed ? "rounded-full" : "rounded-[22px] min-h-[480px]"
+      } ${isLight ? "text-slate-800" : "text-zinc-100"}`}
       onWheel={handleWheel}
       onMouseEnter={() => {
         if (leaveTimerRef.current) {
@@ -1054,33 +1163,29 @@ export function PinWindowApp() {
         }
       }}
     >
-      {/* 标题栏：拖拽区 + 状态指示 + 控制按钮 */}
+      {/* 标题栏：拖拽区 + Vision 状态指示 + 控制按钮 */}
       <div
-        className={`flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2 cursor-move select-none transition-colors ${
-          isLight
-            ? "border-slate-200/80 bg-slate-50/90 text-slate-700"
-            : "border-white/[0.08] bg-white/[0.03] text-zinc-300"
+        className={`pin-vision-header flex shrink-0 items-center justify-between gap-2 px-3 py-2 cursor-move select-none transition-colors ${
+          isLight ? "text-slate-700" : "text-zinc-300"
         }`}
         data-tauri-drag-region
       >
         <div className="flex min-w-0 items-center gap-1.5" data-tauri-drag-region>
-          {/* 📌 钉住按钮：仅保留精致单钉矢量图标，隐藏冗余 emoji 并消除点击外框 */}
+          {/* 📌 钉住按钮：保留单钉矢量图标与无障碍字符，消除鼠标点击双焦点蓝框 */}
           <button
             type="button"
             onClick={togglePin}
-            className={`h-6.5 w-6.5 rounded-lg transition-all duration-200 flex items-center justify-center cursor-pointer select-none active:scale-95 outline-none focus:outline-none focus-visible:outline-none ${
+            className={`h-6.5 w-6.5 rounded-lg transition-all duration-200 flex items-center justify-center cursor-pointer select-none active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               isPinned
-                ? isLight
-                  ? "bg-indigo-50 border border-indigo-200/90 text-indigo-600 shadow-2xs"
-                  : "bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 shadow-2xs"
+                ? "bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-text)] shadow-2xs"
                 : isLight
-                  ? "text-slate-400 hover:text-slate-700 hover:bg-slate-200/60"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+                  ? "text-slate-400 hover:text-slate-700 hover:bg-slate-200/50"
+                  : "text-zinc-500 hover:text-zinc-200 hover:bg-white/10"
             }`}
             title={isPinned ? "📌 已钉在桌面（常驻不失焦）" : "📌 点击钉在桌面（当前失焦自动关闭）"}
             data-testid="pin-toggle"
           >
-            <Pin className={`w-3.5 h-3.5 transition-transform duration-200 ${isPinned ? "rotate-45 fill-indigo-500/30" : ""}`} />
+            <Pin className={`w-3.5 h-3.5 transition-transform duration-200 ${isPinned ? "rotate-45 fill-current opacity-90" : ""}`} />
             <span className="sr-only">📌</span>
           </button>
 
@@ -1105,49 +1210,59 @@ export function PinWindowApp() {
             </span>
           )}
 
-          {/* 双模态 Tabs 切换器：高度对齐，彻底清除浏览器默认聚焦蓝边 */}
+          {/* 双模态 Tabs 切换器：Vision 胶囊滑动轨道 */}
           {!collapsed && (
             <div
-              className={`inline-flex items-center h-6.5 rounded-lg p-0.5 text-[10px] transition-colors ml-1 ${
+              ref={modeTabSlider.containerRef}
+              className={`relative inline-flex items-center h-6.5 rounded-full p-0.5 text-[10px] transition-colors ml-1 border ${
                 isLight
-                  ? "bg-slate-200/60 border border-slate-300/40"
-                  : "bg-black/40 border border-white/10"
+                  ? "bg-slate-200/65 border-white/80 shadow-inner"
+                  : "bg-white/[0.06] border-white/10"
               }`}
             >
+              <SlidingHighlight
+                rect={modeTabSlider.rect}
+                isReady={modeTabSlider.isReady}
+                variant="solid"
+                radiusClass="rounded-full"
+                testId="pin-mode-tab-slider"
+              />
               <button
+                ref={modeTabSlider.registerItem("translate")}
                 type="button"
                 onClick={() => setActiveTab("translate")}
-                className={`h-5.5 px-2.5 rounded-md font-medium transition-all duration-200 cursor-pointer flex items-center gap-1 active:scale-95 outline-none focus:outline-none focus-visible:outline-none select-none ${
+                className={`relative z-10 h-5.5 px-2.5 rounded-full font-medium transition-colors duration-200 cursor-pointer flex items-center gap-1 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] select-none ${
                   activeTab === "translate"
-                    ? isLight
-                      ? "bg-white text-indigo-600 shadow-xs font-bold"
-                      : "bg-indigo-600 text-white shadow-xs font-bold"
+                    ? modeTabSlider.isReady
+                      ? "text-white font-bold"
+                      : "bg-[var(--accent)] text-white shadow-xs font-bold"
                     : isLight
-                      ? "text-slate-600 hover:text-slate-900 hover:bg-slate-300/30"
-                      : "text-zinc-400 hover:text-zinc-200 hover:bg-white/5"
+                      ? "text-slate-600 hover:text-slate-900"
+                      : "text-zinc-400 hover:text-zinc-200"
                 }`}
                 title="极速快译与词库双流查词"
                 data-testid="tab-translate"
               >
-                <Zap className={`w-3 h-3 ${activeTab === "translate" ? "text-amber-500 fill-amber-500" : "text-slate-400"}`} />
+                <Zap className={`w-3 h-3 ${activeTab === "translate" ? "text-amber-300 fill-amber-300" : "opacity-60"}`} />
                 <span>翻译</span>
               </button>
               <button
+                ref={modeTabSlider.registerItem("chat")}
                 type="button"
                 onClick={() => setActiveTab("chat")}
-                className={`h-5.5 px-2.5 rounded-md font-medium transition-all duration-200 cursor-pointer flex items-center gap-1 active:scale-95 outline-none focus:outline-none focus-visible:outline-none select-none ${
+                className={`relative z-10 h-5.5 px-2.5 rounded-full font-medium transition-colors duration-200 cursor-pointer flex items-center gap-1 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] select-none ${
                   activeTab === "chat"
-                    ? isLight
-                      ? "bg-white text-indigo-600 shadow-xs font-bold"
-                      : "bg-indigo-600 text-white shadow-xs font-bold"
+                    ? modeTabSlider.isReady
+                      ? "text-white font-bold"
+                      : "bg-[var(--accent)] text-white shadow-xs font-bold"
                     : isLight
-                      ? "text-slate-600 hover:text-slate-900 hover:bg-slate-300/30"
-                      : "text-zinc-400 hover:text-zinc-200 hover:bg-white/5"
+                      ? "text-slate-600 hover:text-slate-900"
+                      : "text-zinc-400 hover:text-zinc-200"
                 }`}
                 title="LLM 大模型智能对话与深度追问"
                 data-testid="tab-chat"
               >
-                <MessageSquare className={`w-3 h-3 ${activeTab === "chat" ? "text-indigo-500 fill-indigo-500/20" : "text-slate-400"}`} />
+                <MessageSquare className={`w-3 h-3 ${activeTab === "chat" ? "text-white fill-white/20" : "opacity-60"}`} />
                 <span>对话</span>
               </button>
             </div>
@@ -1160,9 +1275,9 @@ export function PinWindowApp() {
           <button
             type="button"
             onClick={() => setCollapsed((v) => !v)}
-            className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+            className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               isLight
-                ? "text-slate-500 hover:bg-slate-200/60 hover:text-slate-900"
+                ? "text-slate-500 hover:bg-[var(--accent-soft)] hover:text-[var(--accent-text)]"
                 : "text-zinc-400 hover:bg-white/10 hover:text-white"
             }`}
             title={collapsed ? "展开全部内容" : "折叠（只留标题与首条译文）"}
@@ -1182,13 +1297,11 @@ export function PinWindowApp() {
                 void handleDockToEdge();
               }
             }}
-            className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+            className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               dockEdge
-                ? isLight
-                  ? "bg-indigo-50 border border-indigo-200/80 text-indigo-600 font-bold"
-                  : "bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 font-bold"
+                ? "bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-text)] font-bold"
                 : isLight
-                  ? "text-slate-500 hover:bg-slate-200/60 hover:text-slate-900"
+                  ? "text-slate-500 hover:bg-[var(--accent-soft)] hover:text-[var(--accent-text)]"
                   : "text-zinc-400 hover:bg-white/10 hover:text-white"
             }`}
             title={dockEdge ? "解除靠边吸附" : "靠边收起 (也可直接拖拽至屏幕边缘)"}
@@ -1206,9 +1319,9 @@ export function PinWindowApp() {
                 onClick={() =>
                   setFontScale((s) => Math.min(1.6, Math.round((s + 0.1) * 10) / 10))
                 }
-                className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+                className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                   isLight
-                    ? "text-slate-500 hover:bg-slate-200/60 hover:text-slate-900"
+                    ? "text-slate-500 hover:bg-[var(--accent-soft)] hover:text-[var(--accent-text)]"
                     : "text-zinc-400 hover:bg-white/10 hover:text-white"
                 }`}
                 title="放大字号 (也可按住 Ctrl+滚轮向上)"
@@ -1220,9 +1333,9 @@ export function PinWindowApp() {
                 onClick={() =>
                   setFontScale((s) => Math.max(0.7, Math.round((s - 0.1) * 10) / 10))
                 }
-                className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+                className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                   isLight
-                    ? "text-slate-500 hover:bg-slate-200/60 hover:text-slate-900"
+                    ? "text-slate-500 hover:bg-[var(--accent-soft)] hover:text-[var(--accent-text)]"
                     : "text-zinc-400 hover:bg-white/10 hover:text-white"
                 }`}
                 title="缩小字号 (也可按住 Ctrl+滚轮向下)"
@@ -1236,11 +1349,11 @@ export function PinWindowApp() {
                   <button
                     type="button"
                     onClick={handleCopyAll}
-                    className={`h-6.5 px-2 rounded-lg text-xs transition-all cursor-pointer flex items-center gap-1 active:scale-95 ${
+                    className={`h-6.5 px-2 rounded-lg text-xs transition-all cursor-pointer flex items-center gap-1 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                       copied
-                        ? "text-emerald-500 font-bold bg-emerald-50 dark:bg-emerald-500/15"
+                        ? "text-emerald-500 font-bold bg-emerald-500/12"
                         : isLight
-                          ? "text-slate-500 hover:bg-slate-200/60 hover:text-slate-900"
+                          ? "text-slate-500 hover:bg-[var(--accent-soft)] hover:text-[var(--accent-text)]"
                           : "text-zinc-400 hover:bg-white/10 hover:text-white"
                     }`}
                     title="复制全部译文"
@@ -1254,10 +1367,10 @@ export function PinWindowApp() {
                     <button
                       type="button"
                       onClick={handleClearTranslateHistory}
-                      className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+                      className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                         isLight
-                          ? "text-slate-400 hover:bg-slate-200/60 hover:text-rose-600"
-                          : "text-zinc-400 hover:bg-white/10 hover:text-rose-400"
+                          ? "text-slate-400 hover:bg-rose-500/10 hover:text-rose-600"
+                          : "text-zinc-400 hover:bg-rose-500/15 hover:text-rose-400"
                       }`}
                       title="清空翻译会话"
                       data-testid="clear-translate-history"
@@ -1275,9 +1388,9 @@ export function PinWindowApp() {
           <button
             type="button"
             onClick={() => void handleClose()}
-            className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+            className={`h-6.5 w-6.5 rounded-lg flex items-center justify-center transition-all cursor-pointer active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               isLight
-                ? "text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                ? "text-slate-400 hover:bg-rose-500/12 hover:text-rose-600"
                 : "text-zinc-400 hover:bg-rose-500/20 hover:text-rose-400"
             }`}
             title={isQuick && !isPinned ? "关闭 (Esc)" : "关闭贴图"}
@@ -1297,13 +1410,13 @@ export function PinWindowApp() {
               <div className="pointer-events-none absolute -top-8 h-44 w-44 rounded-full bg-gradient-to-tr from-indigo-500/15 via-purple-500/15 to-transparent blur-3xl" />
 
               <div
-                className={`relative flex h-14 w-14 items-center justify-center rounded-2xl mb-3 shadow-md transition-transform duration-300 hover:scale-105 ${
+                className={`relative flex h-14 w-14 items-center justify-center rounded-2xl mb-3 shadow-md transition-transform duration-300 hover:scale-105 border ${
                   isLight
-                    ? "bg-gradient-to-br from-indigo-50 via-white to-indigo-50/40 text-indigo-600 border border-indigo-200/70 ring-4 ring-indigo-500/5 shadow-indigo-500/10"
-                    : "bg-gradient-to-br from-indigo-500/20 via-indigo-900/30 to-purple-900/20 text-indigo-400 border border-indigo-500/30 ring-4 ring-indigo-500/10 shadow-black/40"
+                    ? "bg-gradient-to-br from-sky-50 via-white to-indigo-50/70 text-[var(--accent-text)] border-white/90 ring-4 ring-[var(--accent-soft)] shadow-sky-500/10"
+                    : "bg-gradient-to-br from-sky-500/20 via-indigo-900/30 to-purple-900/20 text-sky-400 border-white/15 ring-4 ring-sky-500/10 shadow-black/40"
                 }`}
               >
-                <Zap className="h-7 w-7 text-indigo-600 dark:text-indigo-400 fill-indigo-500/20" />
+                <Zap className="h-7 w-7 text-[var(--accent)] fill-current opacity-85" />
                 <span className="sr-only">⚡</span>
               </div>
               <p
@@ -1333,14 +1446,14 @@ export function PinWindowApp() {
                         setQuery(item.query);
                         void executeRaceTranslation(item.query);
                       }}
-                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all duration-200 cursor-pointer shadow-2xs hover:scale-105 active:scale-95 ${
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all duration-200 cursor-pointer shadow-2xs hover:scale-105 active:scale-95 border focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                         isLight
-                          ? "bg-white/95 border border-slate-200/80 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/60 hover:text-indigo-600 shadow-slate-200/50"
-                          : "bg-white/[0.04] border border-white/10 text-zinc-300 hover:border-indigo-500/40 hover:bg-indigo-500/15 hover:text-indigo-300"
+                          ? "bg-white/85 border-white/90 text-slate-700 hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent-text)] shadow-slate-200/50"
+                          : "bg-white/[0.06] border-white/10 text-zinc-300 hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)] hover:text-sky-300"
                       }`}
                       title={`点击快捷填入并翻译示例「${item.query}」`}
                     >
-                      <Icon className="w-3 h-3 text-indigo-500" />
+                      <Icon className="w-3 h-3 text-[var(--accent)]" />
                       <span>{item.label}</span>
                     </button>
                   );
@@ -1349,11 +1462,11 @@ export function PinWindowApp() {
 
               {/* 快捷键微标 */}
               <div className="mt-4 flex items-center gap-1.5 text-[10px] text-slate-400 dark:text-zinc-500">
-                <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/5 border border-slate-200/60 dark:border-white/10 font-mono">↵ Enter 翻译</span>
+                <span className="px-1.5 py-0.5 rounded bg-slate-100/80 dark:bg-white/5 border border-slate-200/60 dark:border-white/10 font-mono">↵ Enter 翻译</span>
                 <span>·</span>
-                <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/5 border border-slate-200/60 dark:border-white/10 font-mono">Esc 关闭</span>
+                <span className="px-1.5 py-0.5 rounded bg-slate-100/80 dark:bg-white/5 border border-slate-200/60 dark:border-white/10 font-mono">Esc 关闭</span>
                 <span>·</span>
-                <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/5 border border-slate-200/60 dark:border-white/10 font-mono">Alt+W 唤起</span>
+                <span className="px-1.5 py-0.5 rounded bg-slate-100/80 dark:bg-white/5 border border-slate-200/60 dark:border-white/10 font-mono">Alt+W 唤起</span>
               </div>
 
               {hasError && (
@@ -1368,22 +1481,16 @@ export function PinWindowApp() {
             const isFirstOfGroup = i === 0 || currentPayload.blocks[i - 1].original !== b.original;
             return (
               <div key={i} className="space-y-2">
-                {/* 用户提问气泡（右对齐） */}
+                {/* 用户提问气泡（右对齐 Vision 渐变胶囊） */}
                 {isFirstOfGroup && (
                   <div className="flex justify-end pt-1">
-                    <div
-                      className={`max-w-[85%] rounded-2xl rounded-tr-xs px-3.5 py-2 text-xs select-text shadow-xs ${
-                        isLight
-                          ? "bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-indigo-500/10"
-                          : "bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-black/20"
-                      }`}
-                    >
+                    <div className="pin-vision-bubble-user max-w-[85%] rounded-2xl rounded-tr-xs px-3.5 py-2 text-xs select-text">
                       <div className="flex items-center justify-between gap-2.5">
                         <span className="break-words font-medium">{b.original}</span>
                         <button
                           type="button"
                           onClick={() => speakText(b.original)}
-                          className="text-white/80 hover:text-white transition cursor-pointer text-[10.5px] shrink-0 active:scale-90"
+                          className="text-white/80 hover:text-white transition cursor-pointer text-[10.5px] shrink-0 active:scale-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 rounded"
                           title="朗读原文"
                         >
                           <Volume2 className="w-3.5 h-3.5" />
@@ -1393,22 +1500,16 @@ export function PinWindowApp() {
                   </div>
                 )}
 
-                {/* 翻译应答卡片（左对齐） */}
+                {/* 翻译应答卡片（左对齐 Vision 液态棱镜卡片） */}
                 <div className="flex justify-start">
                   <div
-                    className={`max-w-[92%] rounded-2xl rounded-tl-xs p-3.5 transition-all shadow-xs group ${
-                      isLight
-                        ? "bg-white/95 border border-slate-200/90 text-slate-800 shadow-slate-200/50 hover:border-indigo-200 hover:shadow-sm"
-                        : "bg-white/[0.05] border border-white/[0.08] text-zinc-100 shadow-black/20 hover:border-white/15 hover:shadow-sm"
+                    className={`pin-vision-bubble-ai max-w-[92%] rounded-2xl rounded-tl-xs p-3.5 transition-all group ${
+                      isLight ? "text-slate-800" : "text-zinc-100"
                     }`}
                   >
                     {/* 顶部助手徽标 + 引擎标签 */}
                     <div className="flex items-center justify-between gap-2 mb-1.5 text-[10px]">
-                      <span
-                        className={`flex items-center gap-1 font-bold ${
-                          isLight ? "text-indigo-600" : "text-indigo-400"
-                        }`}
-                      >
+                      <span className="flex items-center gap-1 font-bold text-[var(--accent-text)]">
                         <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
                         <span>译文</span>
                       </span>
@@ -1416,7 +1517,7 @@ export function PinWindowApp() {
                         <span
                           className={`truncate px-2 py-0.5 rounded-full border text-[9.5px] max-w-[220px] font-medium ${
                             isLight
-                              ? "bg-slate-100/90 text-slate-600 border-slate-200/60"
+                              ? "bg-white/75 text-slate-600 border-slate-200/70"
                               : "bg-white/[0.06] text-zinc-400 border-white/[0.08]"
                           }`}
                           title={b.sourceTier}
@@ -1438,7 +1539,6 @@ export function PinWindowApp() {
 
                     {/* ── 首页同款：词典释义与 AI 深度解析折叠展示（默认收起） ── */}
                     {(() => {
-                      // 默认收起解析（默认 true），点击后展开
                       const isAnalysisCollapsed =
                         collapsedAnalysisMap[b.original || `${i}`] ?? true;
                       const hasWordDetail = Boolean(
@@ -1461,7 +1561,7 @@ export function PinWindowApp() {
                         <div
                           className={`mt-2.5 rounded-xl border transition-all overflow-hidden ${
                             isLight
-                              ? "bg-slate-50/85 border-slate-200/80 shadow-2xs"
+                              ? "bg-slate-50/70 border-slate-200/70"
                               : "bg-white/[0.03] border-white/[0.08]"
                           }`}
                         >
@@ -1471,12 +1571,12 @@ export function PinWindowApp() {
                               !isAnalysisCollapsed ? "border-b" : ""
                             } ${
                               isLight
-                                ? "border-slate-200/70 bg-slate-100/60"
+                                ? "border-slate-200/60 bg-white/50"
                                 : "border-white/[0.06] bg-white/[0.02]"
                             }`}
                           >
                             <div className="flex items-center gap-1.5 min-w-0 text-[10.5px] font-semibold">
-                              <Sparkles className="w-3 h-3 text-indigo-500 shrink-0" />
+                              <Sparkles className="w-3 h-3 text-[var(--accent)] shrink-0" />
                               <span className={isLight ? "text-slate-700" : "text-zinc-200"}>
                                 {hasWordDetail && b.wordDetail?.cgDomainNote
                                   ? "术语与词典解析"
@@ -1496,10 +1596,10 @@ export function PinWindowApp() {
                                   [b.original || `${i}`]: !isAnalysisCollapsed,
                                 }));
                               }}
-                              className={`flex items-center gap-0.5 text-[10px] px-2 py-0.5 rounded-md cursor-pointer transition select-none active:scale-95 outline-none focus:outline-none focus-visible:outline-none ${
+                              className={`flex items-center gap-0.5 text-[10px] px-2 py-0.5 rounded-md cursor-pointer transition select-none active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                                 isLight
-                                  ? "text-slate-500 hover:text-slate-800 hover:bg-slate-200/60"
-                                  : "text-zinc-400 hover:text-zinc-200 hover:bg-white/5"
+                                  ? "text-slate-500 hover:text-[var(--accent-text)] hover:bg-[var(--accent-soft)]"
+                                  : "text-zinc-400 hover:text-zinc-200 hover:bg-white/10"
                               }`}
                               title={isAnalysisCollapsed ? "展开完整解析详情" : "收起解析"}
                               data-testid={`toggle-analysis-btn-${i}`}
@@ -1516,7 +1616,6 @@ export function PinWindowApp() {
                           {/* 展开内容 */}
                           {!isAnalysisCollapsed && (
                             <div className="p-2.5 space-y-2 text-xs">
-                              {/* 1. 词典信息：音标、词性、释义与例句 */}
                               {hasWordDetail && b.wordDetail && (
                                 <div className="space-y-1">
                                   {(b.wordDetail.phoneticUs ||
@@ -1563,13 +1662,12 @@ export function PinWindowApp() {
                                 </div>
                               )}
 
-                              {/* 2. AI 重点词汇拆解 */}
                               {hasDeepAnalysis &&
                                 b.deepAnalysis?.vocabulary &&
                                 b.deepAnalysis.vocabulary.length > 0 && (
                                   <div
                                     className={`space-y-1.5 ${
-                                      hasWordDetail ? "pt-1.5 border-t border-slate-200/60 dark:border-white/[0.06]" : ""
+                                      hasWordDetail ? "pt-1.5 border-t border-[var(--g-hairline)]" : ""
                                     }`}
                                   >
                                     <div className="text-[10px] font-semibold text-slate-500 dark:text-zinc-400 flex items-center gap-1">
@@ -1583,11 +1681,11 @@ export function PinWindowApp() {
                                           className={`p-1.5 rounded-lg border flex items-center justify-between gap-1 text-[10.5px] ${
                                             isLight
                                               ? "bg-white/90 border-slate-200/70 text-slate-700"
-                                              : "bg-white/[0.02] border-white/[0.05] text-zinc-300"
+                                              : "bg-white/[0.03] border-white/[0.06] text-zinc-300"
                                           }`}
                                         >
                                           <div className="min-w-0 flex-1 flex items-center gap-1.5 flex-wrap">
-                                            <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                                            <span className="font-bold text-[var(--accent-text)]">
                                               {v.word}
                                             </span>
                                             {v.phonetic && (
@@ -1610,11 +1708,10 @@ export function PinWindowApp() {
                                   </div>
                                 )}
 
-                              {/* 3. AI 地道例句 */}
                               {hasDeepAnalysis &&
                                 b.deepAnalysis?.examples &&
                                 b.deepAnalysis.examples.length > 0 && (
-                                  <div className="pt-1.5 border-t border-slate-200/60 dark:border-white/[0.06] space-y-1">
+                                  <div className="pt-1.5 border-t border-[var(--g-hairline)] space-y-1">
                                     <div className="text-[10px] font-semibold text-slate-500 dark:text-zinc-400 flex items-center gap-1">
                                       <span>💡</span>
                                       <span>语境场景例句</span>
@@ -1625,8 +1722,8 @@ export function PinWindowApp() {
                                           key={exIdx}
                                           className={`p-1.5 rounded-lg border ${
                                             isLight
-                                              ? "bg-white/70 border-slate-200/60 text-slate-700"
-                                              : "bg-white/[0.02] border-white/[0.05] text-zinc-300"
+                                              ? "bg-white/75 border-slate-200/60 text-slate-700"
+                                              : "bg-white/[0.03] border-white/[0.06] text-zinc-300"
                                           }`}
                                         >
                                           <p className="font-medium text-slate-800 dark:text-zinc-200">
@@ -1646,56 +1743,30 @@ export function PinWindowApp() {
                       );
                     })()}
 
-                    {/* ── 首页同款：精简多引擎胶囊卡片（横向滑动流，严格过滤报错，点击秒切主译） ── */}
+                    {/* ── 首页同款：精简多引擎滑动对比条（严格过滤报错，点击秒切主译） ── */}
                     {b.engineOptions && b.engineOptions.length > 1 && (
-                      <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-white/[0.05]">
+                      <div className="mt-2.5 pt-2 border-t border-[var(--g-hairline)]">
                         <div className="flex items-center justify-between text-[10px] mb-1.5 text-slate-400 dark:text-zinc-500 font-medium select-none">
                           <span className="flex items-center gap-1">
                             <Zap className="w-3 h-3 text-amber-500" />
                             <span>多引擎参考 ({b.engineOptions.length}) · 点击可切换主译</span>
                           </span>
                         </div>
-                        <div
-                          className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 select-none"
-                          data-testid="multi-engine-scroll-row"
-                        >
-                          {b.engineOptions.map((opt, optIdx) => {
-                            const isSelected =
-                              (b.selectedEngineName || b.sourceTier) === opt.engineName ||
-                              b.translated === opt.translated;
-                            return (
-                              <button
-                                key={optIdx}
-                                type="button"
-                                onClick={() => handleSwitchEngine(i, opt)}
-                                className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10.5px] transition-all cursor-pointer select-none active:scale-95 outline-none focus:outline-none ${
-                                  isSelected
-                                    ? isLight
-                                      ? "bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs font-bold ring-1 ring-indigo-400/30"
-                                      : "bg-indigo-500/20 border-indigo-500/50 text-indigo-200 shadow-2xs font-bold ring-1 ring-indigo-500/40"
-                                    : isLight
-                                      ? "bg-slate-100/80 hover:bg-slate-200/70 text-slate-600 border-slate-200/80 font-medium"
-                                      : "bg-white/[0.04] hover:bg-white/[0.08] text-zinc-300 border-white/[0.06] font-medium"
-                                }`}
-                                title={`点击切换为主译文\n【${opt.engineName}】：${opt.translated}`}
-                                data-testid={`engine-option-${optIdx}`}
-                              >
-                                <span className="truncate max-w-[140px]">
-                                  {opt.engineName}
-                                </span>
-                                {isSelected && (
-                                  <Check className="w-3 h-3 text-indigo-500 shrink-0" />
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
+                        <PinEngineSwitcherRow
+                          blockIndex={i}
+                          engineOptions={b.engineOptions}
+                          selectedEngineName={b.selectedEngineName}
+                          sourceTier={b.sourceTier}
+                          translated={b.translated}
+                          isLight={isLight}
+                          onSelectEngine={handleSwitchEngine}
+                        />
                       </div>
                     )}
 
                     {/* 兼容兜底：若未提供 engineOptions 则降级渲染平铺候选 */}
                     {!b.engineOptions && b.alternatives && b.alternatives.length > 0 && (
-                      <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-white/[0.04] flex flex-wrap items-center gap-1.5 text-[10px]">
+                      <div className="mt-2.5 pt-2 border-t border-[var(--g-hairline)] flex flex-wrap items-center gap-1.5 text-[10px]">
                         <span
                           className={
                             isLight ? "text-slate-400 font-medium" : "text-zinc-500 font-medium"
@@ -1723,18 +1794,18 @@ export function PinWindowApp() {
                       </div>
                     )}
 
-                    {/* 快捷操作栏：复制、追问、朗读 */}
-                    <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-white/[0.05] flex items-center justify-between text-[10.5px]">
+                    {/* 快捷操作栏：复制、朗读、追问 */}
+                    <div className="mt-2.5 pt-2 border-t border-[var(--g-hairline)] flex items-center justify-between text-[10.5px]">
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => handleCopyBlock(b.translated || b.original, i)}
-                          className={`rounded-md px-2 py-0.5 transition cursor-pointer flex items-center gap-1 active:scale-95 ${
+                          className={`rounded-full px-2 py-0.5 transition cursor-pointer flex items-center gap-1 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                             copiedBlockIdx === i
-                              ? "text-emerald-500 font-bold bg-emerald-50 dark:bg-emerald-500/10"
+                              ? "text-emerald-500 font-bold bg-emerald-500/12"
                               : isLight
-                                ? "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-                                : "text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+                                ? "text-slate-500 hover:bg-[var(--accent-soft)] hover:text-[var(--accent-text)]"
+                                : "text-zinc-400 hover:bg-white/10 hover:text-zinc-100"
                           }`}
                           title="复制此条译文"
                         >
@@ -1748,10 +1819,10 @@ export function PinWindowApp() {
                         <button
                           type="button"
                           onClick={() => speakText(b.translated || b.original)}
-                          className={`rounded-md px-1.5 py-0.5 transition cursor-pointer flex items-center gap-1 active:scale-95 ${
+                          className={`rounded-full px-2 py-0.5 transition cursor-pointer flex items-center gap-1 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                             isLight
-                              ? "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-                              : "text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+                              ? "text-slate-500 hover:bg-[var(--accent-soft)] hover:text-[var(--accent-text)]"
+                              : "text-zinc-400 hover:bg-white/10 hover:text-zinc-100"
                           }`}
                           title="朗读译文"
                         >
@@ -1765,11 +1836,7 @@ export function PinWindowApp() {
                           setChatContextTerm(b.original || b.translated);
                           setActiveTab("chat");
                         }}
-                        className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-all duration-200 cursor-pointer flex items-center gap-1 shadow-2xs active:scale-95 ${
-                          isLight
-                            ? "text-indigo-600 bg-indigo-50/90 hover:bg-indigo-100/90 border border-indigo-200/80"
-                            : "text-indigo-300 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30"
-                        }`}
+                        className="rounded-full px-2.5 py-0.5 text-[10px] font-semibold transition-all duration-200 cursor-pointer flex items-center gap-1 shadow-2xs active:scale-95 bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-text)] hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]"
                         title="💬 切换至 AI 对话深度追问该术语"
                         data-testid="pin-pursuit-btn"
                       >
@@ -1786,13 +1853,11 @@ export function PinWindowApp() {
           {isTranslating && (
             <div className="flex justify-start">
               <div
-                className={`flex items-center gap-2 rounded-2xl rounded-tl-xs px-3.5 py-2 text-xs shadow-xs ${
-                  isLight
-                    ? "bg-white border border-slate-200 text-slate-600"
-                    : "bg-white/[0.05] border border-white/[0.08] text-zinc-300"
+                className={`pin-vision-bubble-ai flex items-center gap-2 rounded-2xl rounded-tl-xs px-3.5 py-2 text-xs ${
+                  isLight ? "text-slate-600" : "text-zinc-300"
                 }`}
               >
-                <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+                <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
                 <span>正在多引擎竞赛翻译中…</span>
               </div>
             </div>
@@ -1802,15 +1867,9 @@ export function PinWindowApp() {
         </div>
       )}
 
-      {/* 底部查词输入栏：浮岛式晶体输入框 */}
+      {/* 底部查词输入栏：Vision 液态玻璃输入舱 */}
       {!collapsed && activeTab === "translate" && (
-        <div
-          className={`shrink-0 border-t px-3.5 py-2.5 transition-colors ${
-            isLight
-              ? "border-slate-200/80 bg-slate-50/90 backdrop-blur-xl"
-              : "border-white/[0.08] bg-black/40 backdrop-blur-xl"
-          }`}
-        >
+        <div className="shrink-0 border-t border-[var(--g-hairline)] px-3 py-2.5 transition-colors">
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -1827,11 +1886,11 @@ export function PinWindowApp() {
             }}
             className="flex items-center gap-2"
           >
-            <div className="relative flex flex-1 items-center group">
+            <div className="pin-vision-composer relative flex flex-1 items-center rounded-2xl group">
               <Search
                 className={`absolute left-3 w-3.5 h-3.5 pointer-events-none transition-colors duration-200 ${
                   query
-                    ? "text-indigo-600 dark:text-indigo-400"
+                    ? "text-[var(--accent)]"
                     : isLight
                       ? "text-slate-400 group-hover:text-slate-600"
                       : "text-zinc-500 group-hover:text-zinc-400"
@@ -1879,10 +1938,10 @@ export function PinWindowApp() {
                   }
                 }}
                 placeholder="输入单词或短语，按 Enter 极速翻译..."
-                className={`w-full rounded-xl pl-9 pr-14 py-2 text-xs font-medium outline-none transition-all duration-200 ${
+                className={`w-full bg-transparent pl-9 pr-14 py-2 text-xs font-medium outline-none ${
                   isLight
-                    ? "border border-slate-300/80 bg-white text-slate-800 placeholder-slate-400 shadow-2xs hover:border-slate-400/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-                    : "border border-white/15 bg-white/[0.06] text-zinc-100 placeholder-zinc-500 hover:border-white/25 focus:border-indigo-500/80 focus:bg-white/[0.09] focus:ring-2 focus:ring-indigo-500/30"
+                    ? "text-slate-800 placeholder-slate-400"
+                    : "text-zinc-100 placeholder-zinc-500"
                 }`}
                 data-testid="quick-window-input"
               />
@@ -1905,7 +1964,7 @@ export function PinWindowApp() {
                     ✕
                   </button>
                 )}
-                <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[9px] font-mono text-slate-400 dark:text-zinc-500 bg-slate-100/90 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 rounded select-none pointer-events-none">
+                <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[9px] font-mono text-slate-400 dark:text-zinc-500 bg-slate-100/80 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 rounded select-none pointer-events-none">
                   <CornerDownLeft className="w-2.5 h-2.5" />
                 </kbd>
               </div>
@@ -1914,7 +1973,7 @@ export function PinWindowApp() {
             <button
               type="submit"
               disabled={isTranslating || !query.trim()}
-              className="rounded-xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 hover:from-indigo-500 hover:to-violet-500 active:scale-95 px-3.5 py-2 text-xs font-semibold text-white transition-all shadow-xs shadow-indigo-500/25 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 cursor-pointer shrink-0 flex items-center gap-1.5"
+              className="rounded-xl bg-gradient-to-r from-[var(--accent)] to-indigo-600 hover:brightness-110 active:scale-95 px-3.5 py-2 text-xs font-semibold text-white transition-all shadow-sm shadow-sky-500/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 cursor-pointer shrink-0 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]"
               title="按 Enter 或点击翻译（译后自动就绪下一次输入）"
               data-testid="quick-window-submit"
             >
@@ -1947,10 +2006,10 @@ export function PinWindowApp() {
       {/* 底部状态条：呼吸灯 + 缩放指示 + 置顶提示 */}
       {!collapsed && (
         <div
-          className={`shrink-0 flex items-center justify-between border-t px-3 py-1.5 text-[10px] select-none cursor-move transition-colors ${
+          className={`shrink-0 flex items-center justify-between border-t border-[var(--g-hairline)] px-3 py-1.5 text-[10px] select-none cursor-move transition-colors ${
             isLight
-              ? "border-slate-200/60 bg-slate-50/80 text-slate-500"
-              : "border-white/[0.06] bg-black/20 text-zinc-400"
+              ? "bg-white/40 text-slate-500"
+              : "bg-white/[0.02] text-zinc-400"
           }`}
           data-tauri-drag-region
         >
@@ -1976,11 +2035,7 @@ export function PinWindowApp() {
               type="button"
               onClick={() => setFontScale(1)}
               title="点击复位为 1.0x 标准字号 (也可按住 Ctrl+滚轮 缩放)"
-              className={`px-1.5 py-0.5 rounded transition cursor-pointer font-medium ${
-                isLight
-                  ? "text-indigo-600 hover:bg-indigo-50"
-                  : "text-indigo-400 hover:bg-white/10"
-              }`}
+              className="px-1.5 py-0.5 rounded transition cursor-pointer font-medium text-[var(--accent-text)] hover:bg-[var(--accent-soft)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]"
             >
               {fontScale.toFixed(1)}x
             </button>

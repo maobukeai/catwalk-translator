@@ -462,9 +462,11 @@ export const OverlayBlockCard: React.FC<OverlayBlockCardProps> = ({
       const charWidthRatio = dispIsCjk ? 1.05 : 0.52;
       estimatedWidth = longestLen * charWidthRatio * baseFontSize;
     }
-    // 译文贴合原文:允许超出 5%;贴屏边时以视口安全宽度为准(否则仍会被迫换行)
+    // 译文贴合原文:允许超出 5%（紧凑单行控件在右侧空闲时允许扩展至 ~1.45× 避免同列字体骤缩到 9px）；
+    // 贴屏边或邻框边界时仍以 cardMaxWidth（含 layoutRight）为准。
+    const compactLabel = !isProse && lineCount === 1 && block.logicalW <= 220;
     const allowedWidth = Math.min(
-      Math.max(block.logicalW * 1.05, 60),
+      Math.max(block.logicalW * (compactLabel ? 1.45 : 1.05), compactLabel ? 96 : 60),
       Math.max(cardMaxWidth - 4, 40)
     );
 

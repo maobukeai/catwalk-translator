@@ -1,21 +1,21 @@
 {
-  "version": "0.3.39",
+  "version": "0.4.0",
   "name": "猫步翻译",
-  "release_date": "2026-10-31",
+  "release_date": "2026-11-27",
   "download_url": "https://github.com/maobukeai/catwalk-translator/releases",
-  "release_notes": "1. 新增窗口位置与尺寸记忆持久化，优化多窗口配置状态安全留存；\n2. 深度重构截屏渐进式翻译生命周期，大幅降低多段落翻译首屏等待延迟；\n3. 新增悬浮图层快照留存与导出机制，优化异常诊断与结果分享；\n4. 全面扩充端到端与边界测试用例（前端 563 个测试、后端 304 个测试 100% 绿灯通过）；\n5. 强化云端发布流水线与双版本清单严格防回退校验。",
+  "release_notes": "1. 全软件九大界面与交互全面升级为 Vision Liquid Glass 液态玻璃体系，支持浅色透光与深邃夜景切换；\n2. 统一全站所有下拉菜单（GlassSelect）与按钮/选项卡平滑弹性滑动指示器（SlidingHighlight）；\n3. 升级桌面常驻贴图窗、AI 对话浮窗、划词取词浮窗及靠边微胶囊安全区防裁切工艺；\n4. 升级 Mac 极简艺廊关于页、四大统一灵动 Sheet 弹窗及高对比度剪贴板速译通知；\n5. 增强离线 OCR、流式翻译与窗口状态记忆稳定性（前端 606 项与后端 263 项测试全部通过）。",
   "assets": [
     {
-      "name": "MaobuTranslator_0.3.39_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.39/MaobuTranslator_0.3.39_x64-setup.exe",
-      "size": 9203108,
-      "sha256": "4a4563eb9e50c942e40e83ba8ad60feb99259d86350ef82441a50a3ce55cf908"
+      "name": "MaobuTranslator_0.4.0_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.4.0/MaobuTranslator_0.4.0_x64-setup.exe",
+      "size": 9257206,
+      "sha256": "098337dfb2c716acff6a6bc7c840f9724f00f6edacdea68e590278e112e2d201"
     },
     {
-      "name": "猫步翻译_0.3.39_x64-setup.exe",
-      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.3.39/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.3.39_x64-setup.exe",
-      "size": 9203108,
-      "sha256": "4a4563eb9e50c942e40e83ba8ad60feb99259d86350ef82441a50a3ce55cf908"
+      "name": "猫步翻译_0.4.0_x64-setup.exe",
+      "url": "https://github.com/maobukeai/catwalk-translator/releases/download/v0.4.0/%E7%8C%AB%E6%AD%A5%E7%BF%BB%E8%AF%91_0.4.0_x64-setup.exe",
+      "size": 9257206,
+      "sha256": "098337dfb2c716acff6a6bc7c840f9724f00f6edacdea68e590278e112e2d201"
     }
   ]
 }

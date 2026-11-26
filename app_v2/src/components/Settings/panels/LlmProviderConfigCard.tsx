@@ -6,6 +6,9 @@ import {
 import { useLlmPanelState, PROVIDER_PRESET_MODELS } from './useLlmPanelState';
 import { useAppTheme } from '../../../hooks/useAppTheme';
 import { PRESET_AI_PROVIDER_TEMPLATES } from '../../../services/defaultSettings';
+import { GlassSelect } from '../../Common/GlassSelect';
+import { useSlidingIndicator } from '../../../hooks/useSlidingIndicator';
+import { SlidingHighlight } from '../../Common/SlidingHighlight';
 import type { AiModelItem } from '../../../services/types';
 
 interface LlmProviderConfigCardProps {
@@ -50,6 +53,10 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
   const [showTemplateMenu, setShowTemplateMenu] = useState(false);
   const [customProvName, setCustomProvName] = useState('');
   const [customProvEndpoint, setCustomProvEndpoint] = useState('');
+  const providerSlider = useSlidingIndicator<HTMLDivElement>(
+    selectedProviderId,
+    [providers.map((p) => p.id).join(',')]
+  );
 
   // 推荐未添加的模型
   const currentModelIds = new Set((currentModels || []).map((m) => m.modelId));
@@ -82,10 +89,8 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
 
   return (
     <div
-      className={`p-5 space-y-5 rounded-2xl border transition-colors ${
-        isLight
-          ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800'
-          : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+      className={`settings-glass-card p-5 space-y-5 ${
+        isLight ? 'text-slate-800' : 'text-zinc-100'
       }`}
     >
       {/* 顶部标题与全局操作 */}
@@ -277,38 +282,46 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
               <div className="flex items-center gap-2">
                 <span className={isLight ? 'text-slate-800' : 'text-zinc-200'}>选择服务提供商 (Provider)</span>
-                <select
-                  aria-label="服务提供商"
-                  data-testid="provider-select"
-                  value={currentProvider.providerType || currentProvider.name}
-                  onChange={handleProviderChange}
-                  className={`px-2 py-0.5 rounded-lg border text-xs font-medium cursor-pointer transition ${
-                    isLight
-                      ? 'bg-white border-slate-300 text-slate-700 hover:border-blue-400'
-                      : 'bg-zinc-800 border-white/10 text-zinc-200 hover:border-white/20'
-                  }`}
-                >
-                  <optgroup label="已配置服务商">
-                    {providers.map((p) => (
-                      <option key={p.id} value={p.providerType || p.name}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  {PRESET_AI_PROVIDER_TEMPLATES.filter(
+                {(() => {
+                  const unconfiguredTemplates = PRESET_AI_PROVIDER_TEMPLATES.filter(
                     (tmpl) => !providers.some((p) => (p.providerType || p.name) === tmpl.name || (p.providerType || p.name) === tmpl.providerType)
-                  ).length > 0 && (
-                    <optgroup label="切换至其他服务商">
-                      {PRESET_AI_PROVIDER_TEMPLATES.filter(
-                        (tmpl) => !providers.some((p) => (p.providerType || p.name) === tmpl.name || (p.providerType || p.name) === tmpl.providerType)
-                      ).map((tmpl) => (
-                        <option key={tmpl.id} value={tmpl.providerType || tmpl.name}>
-                          {tmpl.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
+                  );
+                  const providerGroups = [
+                    {
+                      key: 'configured',
+                      label: '已配置服务商',
+                      options: providers.map((p) => ({
+                        value: p.providerType || p.name,
+                        label: p.name,
+                      })),
+                    },
+                    ...(unconfiguredTemplates.length > 0
+                      ? [
+                          {
+                            key: 'other-templates',
+                            label: '切换至其他服务商',
+                            options: unconfiguredTemplates.map((tmpl) => ({
+                              value: tmpl.providerType || tmpl.name,
+                              label: tmpl.name,
+                            })),
+                          },
+                        ]
+                      : []),
+                  ];
+                  return (
+                    <GlassSelect
+                      ariaLabel="服务提供商"
+                      selectTestId="provider-select"
+                      value={currentProvider.providerType || currentProvider.name}
+                      groups={providerGroups}
+                      onChange={(val) =>
+                        handleProviderChange({ target: { value: val } } as React.ChangeEvent<HTMLSelectElement>)
+                      }
+                      size="sm"
+                      menuMinWidth={220}
+                    />
+                  );
+                })()}
               </div>
 
               <div className="flex items-center gap-2">
@@ -317,10 +330,8 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
                   <button
                     type="button"
                     onClick={() => setShowTemplateMenu(!showTemplateMenu)}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer border ${
-                      isLight
-                        ? 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
-                        : 'bg-zinc-800 border-white/10 text-zinc-200 hover:bg-zinc-700'
+                    className={`vision-select-trigger flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-medium cursor-pointer ${
+                      showTemplateMenu ? 'is-open' : ''
                     }`}
                   >
                     <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
@@ -328,12 +339,8 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
                   </button>
 
                   {showTemplateMenu && (
-                    <div
-                      className={`absolute right-0 mt-1 w-52 rounded-xl border p-1 shadow-lg z-30 ${
-                        isLight ? 'bg-white border-slate-200' : 'bg-zinc-900 border-zinc-700'
-                      }`}
-                    >
-                      <div className="px-2 py-1 text-[10px] font-semibold text-zinc-400">选择常用服务商模板</div>
+                    <div className="vision-select-popover absolute right-0 mt-1.5 w-52 z-30">
+                      <div className="vision-select-group-label">选择常用服务商模板</div>
                       <div className="max-h-56 overflow-y-auto space-y-0.5">
                         {PRESET_AI_PROVIDER_TEMPLATES.map((tmpl) => {
                           const alreadyAdded = providers.some(
@@ -343,20 +350,15 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
                             <button
                               key={tmpl.id}
                               type="button"
+                              disabled={alreadyAdded}
                               onClick={() => {
                                 handleAddPresetProvider(tmpl);
                                 setShowTemplateMenu(false);
                               }}
-                              className={`w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center justify-between transition cursor-pointer ${
-                                alreadyAdded
-                                  ? 'opacity-50 text-zinc-400 cursor-default'
-                                  : isLight
-                                  ? 'hover:bg-blue-50 text-slate-700 hover:text-blue-600'
-                                  : 'hover:bg-zinc-800 text-zinc-200 hover:text-white'
-                              }`}
+                              className={`vision-select-option ${alreadyAdded ? 'opacity-45 cursor-default' : ''}`}
                             >
-                              <span>{tmpl.name}</span>
-                              {alreadyAdded && <span className="text-[10px]">已添加</span>}
+                              <span className="truncate">{tmpl.name}</span>
+                              {alreadyAdded && <span className="text-[10px] opacity-70 shrink-0">已添加</span>}
                             </button>
                           );
                         })}
@@ -426,8 +428,15 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
           </form>
         )}
 
-        {/* 供应商水平选项卡网格 */}
-        <div className="flex flex-wrap gap-2">
+        {/* 供应商水平选项卡网格（带 2D 弹性滑动胶囊） */}
+        <div ref={providerSlider.containerRef} className="relative flex flex-wrap gap-2">
+          <SlidingHighlight
+            rect={providerSlider.rect}
+            isReady={providerSlider.isReady}
+            variant="solid"
+            radiusClass="rounded-xl"
+            testId="llm-provider-tab-slider"
+          />
           {providers.map((p) => {
             const isSelected = p.id === selectedProviderId;
             const modelCount = p.models?.length || 0;
@@ -437,13 +446,16 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
             return (
               <button
                 key={p.id}
+                ref={providerSlider.registerItem(p.id)}
                 type="button"
                 onClick={() => setSelectedProviderId(p.id)}
-                className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition cursor-pointer select-none ${
+                className={`relative z-10 flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-colors cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                   isSelected
-                    ? isLight
-                      ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/20'
-                      : 'bg-blue-600 text-white border-blue-400 shadow-md ring-2 ring-blue-500/30'
+                    ? providerSlider.isReady
+                      ? 'text-white border-transparent font-semibold'
+                      : isLight
+                        ? 'bg-blue-600 text-white border-blue-500 shadow-md ring-2 ring-blue-500/20'
+                        : 'bg-blue-600 text-white border-blue-400 shadow-md ring-2 ring-blue-500/30'
                     : isLight
                       ? 'bg-white text-slate-700 border-slate-200/90 hover:border-blue-300 hover:bg-blue-50/50'
                       : 'bg-zinc-900/80 text-zinc-300 border-white/[0.08] hover:border-white/20 hover:bg-zinc-800'
@@ -629,22 +641,20 @@ export const LlmProviderConfigCard: React.FC<LlmProviderConfigCardProps> = ({ is
             {/* 快速从云端拉取的模型中添加 */}
             {fetchedModels.length > 0 && (
               <div className="flex items-center gap-1.5 text-xs">
-                <select
+                <GlassSelect
                   value={selectedRemoteModel}
-                  onChange={(e) => setSelectedRemoteModel(e.target.value)}
-                  className={`rounded-lg border px-2.5 py-1 text-xs font-mono max-w-[180px] truncate ${
-                    isLight ? 'bg-white border-slate-300 text-slate-800' : 'bg-zinc-900 border-zinc-700 text-zinc-100'
-                  }`}
-                >
-                  <option value="">-- 选择已识别的云端模型 --</option>
-                  {fetchedModels
-                    .filter((m) => !currentModelIds.has(m))
-                    .map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                </select>
+                  onChange={setSelectedRemoteModel}
+                  searchable
+                  size="sm"
+                  menuMinWidth={240}
+                  triggerClassName="max-w-[200px] font-mono"
+                  options={[
+                    { value: '', label: '-- 选择已识别的云端模型 --' },
+                    ...fetchedModels
+                      .filter((m) => !currentModelIds.has(m))
+                      .map((m) => ({ value: m, label: m })),
+                  ]}
+                />
                 <button
                   type="button"
                   onClick={handleAddRemoteModel}

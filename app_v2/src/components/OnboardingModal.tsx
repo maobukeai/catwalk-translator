@@ -1,5 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, X, Download, CheckCircle2, Cpu } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  X,
+  Download,
+  CheckCircle2,
+  Cpu,
+  Zap,
+  Search,
+  BookOpen,
+  ShieldCheck,
+  Sparkles,
+} from 'lucide-react';
 import { useAppTheme } from '../hooks/useAppTheme';
 import { hasAnyCompleteModelSet } from './OcrModelGuideModal';
 import {
@@ -11,14 +23,16 @@ import {
 /** 新手引导步骤定义(内容与功能一一对应,避免营销话术) */
 const STEPS: {
   icon: string;
+  IconComp: React.ElementType;
   title: string;
   desc: string;
   hints: { kbd?: string; text: string }[];
 }[] = [
   {
     icon: '⚡',
+    IconComp: Zap,
     title: '截图划词翻译',
-    desc: '按热键框选屏幕任意区域(软件界面/图片/视频字幕),识别后译文直接原位覆盖在原文上,背景与文字颜色自动匹配。',
+    desc: '按热键框选屏幕任意区域（软件界面 / 图片 / 视频字幕），识别后译文直接原位覆盖在原文上，背景与文字颜色自动匹配。',
     hints: [
       { kbd: 'F4', text: '开始框选(可在设置中改键)' },
       { kbd: '双击', text: '智能选中整段文字' },
@@ -27,6 +41,7 @@ const STEPS: {
   },
   {
     icon: '🔍',
+    IconComp: Search,
     title: '三种即时查词',
     desc: '除了截图,还有更快的查词方式——选一种顺手的:',
     hints: [
@@ -37,6 +52,7 @@ const STEPS: {
   },
   {
     icon: '📚',
+    IconComp: BookOpen,
     title: '专业词库 + 术语强制表',
     desc: '内置 Blender / Substance / Unity / Unreal / Maya / Houdini 六大 CG 词库。你添加的自定义词条是「术语强制表」:精确命中直接出结果,句子翻译也会强制遵循你的译法。',
     hints: [
@@ -46,6 +62,7 @@ const STEPS: {
   },
   {
     icon: '🛡️',
+    IconComp: ShieldCheck,
     title: '数据安全与同步',
     desc: '所有配置(含引擎密钥、词库)本地存储,支持自动备份与 WebDAV 云同步(坚果云等),多台设备术语一致。翻译记忆本地持久化,重复截图零网络延迟。',
     hints: [
@@ -120,49 +137,42 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
   if (!isOpen) return null;
 
   const current = STEPS[step];
+  const StepIcon = current.IconComp;
   const isLast = step === STEPS.length - 1;
 
   return (
     <div
-      className={`fixed inset-0 z-[400] flex items-center justify-center backdrop-blur-md animate-in fade-in duration-150 ${
-        isLight ? 'bg-black/30' : 'bg-black/60'
-      }`}
+      className="vision-modal-backdrop fixed inset-0 z-[400] flex items-center justify-center animate-in fade-in duration-150"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className={`w-full max-w-lg mx-4 rounded-2xl shadow-2xl animate-in zoom-in-95 duration-150 overflow-hidden ${
-          isLight
-            ? 'bg-white/98 border border-slate-200/80 text-slate-800'
-            : 'bg-zinc-900/95 border border-white/10 text-zinc-100'
+        className={`vision-modal-shell vision-modal-enter w-full max-w-lg mx-4 rounded-[26px] overflow-hidden ${
+          isLight ? 'text-slate-800' : 'text-zinc-100'
         }`}
+        role="dialog"
+        aria-modal="true"
       >
         {/* 头部 */}
-        <div
-          className={`flex items-center justify-between px-5 pt-4 pb-2 border-b ${
-            isLight ? 'border-slate-100' : 'border-white/[0.04]'
-          }`}
-        >
+        <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-[var(--g-hairline)]">
           <div className="flex items-center gap-2">
-            <span className="text-lg">🐾</span>
-            <span className={`text-sm font-bold ${isLight ? 'text-slate-900' : 'text-zinc-100'}`}>
+            <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent-text)]">
+              <Sparkles className="h-3.5 w-3.5" />
+            </span>
+            <span className="text-sm font-bold text-[var(--g-text-1)]">
               欢迎使用猫步翻译
             </span>
-            <span
-              className={`text-[10px] font-mono ${
-                isLight ? 'text-slate-400' : 'text-zinc-500'
-              }`}
-            >
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-[var(--accent-soft)] text-[var(--accent-text)] border border-[var(--accent-border)]">
               {step + 1} / {STEPS.length}
             </span>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className={`p-1.5 rounded-lg transition cursor-pointer ${
+            className={`p-1.5 rounded-full transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               isLight
-                ? 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'
+                ? 'hover:bg-slate-200/70 text-slate-400 hover:text-slate-700'
                 : 'hover:bg-white/10 text-zinc-400 hover:text-zinc-100'
             }`}
             title="跳过引导"
@@ -171,47 +181,38 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
           </button>
         </div>
 
-        {/* 步骤内容 */}
-        <div className="px-6 py-4 min-h-[240px]">
-          <div className="flex items-center gap-3">
-            <div
-              className={`h-12 w-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 ${
-                isLight
-                  ? 'bg-slate-100 border border-slate-200 text-slate-800 shadow-xs'
-                  : 'bg-white/[0.06] border border-white/10 text-white'
-              }`}
-            >
-              {current.icon}
+        {/* 步骤内容：方案 C Mac Sheet 居中图标 + 居中标题 */}
+        <div className="px-6 py-5 min-h-[255px]">
+          <div className="flex flex-col items-center text-center">
+            <div className="mb-3 h-12 w-12 rounded-2xl bg-[var(--accent-soft)] border border-[var(--accent-border)] text-[var(--accent-text)] flex items-center justify-center shadow-inner">
+              <StepIcon className="h-5 w-5" />
             </div>
-            <h2
-              className={`text-lg font-bold ${
-                isLight ? 'text-slate-900' : 'text-zinc-100'
-              }`}
-            >
+            <h2 className="text-lg font-bold text-[var(--g-text-1)]">
               {current.title}
             </h2>
+            <p className="mt-2 text-[13px] leading-relaxed text-[var(--g-text-2)] max-w-md">
+              {current.desc}
+            </p>
           </div>
-          <p
-            className={`mt-3 text-[13px] leading-relaxed ${
-              isLight ? 'text-slate-600' : 'text-zinc-300'
+
+          <div
+            className={`mt-4 rounded-2xl border p-3 space-y-2 ${
+              isLight
+                ? 'bg-white/65 border-slate-200/75'
+                : 'bg-white/[0.04] border-white/[0.08]'
             }`}
           >
-            {current.desc}
-          </p>
-          <div className="mt-4 space-y-1.5">
             {current.hints.map((h, i) => (
               <div
                 key={i}
-                className={`flex items-center gap-2.5 text-xs ${
-                  isLight ? 'text-slate-600' : 'text-zinc-400'
-                }`}
+                className="flex items-center gap-2.5 text-xs text-[var(--g-text-2)]"
               >
                 {h.kbd && (
                   <kbd
-                    className={`shrink-0 min-w-[64px] text-center px-2 py-1 rounded-lg font-mono text-[10px] font-medium shadow-2xs ${
+                    className={`shrink-0 min-w-[68px] text-center px-2 py-1 rounded-lg font-mono text-[10px] font-semibold shadow-2xs border ${
                       isLight
-                        ? 'bg-slate-100 border border-slate-200 text-slate-700'
-                        : 'bg-white/[0.06] border border-white/10 text-zinc-200'
+                        ? 'bg-white border-slate-200 text-slate-700'
+                        : 'bg-white/[0.07] border-white/10 text-zinc-200'
                     }`}
                   >
                     {h.kbd}
@@ -224,14 +225,14 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
 
           {step === 0 && !ocrStatus.installed && (
             <div
-              className={`mt-3.5 p-3 rounded-xl border flex items-center justify-between gap-3 animate-in fade-in duration-200 ${
+              className={`mt-3.5 p-3 rounded-2xl border flex items-center justify-between gap-3 animate-in fade-in duration-200 ${
                 isLight
-                  ? 'bg-violet-50/80 border-violet-200/80 text-slate-800'
-                  : 'bg-violet-950/20 border-violet-500/30 text-zinc-200'
+                  ? 'bg-violet-50/85 border-violet-200/80 text-slate-800'
+                  : 'bg-violet-950/25 border-violet-500/30 text-zinc-200'
               }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="p-1.5 rounded-lg bg-violet-600/15 text-violet-500 shrink-0">
+                <div className="p-1.5 rounded-xl bg-violet-600/15 text-violet-500 shrink-0">
                   <Cpu className="h-4 w-4" />
                 </div>
                 <div className="min-w-0">
@@ -247,7 +248,7 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
                 type="button"
                 disabled={ocrStatus.downloading}
                 onClick={handleQuickDownloadOcr}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-violet-600 hover:bg-violet-500 text-white shadow-sm shrink-0 transition cursor-pointer disabled:opacity-60"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-violet-600 hover:bg-violet-500 text-white shadow-sm shrink-0 transition cursor-pointer disabled:opacity-60"
               >
                 <Download className="h-3.5 w-3.5" />
                 <span>{ocrStatus.downloading ? `${ocrStatus.progress}%` : '一键就绪'}</span>
@@ -256,9 +257,9 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
           )}
           {step === 0 && ocrStatus.installed && (
             <div
-              className={`mt-3 px-3 py-2 rounded-lg border flex items-center gap-2 text-xs font-medium animate-in fade-in duration-200 ${
+              className={`mt-3 px-3.5 py-2 rounded-xl border flex items-center gap-2 text-xs font-medium animate-in fade-in duration-200 ${
                 isLight
-                  ? 'bg-emerald-50/80 border-emerald-200 text-emerald-700'
+                  ? 'bg-emerald-50/85 border-emerald-200 text-emerald-700'
                   : 'bg-emerald-950/20 border-emerald-500/30 text-emerald-400'
               }`}
             >
@@ -268,12 +269,10 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
           )}
         </div>
 
-        {/* 底部:进度点 + 按钮 */}
+        {/* 底部：弹性进度点 + 全圆角胶囊按钮组 */}
         <div
-          className={`flex items-center justify-between px-5 py-3.5 border-t ${
-            isLight
-              ? 'border-slate-200/80 bg-slate-50/70'
-              : 'border-white/[0.06] bg-white/[0.02]'
+          className={`flex items-center justify-between px-5 py-3.5 border-t border-[var(--g-hairline)] ${
+            isLight ? 'bg-white/40' : 'bg-white/[0.02]'
           }`}
         >
           <div className="flex items-center gap-1.5">
@@ -284,9 +283,7 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
                 onClick={() => setStep(i)}
                 className={`h-1.5 rounded-full transition-all cursor-pointer ${
                   i === step
-                    ? isLight
-                      ? 'w-6 bg-blue-600'
-                      : 'w-6 bg-blue-500'
+                    ? 'w-6 bg-[var(--accent)]'
                     : isLight
                     ? 'w-1.5 bg-slate-300 hover:bg-slate-400'
                     : 'w-1.5 bg-zinc-600 hover:bg-zinc-500'
@@ -299,10 +296,10 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
             <button
               type="button"
               onClick={onClose}
-              className={`px-3 py-1.5 rounded-lg text-xs transition cursor-pointer ${
+              className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                 isLight
                   ? 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/60'
-                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.06]'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.08]'
               }`}
             >
               跳过
@@ -311,10 +308,10 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
               <button
                 type="button"
                 onClick={() => setStep((s) => s - 1)}
-                className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition cursor-pointer ${
+                className={`flex items-center gap-1 px-3.5 py-1.5 rounded-full text-xs font-medium border transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
                   isLight
-                    ? 'border border-slate-200 text-slate-700 hover:bg-slate-200/60'
-                    : 'border border-white/10 text-zinc-200 hover:bg-white/[0.06]'
+                    ? 'bg-white/85 border-slate-200 text-slate-700 hover:bg-white'
+                    : 'bg-white/[0.06] border-white/12 text-zinc-200 hover:bg-white/[0.12]'
                 }`}
               >
                 <ChevronLeft className="h-3.5 w-3.5" />
@@ -324,7 +321,7 @@ export const OnboardingModal: React.FC<{ isOpen: boolean; onClose: () => void }>
             <button
               type="button"
               onClick={() => (isLast ? onClose() : setStep((s) => s + 1))}
-              className="flex items-center gap-1 px-4 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-sm border border-blue-400/40 transition cursor-pointer"
+              className="flex items-center gap-1 px-4.5 py-1.5 rounded-full text-xs font-semibold bg-gradient-to-r from-[var(--accent)] to-indigo-600 hover:brightness-110 text-white shadow-sm shadow-sky-500/20 transition cursor-pointer active:scale-97 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)]"
             >
               {isLast ? '开始使用' : '下一步'}
               {!isLast && <ChevronRight className="h-3.5 w-3.5" />}

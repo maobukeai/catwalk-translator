@@ -29,6 +29,7 @@ describe('translation request lifecycle', () => {
     const text = 'Save your changes before closing the application.\nThe selected objects will be deleted.\n中文界面标签';
     expect(api.detectLanguage(text)).toEqual({ detected: 'en', suggestedTarget: 'zh-CN' });
     expect(api.detectLanguage('変更を保存しますか')).toEqual({ detected: 'ja', suggestedTarget: 'zh-CN' });
+    expect(api.detectLanguage('AI 与 MCP')).toEqual({ detected: 'zh-CN', suggestedTarget: 'en' });
     const translate = vi.spyOn(api, 'cmdUniversalTranslate').mockResolvedValue(result(text, '请先保存更改。'));
     render(<DualPaneTranslator settings={DEFAULT_SETTINGS} initialText={text} />);
     await waitFor(() => expect(translate).toHaveBeenCalledWith(expect.objectContaining({ targetLang: 'zh-CN' })));

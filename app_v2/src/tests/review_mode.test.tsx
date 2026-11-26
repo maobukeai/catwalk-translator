@@ -153,7 +153,7 @@ describe('vocabulary review mode (Leitner flashcards)', () => {
     expect(startBtn.getAttribute('title')).toContain('收藏');
 
     // Switch to 查询历史 sub-tab to see non-favourited history entries
-    const historyTabBtn = screen.getByText('🕒 查询历史').closest('button') as HTMLElement;
+    const historyTabBtn = screen.getByTestId('subtab-history');
     fireEvent.click(historyTabBtn);
     await screen.findByText('Transient Lookup');
   });

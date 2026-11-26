@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   AlertCircle,
   RotateCcw,
@@ -11,9 +11,15 @@ import {
   Palette,
   CloudUpload,
   Layers,
+  Search,
+  X,
+  ArrowRight,
+  Eye,
 } from 'lucide-react';
 import { useSettingsStore } from '../../stores/useSettingsStore';
 import { useAppTheme } from '../../hooks/useAppTheme';
+import { useSlidingIndicator } from '../../hooks/useSlidingIndicator';
+import { SlidingHighlight } from '../Common/SlidingHighlight';
 import { BackupSyncPanel } from './BackupSyncPanel';
 import { AppearancePanel } from './panels/AppearancePanel';
 import { HotkeyPanel } from './panels/HotkeyPanel';
@@ -41,13 +47,37 @@ interface SettingsDashboardProps {
   onInitialApplied?: () => void;
 }
 
-/**
- * 设置中心外壳：头部保存/重置栏、分类导航与 Toast。
- * 各分区内容在 panels/ 下独立维护（自持状态 + 就地订阅 store）。
- */
+interface SearchSettingItem {
+  id: string;
+  title: string;
+  sub: string;
+  keywords: string;
+  category: SettingCategory;
+  scrollOcr?: boolean;
+}
+
+const SETTINGS_SEARCH_INDEX: SearchSettingItem[] = [
+  { id: 'theme', title: '视觉主题与深浅模式', sub: '外观与个性化', keywords: '主题 浅色 深色 跟随系统 theme light dark', category: 'appearance' },
+  { id: 'blur', title: '毛玻璃高斯模糊与窗口透明度', sub: '外观与个性化', keywords: '磨砂 高斯模糊 透明度 玻璃 blur opacity', category: 'appearance' },
+  { id: 'font', title: '全局字体与字号缩放', sub: '外观与个性化', keywords: '字体 字号 微软雅黑 font size', category: 'appearance' },
+  { id: 'hotkey', title: '全局划词 / Spotlight / 剪贴板快捷键', sub: '快捷键与 AI 模型', keywords: '快捷键 热键 F4 录制 划词 spotlight', category: 'hotkey' },
+  { id: 'llm', title: 'AI 大语言模型供应商与 API Key', sub: '快捷键与 AI 模型', keywords: 'ai 大模型 llm deepseek gemini openai ollama api key 模型', category: 'hotkey' },
+  { id: 'online', title: '在线翻译引擎开关与秘钥配置', sub: '在线引擎', keywords: '在线 引擎 通道 google bing youdao deepl 百度 腾讯 彩云 lingva', category: 'online' },
+  { id: 'glossary', title: '专属术语库与 Anki 同步', sub: '专属术语库', keywords: '术语 库 导入 导出 anki glossary', category: 'glossary' },
+  { id: 'ocr', title: '离线 OCR 识别模型下载与管理', sub: '专业词库 / OCR', keywords: 'ocr 模型 离线 识别 下载 pp-ocr', category: 'dicts', scrollOcr: true },
+  { id: 'dicts', title: 'CG 行业词库与通用离线词典', sub: '专业词库 / OCR', keywords: '词库 词典 blender substance unity unreal maya houdini', category: 'dicts' },
+  { id: 'priority', title: '翻译引擎四级优先级调度', sub: '偏好与优先级', keywords: '优先级 顺序 调度 默认词库 preset', category: 'preference' },
+  { id: 'network', title: '网络代理与连通性诊断', sub: '偏好与优先级', keywords: '代理 proxy 网络 诊断 超时 开机自启 置顶 关闭行为', category: 'preference' },
+  { id: 'backup', title: '本地快照导出与 WebDAV 云端同步', sub: '备份与同步', keywords: '备份 同步 webdav 坚果云 恢复 导出', category: 'backup' },
+];
 
 // 模块级「已拉取过一次」标记:App 挂载时已全局 fetchSettings,设置页只兜底拉取一次
 let hasFetchedSettingsOnce = false;
+
+/**
+ * 设置中心外壳（方案 A：Vision 左导右览控制中心）：
+ * 左侧粘性磨砂导航 + 搜设置快捷直达 + 右侧粘性操作页头与子面板舞台。
+ */
 export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   onStartCapture,
   onTriggerSpotlight,
@@ -73,6 +103,16 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
 
   const { isLight } = useAppTheme();
   const [activeCategory, setActiveCategory] = useState<SettingCategory>(initialCategory ?? 'appearance');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchBoxRef = useRef<HTMLDivElement>(null);
+  const {
+    containerRef: navRef,
+    registerItem: registerNavItem,
+    rect: navIndicator,
+    isReady: isNavSliderReady,
+  } = useSlidingIndicator<HTMLElement>(activeCategory, [isLoading]);
+
   const openOcrModels = () => {
     setActiveCategory('dicts');
     requestAnimationFrame(() => {
@@ -97,8 +137,7 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
     }
   }, [focusOcrModels, activeCategory, onInitialApplied]);
 
-  // App 挂载时已全局 fetchSettings；这里只在首次进入设置页时兜底拉取一次，
-  // 避免每次切 tab 都用服务端数据覆盖用户可能存在的未保存编辑
+  // App 挂载时已全局 fetchSettings；这里只在首次进入设置页时兜底拉取一次
   useEffect(() => {
     if (hasFetchedSettingsOnce) return;
     hasFetchedSettingsOnce = true;
@@ -113,6 +152,39 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
       return () => clearTimeout(timer);
     }
   }, [toastMessage, clearToast]);
+
+  // 点击外部或按 Escape 关闭搜索跳转浮层
+  useEffect(() => {
+    if (!searchFocused && !searchQuery) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
+        setSearchFocused(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSearchFocused(false);
+        setSearchQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [searchFocused, searchQuery]);
+
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return SETTINGS_SEARCH_INDEX.filter(
+      (item) =>
+        item.title.toLowerCase().includes(q) ||
+        item.sub.toLowerCase().includes(q) ||
+        item.keywords.toLowerCase().includes(q)
+    );
+  }, [searchQuery]);
 
   if (isLoading) {
     return (
@@ -140,177 +212,379 @@ export const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   ).length;
 
   const categories = [
-    { id: 'appearance', label: '外观与个性化', icon: Palette },
-    { id: 'hotkey', label: '快捷键与 AI 模型', icon: Zap },
-    { id: 'online', label: '在线引擎', badge: activeOnlineCount, icon: Globe },
-    { id: 'glossary', label: '专属术语库', icon: BookOpen },
-    { id: 'dicts', label: '专业词库', icon: Layers },
-    { id: 'preference', label: '偏好与优先级', icon: Sliders },
-    { id: 'backup', label: '备份与同步', icon: CloudUpload },
-  ] as const;
+    {
+      id: 'appearance' as const,
+      label: '外观与个性化',
+      desc: '自定义视觉主题、高斯模糊透明度与全局字体排版',
+      group: '视觉与交互',
+      icon: Palette,
+    },
+    {
+      id: 'hotkey' as const,
+      label: '快捷键与 AI 模型',
+      desc: '录制全局划词热键、取词模式与多厂商大模型配置池',
+      group: '视觉与交互',
+      icon: Zap,
+    },
+    {
+      id: 'online' as const,
+      label: '在线引擎',
+      desc: '管理公开在线翻译渠道开关、自有 API Key 与凭据校验',
+      group: '引擎与词库',
+      badge: activeOnlineCount,
+      icon: Globe,
+    },
+    {
+      id: 'glossary' as const,
+      label: '专属术语库',
+      desc: '个人术语强干预词条管理、表格导入导出与 Anki 同步',
+      group: '引擎与词库',
+      icon: BookOpen,
+    },
+    {
+      id: 'dicts' as const,
+      label: '专业词库 / OCR',
+      desc: 'CG 领域专业术语预设、通用词典与离线高精度 OCR 模型',
+      group: '引擎与词库',
+      icon: Layers,
+    },
+    {
+      id: 'preference' as const,
+      label: '偏好与优先级',
+      desc: '调度优先级排序、代理网络诊断、开机自启与窗口行为',
+      group: '系统与数据',
+      icon: Sliders,
+    },
+    {
+      id: 'backup' as const,
+      label: '备份与同步',
+      desc: '本地加密快照导出恢复与 WebDAV 云端自动备份同步',
+      group: '系统与数据',
+      icon: CloudUpload,
+    },
+  ];
+
+  const navGroups = ['视觉与交互', '引擎与词库', '系统与数据'] as const;
+  const activeMeta = categories.find((c) => c.id === activeCategory) || categories[0];
+  const ActiveIcon = activeMeta.icon;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5 text-zinc-200 font-sans pb-10">
+    <div
+      className={`flex flex-col min-[720px]:flex-row items-start gap-4 font-sans pb-10 ${
+        isLight ? 'text-slate-800' : 'text-zinc-200'
+      }`}
+    >
       {/* Toast 操作通知 */}
       {toastMessage && (
-        <div role={toastKind === 'error' ? 'alert' : 'status'} className={`fixed bottom-6 right-6 z-50 flex items-center space-x-2.5 rounded-xl px-4 py-3 text-xs shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-3 duration-200 border ${toastKind === 'error' ? 'border-rose-500/60' : 'border-emerald-500/40'} ${
-          isLight
-            ? 'bg-white/95 text-slate-800'
-            : 'bg-zinc-900/90 text-zinc-100'
-        }`}>
-          {toastKind === 'error'
-            ? <AlertCircle className="h-4 w-4 text-rose-500 shrink-0" />
-            : <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />}
+        <div
+          role={toastKind === 'error' ? 'alert' : 'status'}
+          className={`vision-modal-shell animate-toast-in fixed bottom-24 right-6 z-50 flex items-center space-x-2.5 rounded-2xl px-4 py-3 text-xs border ${
+            toastKind === 'error' ? 'border-rose-500/50' : 'border-emerald-500/40'
+          }`}
+          style={{ color: 'var(--g-text-1)' }}
+        >
+          {toastKind === 'error' ? (
+            <AlertCircle className="h-4 w-4 text-rose-500 shrink-0" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+          )}
           <span className="font-medium">{toastMessage}</span>
         </div>
       )}
 
-      {/* 顶部 Header：标题 + 始终常驻的全局保存/重置按钮 */}
-      <div className="flex flex-col gap-3.5 sm:flex-row sm:items-center sm:justify-between border-b border-white/[0.08] pb-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h1 className={`text-lg font-bold tracking-tight ${isLight ? 'text-slate-900' : 'text-white'}`}>系统设置</h1>
-            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-mono font-medium shadow-xs ${
-              isLight ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-blue-500/15 border-blue-400/30 text-blue-300'
-            }`}>
-              v{APP_VERSION}
-            </span>
+      {/* 左侧粘性磨砂控制栏（方案 A） */}
+      <aside
+        data-testid="settings-workspace-sidebar"
+        className="settings-sidebar-glass w-full min-[720px]:w-[222px] lg:w-[234px] shrink-0 min-[720px]:sticky min-[720px]:top-2 p-3 space-y-3"
+      >
+        {/* 标题 + 版本胶囊 */}
+        <div className="flex items-center justify-between px-1.5 pt-0.5">
+          <div className="min-w-0">
+            <h1 className="text-[15px] font-bold tracking-tight" style={{ color: 'var(--g-text-1)' }}>
+              系统设置
+            </h1>
+            <p className="text-[10.5px] truncate mt-0.5" style={{ color: 'var(--g-text-3)' }}>
+              配置快捷键、模型与偏好
+            </p>
           </div>
-          <p className={`mt-0.5 text-xs ${isLight ? 'text-slate-500 font-medium' : 'text-zinc-400'}`}>
-            配置快捷键、翻译引擎、AI 模型与界面外观
-          </p>
+          <span
+            className="rounded-full border px-2 py-0.5 text-[10px] font-mono font-semibold shrink-0"
+            style={{
+              background: 'var(--accent-soft)',
+              borderColor: 'var(--accent-border)',
+              color: 'var(--accent-text)',
+            }}
+          >
+            v{APP_VERSION}
+          </span>
         </div>
 
-        <div className="flex items-center space-x-2 shrink-0 whitespace-nowrap self-start sm:self-auto">
-          {isDirty && (
-            <span className="flex items-center space-x-1 text-xs font-medium text-amber-300 bg-amber-500/15 border border-amber-400/30 px-2.5 py-1 rounded-lg animate-pulse whitespace-nowrap shrink-0">
-              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-              <span>未保存</span>
-            </span>
+        {/* 搜设置快捷直达 */}
+        <div ref={searchBoxRef} className="relative">
+          <div className="vision-select-search relative flex items-center">
+            <Search
+              className="h-3.5 w-3.5 absolute left-2.5 pointer-events-none"
+              style={{ color: 'var(--g-text-3)' }}
+            />
+            <input
+              type="text"
+              data-testid="settings-search-input"
+              value={searchQuery}
+              onFocus={() => setSearchFocused(true)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSearchFocused(true);
+              }}
+              placeholder="搜设置（OCR / 代理 / Key）..."
+              className="w-full bg-transparent pl-8 pr-7 py-1.5 text-xs outline-none placeholder:text-[11px]"
+              style={{ color: 'var(--g-text-1)' }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                aria-label="清空设置搜索"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 opacity-65 hover:opacity-100 cursor-pointer"
+                style={{ color: 'var(--g-text-2)' }}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+
+          {searchFocused && searchQuery.trim().length > 0 && (
+            <div
+              data-testid="settings-search-results"
+              className="vision-select-popover absolute left-0 right-0 top-full mt-1.5 z-40 max-h-60 overflow-y-auto space-y-0.5"
+            >
+              {searchResults.length > 0 ? (
+                searchResults.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      if (item.scrollOcr) {
+                        openOcrModels();
+                      } else {
+                        setActiveCategory(item.category);
+                      }
+                      setSearchQuery('');
+                      setSearchFocused(false);
+                    }}
+                    className="vision-select-option"
+                  >
+                    <div className="min-w-0 pr-1">
+                      <div className="truncate font-semibold text-[11.5px]" style={{ color: 'var(--g-text-1)' }}>
+                        {item.title}
+                      </div>
+                      <div className="text-[10px] truncate" style={{ color: 'var(--g-text-3)' }}>
+                        {item.sub}
+                      </div>
+                    </div>
+                    <ArrowRight className="h-3 w-3 shrink-0 opacity-60" />
+                  </button>
+                ))
+              ) : (
+                <div className="py-3 text-center text-[11px]" style={{ color: 'var(--g-text-3)' }}>
+                  未找到与「{searchQuery}」匹配的设置
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 分组式 7 大分类导航（带垂直弹性滑动高亮胶囊） */}
+        <nav ref={navRef} aria-label="设置分类" className="relative space-y-2.5">
+          <SlidingHighlight
+            rect={navIndicator}
+            isReady={isNavSliderReady}
+            variant="glass"
+            radiusClass="rounded-xl"
+            testId="settings-nav-slider"
+          />
+          {navGroups.map((groupName) => (
+            <div key={groupName} className="relative z-10 space-y-0.5">
+              <div
+                className="px-2 pb-0.5 text-[10px] font-bold uppercase tracking-wider select-none"
+                style={{ color: 'var(--g-text-3)' }}
+              >
+                {groupName}
+              </div>
+              <div className="space-y-0.5">
+                {categories
+                  .filter((c) => c.group === groupName)
+                  .map((cat) => {
+                    const Icon = cat.icon;
+                    const isActive = activeCategory === cat.id;
+                    const badgeCount = 'badge' in cat ? cat.badge : undefined;
+                    const useFallbackActiveSurface = isActive && !isNavSliderReady;
+                    return (
+                      <button
+                        key={cat.id}
+                        ref={registerNavItem(cat.id)}
+                        type="button"
+                        onClick={() => setActiveCategory(cat.id)}
+                        className={`relative z-10 w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl text-xs font-semibold border transition-colors duration-150 cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+                          isActive
+                            ? 'font-bold border-transparent'
+                            : 'border-transparent hover:bg-[var(--g-surface-2)]'
+                        }`}
+                        style={
+                          isActive
+                            ? useFallbackActiveSurface
+                              ? {
+                                  background: 'var(--accent-soft)',
+                                  borderColor: 'var(--accent-border)',
+                                  color: 'var(--accent-text)',
+                                  boxShadow: 'var(--g-inset-top)',
+                                }
+                              : { color: 'var(--accent-text)' }
+                            : { color: 'var(--g-text-2)' }
+                        }
+                      >
+                        <span className="flex items-center gap-2 min-w-0">
+                          <Icon
+                            className="w-3.5 h-3.5 shrink-0"
+                            style={{ color: isActive ? 'var(--accent-text)' : 'var(--g-text-3)' }}
+                          />
+                          <span className="truncate">{cat.label}</span>
+                        </span>
+                        {badgeCount !== undefined && (
+                          <span
+                            className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none shrink-0"
+                            style={
+                              isActive
+                                ? { background: 'var(--accent)', color: '#ffffff' }
+                                : { background: 'var(--g-surface-3)', color: 'var(--g-text-2)' }
+                            }
+                          >
+                            {badgeCount}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          ))}
+        </nav>
+
+        {/* 底部高频直达快捷入口 */}
+        <div
+          className="pt-2.5 border-t grid grid-cols-2 gap-1.5"
+          style={{ borderColor: 'var(--g-hairline)' }}
+          aria-label="常用设置入口"
+        >
+          <button
+            type="button"
+            onClick={openOcrModels}
+            className="vision-select-trigger flex items-center justify-center gap-1 rounded-xl px-2 py-1.5 text-[11px] font-semibold cursor-pointer"
+          >
+            <Eye className="h-3 w-3 shrink-0" style={{ color: 'var(--accent-text)' }} />
+            <span>OCR 模型</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveCategory('online')}
+            className="vision-select-trigger flex items-center justify-center gap-1 rounded-xl px-2 py-1.5 text-[11px] font-semibold cursor-pointer"
+          >
+            <Globe className="h-3 w-3 shrink-0" style={{ color: 'var(--accent-text)' }} />
+            <span>翻译通道</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* 右侧页头 + 子面板主舞台 */}
+      <div className="flex-1 min-w-0 w-full space-y-4">
+        <header
+          data-testid="settings-sticky-header"
+          className="settings-sticky-header px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div
+              className="h-8 w-8 rounded-xl flex items-center justify-center border shrink-0"
+              style={{
+                background: 'var(--accent-soft)',
+                borderColor: 'var(--accent-border)',
+                color: 'var(--accent-text)',
+              }}
+            >
+              <ActiveIcon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold tracking-tight truncate" style={{ color: 'var(--g-text-1)' }}>
+                {activeMeta.label}
+              </h2>
+              <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--g-text-3)' }}>
+                {activeMeta.desc}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
+            {isDirty && (
+              <span
+                className={`flex items-center space-x-1 text-xs font-medium border px-2.5 py-1 rounded-full animate-pulse whitespace-nowrap shrink-0 ${
+                  isLight
+                    ? 'text-amber-700 bg-amber-50 border-amber-300'
+                    : 'text-amber-300 bg-amber-500/15 border-amber-400/30'
+                }`}
+              >
+                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                <span>未保存</span>
+              </span>
+            )}
+
+            <button
+              type="button"
+              onClick={resetSettings}
+              disabled={!isDirty}
+              className="vision-select-trigger flex items-center space-x-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
+            >
+              <RotateCcw className="h-3.5 w-3.5 shrink-0" />
+              <span className="whitespace-nowrap">重置</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={saveSettings}
+              disabled={!isDirty || isSaving}
+              className="flex items-center space-x-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm disabled:opacity-35 disabled:cursor-not-allowed transition cursor-pointer whitespace-nowrap shrink-0"
+              style={{
+                background: 'var(--accent)',
+                boxShadow: !isDirty || isSaving ? undefined : '0 4px 12px color-mix(in srgb, var(--accent) 34%, transparent)',
+              }}
+            >
+              <Save className="h-3.5 w-3.5 shrink-0" />
+              <span className="whitespace-nowrap">{isSaving ? '保存中...' : '保存更改'}</span>
+            </button>
+          </div>
+        </header>
+
+        {/* 子面板切换容器 */}
+        <div key={activeCategory} className="animate-settings-pane-in">
+          {activeCategory === 'appearance' && <AppearancePanel />}
+
+          {activeCategory === 'hotkey' && (
+            <HotkeyPanel
+              onStartCapture={onStartCapture}
+              onTriggerSpotlight={onTriggerSpotlight}
+              onTriggerClipboard={onTriggerClipboard}
+              onToggleWindow={onToggleWindow}
+            />
           )}
 
-          <button
-            type="button"
-            onClick={resetSettings}
-            disabled={!isDirty}
-            className={`flex items-center space-x-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition cursor-pointer whitespace-nowrap shrink-0 ${
-              isLight
-                ? 'border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-40'
-                : 'border-white/15 bg-white/10 text-zinc-200 hover:bg-white/20 hover:text-white disabled:opacity-30'
-            }`}
-          >
-            <RotateCcw className="h-3.5 w-3.5 shrink-0" />
-            <span className="whitespace-nowrap">重置</span>
-          </button>
+          {activeCategory === 'online' && <OnlinePanel />}
 
-          <button
-            type="button"
-            onClick={saveSettings}
-            disabled={!isDirty || isSaving}
-            className="flex items-center space-x-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer border border-blue-400/40 whitespace-nowrap shrink-0"
-          >
-            <Save className="h-3.5 w-3.5 shrink-0" />
-            <span className="whitespace-nowrap">{isSaving ? '保存中...' : '保存更改'}</span>
-          </button>
+          {activeCategory === 'glossary' && <GlossaryPanel />}
+
+          {activeCategory === 'dicts' && <DictsPanel />}
+
+          {activeCategory === 'preference' && <PreferencePanel onOpenAbout={onOpenAbout} />}
+
+          {activeCategory === 'backup' && <BackupSyncPanel />}
         </div>
       </div>
-
-      <div className={`flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 ${isLight ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-white/10 bg-white/[0.03] text-zinc-300'}`} aria-label="常用设置入口">
-        <span className="text-[11px] font-semibold mr-1">常用入口</span>
-        <button type="button" onClick={openOcrModels} className="rounded-md px-2 py-1 text-[11px] border border-current/20 hover:bg-blue-500/10 cursor-pointer">OCR 模型</button>
-        <button type="button" onClick={() => setActiveCategory('online')} className="rounded-md px-2 py-1 text-[11px] border border-current/20 hover:bg-blue-500/10 cursor-pointer">翻译通道</button>
-        <button type="button" onClick={() => setActiveCategory('hotkey')} className="rounded-md px-2 py-1 text-[11px] border border-current/20 hover:bg-blue-500/10 cursor-pointer">按键和 AI</button>
-        <button type="button" onClick={() => setActiveCategory('preference')} className="rounded-md px-2 py-1 text-[11px] border border-current/20 hover:bg-blue-500/10 cursor-pointer">显示偏好</button>
-        <span className="ml-auto text-[10px] opacity-60">术语库、专业词库和备份可在下方分类中找到</span>
-      </div>
-
-      {/* 顶部二级分类分段选择器 */}
-      <nav
-        className={`flex items-center gap-1 p-1 rounded-xl border shadow-2xs backdrop-blur-md transition-colors ${
-          isLight
-            ? 'bg-black/[0.04] border-black/[0.06]'
-            : 'bg-white/[0.06] border-white/[0.08]'
-        }`}
-        aria-label="设置分类"
-      >
-        {categories.map((cat) => {
-          const Icon = cat.icon;
-          const isActive = activeCategory === cat.id;
-          const badgeCount = 'badge' in cat ? cat.badge : undefined;
-          return (
-            <button
-              key={cat.id}
-              type="button"
-              onClick={() => setActiveCategory(cat.id as SettingCategory)}
-              className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer select-none whitespace-nowrap ${
-                isActive
-                  ? isLight
-                    ? 'bg-white text-blue-600 shadow-sm border border-black/[0.06] font-bold'
-                    : 'bg-white/15 text-white shadow-sm border border-white/15 font-bold'
-                  : isLight
-                  ? 'text-slate-600 hover:text-slate-900 hover:bg-black/[0.03]'
-                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.05]'
-              }`}
-            >
-              <Icon
-                className={`w-3.5 h-3.5 shrink-0 transition-colors ${
-                  isActive
-                    ? isLight
-                      ? 'text-blue-600'
-                      : 'text-blue-400'
-                    : isLight
-                    ? 'text-slate-500'
-                    : 'text-zinc-400'
-                }`}
-              />
-              <span className="truncate">{cat.label}</span>
-              {badgeCount !== undefined && (
-                <span
-                  className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold leading-none shrink-0 transition-colors ${
-                    isActive
-                      ? isLight
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'bg-blue-500/25 text-blue-300'
-                      : isLight
-                      ? 'bg-black/[0.06] text-slate-600'
-                      : 'bg-white/10 text-zinc-400'
-                  }`}
-                >
-                  {badgeCount}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* 分类: 外观与个性化 */}
-      {activeCategory === 'appearance' && <AppearancePanel />}
-
-      {/* 分类: 快捷键与 AI 模型 */}
-      {activeCategory === 'hotkey' && (
-        <HotkeyPanel
-          onStartCapture={onStartCapture}
-          onTriggerSpotlight={onTriggerSpotlight}
-          onTriggerClipboard={onTriggerClipboard}
-          onToggleWindow={onToggleWindow}
-        />
-      )}
-
-      {/* 分类: 在线引擎 */}
-      {activeCategory === 'online' && <OnlinePanel />}
-
-      {/* 分类: 专业术语库 */}
-      {activeCategory === 'glossary' && <GlossaryPanel />}
-
-      {/* 分类: 预设词库 */}
-      {activeCategory === 'dicts' && <DictsPanel />}
-
-      {/* 分类: 优先级 */}
-      {activeCategory === 'preference' && <PreferencePanel onOpenAbout={onOpenAbout} />}
-
-      {/* 分类: 备份与同步 */}
-      {activeCategory === 'backup' && <BackupSyncPanel />}
     </div>
   );
 };

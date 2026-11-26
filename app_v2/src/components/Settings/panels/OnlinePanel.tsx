@@ -250,8 +250,8 @@ export const OnlinePanel: React.FC = () => {
     <>
         <div className="space-y-4 animate-in fade-in duration-150">
           {/* 在线公共翻译服务通道网格矩阵 (紧凑高密度布局) */}
-          <div className={`p-3.5 sm:p-4 space-y-2.5 rounded-2xl border transition-colors ${
-            isLight ? 'bg-white/45 backdrop-blur-md border-slate-200/80 shadow-sm text-slate-800' : 'bg-zinc-900/50 border-white/[0.08] text-zinc-100'
+          <div className={`settings-glass-card p-4 sm:p-5 space-y-3 ${
+            isLight ? 'text-slate-800' : 'text-zinc-100'
           }`}>
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div className="min-w-0 flex-1">
@@ -406,8 +406,8 @@ export const OnlinePanel: React.FC = () => {
 
           {/* 百度翻译 API 凭据配置（通用版或大模型版开启时显示）*/}
           {(online.baidu || online.baiduLlm) && (
-            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
-              isLight ? 'bg-blue-50/60 border-blue-200/80' : 'bg-blue-950/20 border-blue-500/25'
+            <div className={`settings-glass-card p-4 sm:p-5 space-y-3 ${
+              isLight ? 'border-blue-200/80' : 'border-blue-500/25'
             }`}>
               <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-blue-900' : 'text-blue-300'}`}>
                 <span>🐾</span>
@@ -531,8 +531,8 @@ export const OnlinePanel: React.FC = () => {
 
           {/* DeepL 官方 API / 自建 DeepLX 配置（仅当 DeepL 引擎开启时显示）*/}
           {online.deepl && (
-            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
-              isLight ? 'bg-teal-50/60 border-teal-200/80' : 'bg-teal-950/20 border-teal-500/25'
+            <div className={`settings-glass-card p-4 sm:p-5 space-y-3 ${
+              isLight ? 'border-teal-200/80' : 'border-teal-500/25'
             }`}>
               <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-teal-900' : 'text-teal-300'}`}>
                 <span>⚡</span>
@@ -581,8 +581,8 @@ export const OnlinePanel: React.FC = () => {
 
           {/* 火山翻译 (字节跳动) API 凭据配置（仅当火山引擎开启时显示）*/}
           {online.volcengine && (
-            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
-              isLight ? 'bg-orange-50/60 border-orange-200/80' : 'bg-orange-950/20 border-orange-500/25'
+            <div className={`settings-glass-card p-4 sm:p-5 space-y-3 ${
+              isLight ? 'border-orange-200/80' : 'border-orange-500/25'
             }`}>
               <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-orange-900' : 'text-orange-300'}`}>
                 <span>🌋</span>
@@ -629,8 +629,8 @@ export const OnlinePanel: React.FC = () => {
 
           {/* Yandex Translate API 凭据配置（仅当 Yandex 引擎开启时显示）*/}
           {online.yandex && (
-            <div className={`p-4 space-y-3 rounded-2xl border transition-colors ${
-              isLight ? 'bg-red-50/60 border-red-200/80' : 'bg-red-950/20 border-red-500/25'
+            <div className={`settings-glass-card p-4 sm:p-5 space-y-3 ${
+              isLight ? 'border-red-200/80' : 'border-red-500/25'
             }`}>
               <div className={`flex items-center space-x-2 text-xs font-bold ${isLight ? 'text-red-900' : 'text-red-300'}`}>
                 <span>🇷🇺</span>

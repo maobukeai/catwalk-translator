@@ -115,7 +115,7 @@ export const CascadingModelSelect: React.FC<CascadingModelSelectProps> = ({
   const allModels = vendorGroups.flatMap((g) => g.models);
 
   return (
-    <div ref={containerRef} className={`relative inline-block font-sans ${className}`}>
+    <div ref={containerRef} className={`relative inline-block min-w-0 max-w-full font-sans ${className}`}>
       {/* 隐藏式表单兼容 select，保证单元测试与无障碍畅通 */}
       <select
         tabIndex={-1}
@@ -165,24 +165,21 @@ export const CascadingModelSelect: React.FC<CascadingModelSelectProps> = ({
         data-testid="cascading-trigger"
         onClick={() => setIsOpen((prev) => !prev)}
         title={buttonTitle}
-        className={`flex items-center justify-between gap-2 rounded-xl border transition shadow-xs cursor-pointer focus:outline-none select-none ${
-          isSmall ? 'h-7 px-2.5 text-[11px]' : 'h-8 px-3 text-xs'
-        } ${
-          isLight
-            ? 'bg-white hover:bg-slate-50 text-slate-800 border-slate-300 shadow-sm'
-            : 'bg-zinc-800/90 hover:bg-zinc-700/80 text-zinc-200 border-zinc-700/80'
-        } ${isOpen ? 'border-blue-500 ring-2 ring-blue-500/20' : ''}`}
+        className={`vision-select-trigger flex max-w-full min-w-0 items-center justify-between gap-1.5 rounded-xl cursor-pointer select-none ${
+          isSmall ? 'h-7 px-2 text-[11px]' : 'h-8 px-3 text-xs'
+        } ${isOpen ? 'is-open' : ''}`}
       >
-        <div className="flex items-center gap-1.5 truncate max-w-[280px]">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 max-w-[280px]">
           <Bot className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
           <span className="opacity-75 font-medium truncate shrink-0">{activeVendor}</span>
-          <span className="opacity-40 select-none">·</span>
+          <span className="opacity-40 select-none shrink-0">·</span>
           <span className="font-bold truncate text-[var(--accent-text)]">{activeModelLabel}</span>
         </div>
         <ChevronDown
           className={`shrink-0 transition-transform duration-200 ${
             isSmall ? 'h-3 w-3' : 'h-3.5 w-3.5'
-          } ${isLight ? 'text-slate-500' : 'text-zinc-400'} ${isOpen ? 'rotate-180 text-blue-500' : ''}`}
+          } ${isOpen ? 'rotate-180' : ''}`}
+          style={{ color: isOpen ? 'var(--accent-text)' : 'var(--g-text-3)' }}
         />
       </button>
 
@@ -192,15 +189,14 @@ export const CascadingModelSelect: React.FC<CascadingModelSelectProps> = ({
           ref={menuRef}
           data-testid="cascading-menu"
           onMouseLeave={handleMenuMouseLeave}
-          className={`absolute z-[300] min-w-[170px] max-w-[240px] rounded-2xl p-1.5 shadow-2xl animate-in fade-in zoom-in-95 duration-150 border top-full mt-1.5 left-0 ${
-            isLight
-              ? 'bg-white/95 border-slate-200/90 text-slate-800 shadow-slate-900/15 backdrop-blur-xl'
-              : 'bg-[#181824]/95 border-zinc-700/90 text-zinc-100 shadow-[0_16px_40px_rgba(0,0,0,0.85)] backdrop-blur-xl'
-          }`}
+          className="vision-select-popover absolute z-[300] min-w-[175px] max-w-[240px] top-full mt-1.5 left-0"
         >
-          <div className="px-2.5 py-1 mb-1 text-[10px] font-semibold opacity-50 flex items-center justify-between border-b border-white/[0.06] select-none">
+          <div
+            className="vision-select-group-label flex items-center justify-between border-b mb-1 pb-1.5"
+            style={{ borderColor: 'var(--g-hairline)' }}
+          >
             <span>选择厂商</span>
-            <span className="text-[9px] font-mono">{vendorGroups.length} 厂商</span>
+            <span className="text-[9px] font-mono opacity-80">{vendorGroups.length} 厂商</span>
           </div>
 
           <div className="space-y-0.5">
@@ -219,18 +215,8 @@ export const CascadingModelSelect: React.FC<CascadingModelSelectProps> = ({
                       handleModelClick(group.models[0]);
                     }
                   }}
-                  className={`group/item flex items-center justify-between px-2.5 py-1.5 rounded-xl cursor-pointer text-xs transition select-none ${
-                    isHovered
-                      ? isLight
-                        ? 'bg-blue-50 text-blue-700 font-semibold'
-                        : 'bg-blue-600/20 text-blue-300 font-semibold'
-                      : isGroupActive
-                      ? isLight
-                        ? 'bg-slate-100/90 font-medium text-slate-900'
-                        : 'bg-zinc-800/80 font-medium text-zinc-100'
-                      : isLight
-                      ? 'hover:bg-slate-50 text-slate-700'
-                      : 'hover:bg-zinc-800/50 text-zinc-300'
+                  className={`vision-select-option select-none ${
+                    isHovered || isGroupActive ? 'is-selected' : ''
                   }`}
                 >
                   <div className="flex items-center gap-2 truncate pr-1">
@@ -243,12 +229,9 @@ export const CascadingModelSelect: React.FC<CascadingModelSelectProps> = ({
                   </div>
                   <ChevronRight
                     className={`h-3.5 w-3.5 shrink-0 transition-transform ${
-                      isHovered
-                        ? 'text-blue-500 translate-x-0.5'
-                        : isLight
-                        ? 'text-slate-400'
-                        : 'text-zinc-500'
+                      isHovered ? 'translate-x-0.5' : ''
                     }`}
+                    style={{ color: isHovered ? 'var(--accent-text)' : 'var(--g-text-3)' }}
                   />
                 </div>
               );
@@ -260,19 +243,18 @@ export const CascadingModelSelect: React.FC<CascadingModelSelectProps> = ({
             <div
               data-testid="cascading-flyout"
               onMouseEnter={handleSubmenuMouseEnter}
-              className={`absolute top-0 z-[310] min-w-[190px] max-w-[280px] rounded-2xl p-1.5 shadow-2xl animate-in fade-in zoom-in-95 duration-150 border ${
+              className={`vision-select-popover absolute top-0 z-[310] min-w-[195px] max-w-[280px] ${
                 flyoutPlacement === 'left' ? 'right-full mr-1.5' : 'left-full ml-1.5'
-              } ${
-                isLight
-                  ? 'bg-white/95 border-slate-200/90 text-slate-800 shadow-slate-900/20 backdrop-blur-xl'
-                  : 'bg-[#1a1a28]/95 border-zinc-700/90 text-zinc-100 shadow-[0_20px_48px_rgba(0,0,0,0.9)] backdrop-blur-xl'
               }`}
             >
-              <div className="px-2.5 py-1 mb-1 text-[10px] font-semibold opacity-60 flex items-center justify-between border-b border-white/[0.06] select-none">
-                <span className="truncate max-w-[150px] font-bold text-blue-500">
+              <div
+                className="vision-select-group-label flex items-center justify-between border-b mb-1 pb-1.5"
+                style={{ borderColor: 'var(--g-hairline)' }}
+              >
+                <span className="truncate max-w-[150px] font-bold" style={{ color: 'var(--accent-text)' }}>
                   {currentHoveredGroup.vendor}
                 </span>
-                <span className="text-[9px] font-mono">{currentHoveredGroup.models.length} 模型</span>
+                <span className="text-[9px] font-mono opacity-80">{currentHoveredGroup.models.length} 模型</span>
               </div>
 
               <div className="space-y-0.5 max-h-[320px] overflow-y-auto scrollbar-thin">
@@ -293,29 +275,22 @@ export const CascadingModelSelect: React.FC<CascadingModelSelectProps> = ({
                         e.stopPropagation();
                         handleModelClick(cfg);
                       }}
-                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl cursor-pointer text-xs transition select-none ${
-                        isSelected
-                          ? isLight
-                            ? 'bg-blue-500 text-white font-semibold shadow-xs'
-                            : 'bg-blue-600 text-white font-semibold shadow-xs'
-                          : isLight
-                          ? 'hover:bg-slate-100 text-slate-700'
-                          : 'hover:bg-zinc-800/70 text-zinc-300'
+                      className={`vision-select-option select-none ${
+                        isSelected ? 'is-selected' : ''
                       }`}
                     >
                       <div className="flex flex-col truncate pr-2">
                         <span className="truncate">{label}</span>
                         {isLocal && (
                           <span
-                            className={`text-[9.5px] font-sans leading-none mt-0.5 ${
-                              isSelected ? 'text-blue-100' : 'opacity-60'
-                            }`}
+                            className="text-[9.5px] font-sans leading-none mt-0.5 opacity-70"
+                            style={{ color: isSelected ? 'var(--accent-text)' : 'var(--g-text-3)' }}
                           >
                             本地离线服务
                           </span>
                         )}
                       </div>
-                      {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-white" />}
+                      {isSelected && <Check className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent-text)' }} />}
                     </div>
                   );
                 })}

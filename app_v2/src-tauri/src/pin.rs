@@ -273,9 +273,49 @@ pub async fn cmd_set_pin_always_on_top(
     Ok(())
 }
 
+fn clamp_logical_pos_to_work_area(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    work_logical: (f64, f64, f64, f64),
+) -> (f64, f64) {
+    let (wx, wy, ww, wh) = work_logical;
+    let margin = 8.0;
+    let max_x = (wx + ww - width - margin).max(wx + margin);
+    let max_y = (wy + wh - height - margin).max(wy + margin);
+    let clamped_x = x.clamp(wx + margin, max_x);
+    let clamped_y = y.clamp(wy + margin, max_y);
+    (clamped_x, clamped_y)
+}
+
+fn clamp_pin_position_for_monitor(x: f64, y: f64, width: f64, height: f64) -> (f64, f64) {
+    let primary_scale = monitor_dpi_scale(0, 0).unwrap_or(1.0);
+    let probe_px = (x * primary_scale).round() as i32;
+    let probe_py = (y * primary_scale).round() as i32;
+    let (wx, wy, ww, wh) = monitor_work_area(probe_px, probe_py);
+    let target_scale = monitor_dpi_scale(probe_px, probe_py).unwrap_or(primary_scale).max(0.5);
+    let work_logical = (
+        wx as f64 / target_scale,
+        wy as f64 / target_scale,
+        ww as f64 / target_scale,
+        wh as f64 / target_scale,
+    );
+    clamp_logical_pos_to_work_area(x, y, width, height, work_logical)
+}
+
 /// 创建（或更新并聚焦）一个普通贴图窗口。
 #[tauri::command]
 pub async fn cmd_open_pin(app: tauri::AppHandle, payload: PinPayload) -> Result<(), String> {
+    let (pin_x, pin_y) = clamp_pin_position_for_monitor(
+        payload.x,
+        payload.y,
+        payload.width,
+        payload.height,
+    );
+    let mut payload = payload;
+    payload.x = pin_x;
+    payload.y = pin_y;
     let id = payload.id.clone();
     payloads()
         .lock()
@@ -408,5 +448,19 @@ mod tests {
         assert_eq!(retrieved.unwrap().blocks[0].translated, "你好");
 
         payloads().lock().unwrap().remove("unit_test_id");
+    }
+
+    #[test]
+    fn clamp_logical_pos_preserves_negative_secondary_monitor_coords() {
+        // Left secondary monitor (-1920..0, -200..880) should stay negative rather
+        // than being snapped to +8 on the primary monitor.
+        let left_monitor = (-1920.0, -200.0, 1920.0, 1080.0);
+        let (x, y) = clamp_logical_pos_to_work_area(-1400.0, -50.0, 460.0, 520.0, left_monitor);
+        assert_eq!((x, y), (-1400.0, -50.0));
+
+        // Near right/bottom edge of that same left monitor clamps within it
+        let (cx, cy) = clamp_logical_pos_to_work_area(-100.0, 700.0, 460.0, 520.0, left_monitor);
+        assert_eq!(cx, -468.0);
+        assert_eq!(cy, 352.0);
     }
 }

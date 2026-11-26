@@ -255,5 +255,24 @@ Thinking about deep analysis for "正确配置指引"...
       // Comparison grid should be visible again
       expect(screen.getByText('Guidelines for proper configuration')).toBeInTheDocument();
     });
+
+    it('toggles AI Copilot drawer open and closed without losing translation', async () => {
+      vi.spyOn(tauriService, 'cmdUniversalTranslate').mockResolvedValue(mockTransResponse);
+      vi.spyOn(tauriService, 'fetchAiDeepTranslationAnalysis').mockResolvedValue(mockDeepAnalysis);
+
+      render(<DualPaneTranslator settings={SETTINGS_WITH_LLM} initialText="正确配置指引" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ai-copilot-drawer')).toBeInTheDocument();
+      });
+
+      const toggleBtn = screen.getByTestId('toggle-copilot-btn');
+      fireEvent.click(toggleBtn);
+      expect(screen.queryByTestId('ai-copilot-drawer')).toBeNull();
+      expect(screen.getAllByText('Correct Configuration Guide').length).toBeGreaterThanOrEqual(1);
+
+      fireEvent.click(toggleBtn);
+      expect(screen.getByTestId('ai-copilot-drawer')).toBeInTheDocument();
+    });
   });
 });

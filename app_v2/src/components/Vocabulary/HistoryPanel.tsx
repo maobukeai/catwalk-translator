@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Star, Download, Search, BookMarked, Clock, Volume2, Trash2, Trash, Inbox, Play, X, Copy, Check, Camera, FileText, GraduationCap, Eye, RotateCcw, Library, ClipboardList, CheckSquare, AlertCircle } from "lucide-react";
-import { cmdGetHistory, cmdToggleFavorite, cmdExportAnki, cmdDeleteHistoryEntry, cmdDeleteHistoryEntries, cmdBatchSetFavorite, cmdClearHistory, cmdClearUnfavoritedHistory, cmdGetCaptureSessions, cmdClearCaptureSessions, cmdGetClipboardHistory, cmdClearClipboardHistory, type ClipboardHistoryEntry } from "../../services/tauri";
+import { Star, Search, Clock, Volume2, Trash2, Trash, Inbox, Play, X, Copy, Check, Camera, FileText, GraduationCap, Eye, RotateCcw, ClipboardList, CheckSquare, AlertCircle } from "lucide-react";
+import { cmdGetHistory, cmdToggleFavorite, cmdDeleteHistoryEntry, cmdDeleteHistoryEntries, cmdBatchSetFavorite, cmdClearHistory, cmdClearUnfavoritedHistory, cmdGetCaptureSessions, cmdClearCaptureSessions, cmdGetClipboardHistory, cmdClearClipboardHistory, type ClipboardHistoryEntry } from "../../services/tauri";
 import { speakText } from "../../services/tts";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppTheme } from "../../hooks/useAppTheme";
+import { useSlidingIndicator } from "../../hooks/useSlidingIndicator";
+import { SlidingHighlight } from "../Common/SlidingHighlight";
 import { detectSpeechLang } from "../../services/langDetect";
 import type { HistoryItem, CaptureSession } from "../../services/types";
 import { AnkiSyncModal } from "./AnkiSyncModal";
@@ -70,6 +72,7 @@ export const HistoryPanel: React.FC = () => {
   // ── 生词本与查询历史彻底解耦（我的生词本 / 查询历史 / 剪贴板 / 划词回放）───────────
   const [activeSubTab, setActiveSubTab] = useState<'vocabulary' | 'history' | 'clipboard' | 'replay'>('vocabulary');
   const [showAnkiModal, setShowAnkiModal] = useState(false);
+  const subTabSlider = useSlidingIndicator<HTMLDivElement>(activeSubTab);
 
   // ── 批量操作状态 ──────────────────────────────────────────────────────────
   const [isBatchMode, setIsBatchMode] = useState(false);
@@ -103,6 +106,16 @@ export const HistoryPanel: React.FC = () => {
   }, []);
   const [replay, setReplay] = useState<CaptureSession | null>(null);
   const [replayCopied, setReplayCopied] = useState(false);
+  const [copiedClipIdx, setCopiedClipIdx] = useState<number | null>(null);
+  const replayCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clipCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (replayCopyTimerRef.current) clearTimeout(replayCopyTimerRef.current);
+      if (clipCopyTimerRef.current) clearTimeout(clipCopyTimerRef.current);
+    };
+  }, []);
 
   // ── 复习模式状态 ──────────────────────────────────────────────────────────
   const [reviewProgress, setReviewProgress] = useState<Record<string, ReviewProgress>>({});
@@ -146,9 +159,10 @@ export const HistoryPanel: React.FC = () => {
 
   const handleCopyReplay = (session: CaptureSession) => {
     const text = session.blocks.map((b) => b.translated).join("\n");
-    navigator.clipboard.writeText(text);
+    navigator.clipboard?.writeText?.(text)?.catch?.(() => {});
     setReplayCopied(true);
-    setTimeout(() => setReplayCopied(false), 1800);
+    if (replayCopyTimerRef.current) clearTimeout(replayCopyTimerRef.current);
+    replayCopyTimerRef.current = setTimeout(() => setReplayCopied(false), 1800);
   };
 
   const handleClearSessions = () => {
@@ -244,25 +258,29 @@ export const HistoryPanel: React.FC = () => {
     });
   };
 
-  const handleExportAnki = async () => {
-    const targetItems = activeSubTab === "vocabulary"
-      ? history.filter((i) => i.isFavorite)
-      : history;
-    if (targetItems.length === 0) return;
-    try {
-      const csv = await cmdExportAnki(targetItems);
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.setAttribute("href", url);
-      link.setAttribute("download", `cg_translator_vocabulary_${Date.now()}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error("Export failed:", err);
-    }
+  const handleClearClipboardHistory = () => {
+    if (clipHistory.length === 0) return;
+    setConfirmModal({
+      title: "清空剪贴板翻译历史",
+      body: `确定要清空全部 ${clipHistory.length} 条剪贴板翻译历史记录吗？此操作不可撤销。`,
+      confirmText: "清空记录",
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await cmdClearClipboardHistory();
+          setClipHistory([]);
+        } catch (err) {
+          console.warn("Failed to clear clipboard history:", err);
+        }
+      },
+    });
+  };
+
+  const handleCopyClipboardEntry = (idx: number, text: string) => {
+    navigator.clipboard?.writeText?.(text)?.catch?.(() => {});
+    setCopiedClipIdx(idx);
+    if (clipCopyTimerRef.current) clearTimeout(clipCopyTimerRef.current);
+    clipCopyTimerRef.current = setTimeout(() => setCopiedClipIdx(null), 1600);
   };
 
   const filteredItems = history.filter((item) => {
@@ -438,54 +456,109 @@ export const HistoryPanel: React.FC = () => {
 
   /* ── 渲染 ─────────────────────────────────────────────────────────────── */
 
-  return (
-    <div className="space-y-5 max-w-4xl mx-auto pb-28">
-      {/* 统计卡横排：支持一键点击直达对应功能模块 */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-        {[
-          { tab: "vocabulary" as const, icon: Star, label: "我的生词", value: favoriteCount, color: "var(--warn)" },
-          { tab: "vocabulary" as const, icon: GraduationCap, label: "待复习", value: dueCount, color: dueCount > 0 ? "var(--danger)" : "var(--ok)" },
-          { tab: "history" as const, icon: Clock, label: "查询历史", value: history.length, color: "var(--accent-text)" },
-          { tab: "replay" as const, icon: Camera, label: "划词回放", value: sessions.length, color: "var(--accent-text)" },
-        ].map((stat) => {
-          const Icon = stat.icon;
-          const isActive = activeSubTab === stat.tab;
-          return (
-            <div
-              key={stat.label}
-              onClick={() => setActiveSubTab(stat.tab)}
-              className={`lg-panel flex items-center gap-3 p-3 cursor-pointer transition-all hover:scale-[1.01] hover:border-[var(--g-border-strong)] ${
-                isActive ? "ring-1 ring-[var(--accent)]/40 shadow-sm" : ""
-              }`}
-              title={`点击切换到「${stat.tab === "replay" ? "截图划词回放" : stat.tab === "vocabulary" ? "我的生词本" : "查询历史"}」`}
-            >
-              <div className="lg-inset !p-2 rounded-xl shrink-0">
-                <Icon className="h-4 w-4" style={{ color: stat.color }} />
-              </div>
-              <div className="min-w-0">
-                <div className="text-lg font-bold leading-none tabular-nums">{stat.value}</div>
-                <div className="text-[10.5px] mt-1 truncate" style={{ color: "var(--g-text-3)" }}>{stat.label}</div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+  const masteredCount = Math.max(0, favoriteCount - dueCount);
+  const masteredPct = favoriteCount > 0 ? Math.round((masteredCount / favoriteCount) * 100) : 0;
 
-      {/* 模块分类导航栏 */}
-      <div className="flex items-center justify-between gap-3 p-1.5 rounded-2xl lg-panel flex-wrap">
-        <div className="flex items-center gap-1.5 flex-wrap">
+  return (
+    <div className="flex flex-col min-[720px]:flex-row items-start gap-3.5 max-w-6xl mx-auto pb-4">
+      {/* 左侧常驻毛玻璃学习工作台导轨 */}
+      <aside
+        data-testid="vocab-workspace-sidebar"
+        className="w-full min-[720px]:w-[218px] lg:w-[232px] shrink-0 translator-pane rounded-[22px] p-3.5 space-y-3 min-[720px]:sticky min-[720px]:top-1"
+      >
+        {/* Leitner 掌握度进度环 + 待复习计数 */}
+        <div className="text-center pt-1 pb-0.5 space-y-2">
+          <div
+            className="w-[74px] h-[74px] rounded-full p-[6px] mx-auto shadow-inner transition-all"
+            style={{
+              background: `conic-gradient(var(--accent) ${masteredPct}%, var(--g-hairline) 0)`,
+            }}
+          >
+            <div
+              className="w-full h-full rounded-full flex flex-col items-center justify-center"
+              style={{ background: "var(--g-surface-solid)" }}
+            >
+              <span
+                className="text-base font-extrabold leading-none tabular-nums"
+                style={{ color: dueCount > 0 ? (isLight ? "#dc2626" : "#ff8a80") : "var(--accent-text)" }}
+              >
+                {dueCount}
+              </span>
+              <span className="text-[10px] font-semibold mt-0.5" style={{ color: "var(--g-text-3)" }}>
+                待复习
+              </span>
+            </div>
+          </div>
+          <p className="text-[11px] font-medium" style={{ color: "var(--g-text-2)" }}>
+            {favoriteCount > 0 ? `已掌握 ${masteredCount} / ${favoriteCount} 词` : "收藏生词后即可开始复习"}
+          </p>
+        </div>
+
+        {/* 核心学习操作按钮 */}
+        <div className="space-y-2">
           <button
+            type="button"
+            onClick={startReview}
+            disabled={dueCount === 0}
+            className="lg-btn lg-btn-primary w-full justify-center !py-2 !text-xs !rounded-full disabled:cursor-not-allowed cursor-pointer"
+            title={
+              favoriteCount === 0
+                ? "先在列表或翻译结果里点亮 ⭐ 收藏生词，才会进入复习队列"
+                : dueCount > 0
+                  ? `开始复习 ${Math.min(dueCount, MAX_REVIEW_QUEUE)} 个到期生词`
+                  : "当前没有到期生词"
+            }
+          >
+            <GraduationCap className="h-3.5 w-3.5" />
+            <span>开始复习{dueCount > 0 ? ` (${Math.min(dueCount, MAX_REVIEW_QUEUE)})` : ""}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowAnkiModal(true)}
+            disabled={activeSubTab === "vocabulary" ? favoriteCount === 0 : history.length === 0}
+            className="lg-btn w-full justify-center !py-1.5 !text-xs !rounded-full cursor-pointer disabled:opacity-45"
+            title={
+              activeSubTab === "vocabulary"
+                ? "通过 AnkiConnect 直连同步生词，或一键导出 Anki 卡片"
+                : "将查询历史同步至 Anki 或导出文件"
+            }
+          >
+            <GraduationCap className="h-3.5 w-3.5" style={{ color: "var(--accent-text)" }} />
+            <span>同步至 Anki</span>
+          </button>
+        </div>
+
+        {/* 模块纵向切换导航（带弹性滑动胶囊） */}
+        <div
+          ref={subTabSlider.containerRef}
+          className="relative pt-2.5 border-t space-y-1"
+          style={{ borderColor: "var(--g-hairline)" }}
+        >
+          <SlidingHighlight
+            rect={subTabSlider.rect}
+            isReady={subTabSlider.isReady}
+            variant="solid"
+            radiusClass="rounded-xl"
+            testId="vocab-subtab-slider"
+          />
+          <button
+            ref={subTabSlider.registerItem("vocabulary")}
             type="button"
             data-testid="subtab-vocabulary"
             onClick={() => setActiveSubTab("vocabulary")}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            className={`relative z-10 w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               activeSubTab === "vocabulary"
-                ? "bg-[var(--accent)] text-white shadow-sm"
+                ? subTabSlider.isReady
+                  ? "text-white"
+                  : "bg-[var(--accent)] text-white shadow-sm"
                 : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
             }`}
           >
-            <Star className={`h-3.5 w-3.5 ${activeSubTab === "vocabulary" ? "fill-current" : ""}`} />
-            <span>⭐ 我的生词本</span>
+            <span className="flex items-center gap-2 truncate">
+              <Star className={`h-3.5 w-3.5 shrink-0 ${activeSubTab === "vocabulary" ? "fill-current" : ""}`} />
+              <span>我的生词本</span>
+            </span>
             <span
               className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
                 activeSubTab === "vocabulary" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
@@ -496,17 +569,22 @@ export const HistoryPanel: React.FC = () => {
           </button>
 
           <button
+            ref={subTabSlider.registerItem("history")}
             type="button"
             data-testid="subtab-history"
             onClick={() => setActiveSubTab("history")}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            className={`relative z-10 w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               activeSubTab === "history"
-                ? "bg-[var(--accent)] text-white shadow-sm"
+                ? subTabSlider.isReady
+                  ? "text-white"
+                  : "bg-[var(--accent)] text-white shadow-sm"
                 : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
             }`}
           >
-            <Clock className="h-3.5 w-3.5" />
-            <span>🕒 查询历史</span>
+            <span className="flex items-center gap-2 truncate">
+              <Clock className="h-3.5 w-3.5 shrink-0" />
+              <span>查询历史</span>
+            </span>
             <span
               className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
                 activeSubTab === "history" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
@@ -517,17 +595,22 @@ export const HistoryPanel: React.FC = () => {
           </button>
 
           <button
+            ref={subTabSlider.registerItem("clipboard")}
             type="button"
             data-testid="subtab-clipboard"
             onClick={() => setActiveSubTab("clipboard")}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            className={`relative z-10 w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               activeSubTab === "clipboard"
-                ? "bg-[var(--accent)] text-white shadow-sm"
+                ? subTabSlider.isReady
+                  ? "text-white"
+                  : "bg-[var(--accent)] text-white shadow-sm"
                 : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
             }`}
           >
-            <ClipboardList className="h-3.5 w-3.5" />
-            <span>📋 剪贴板翻译</span>
+            <span className="flex items-center gap-2 truncate">
+              <ClipboardList className="h-3.5 w-3.5 shrink-0" />
+              <span>剪贴板翻译</span>
+            </span>
             <span
               className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
                 activeSubTab === "clipboard" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
@@ -538,17 +621,22 @@ export const HistoryPanel: React.FC = () => {
           </button>
 
           <button
+            ref={subTabSlider.registerItem("replay")}
             type="button"
             data-testid="subtab-replay"
             onClick={() => setActiveSubTab("replay")}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            className={`relative z-10 w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
               activeSubTab === "replay"
-                ? "bg-[var(--accent)] text-white shadow-sm"
+                ? subTabSlider.isReady
+                  ? "text-white"
+                  : "bg-[var(--accent)] text-white shadow-sm"
                 : "hover:bg-[var(--g-surface-2)] text-[var(--g-text-2)]"
             }`}
           >
-            <Camera className="h-3.5 w-3.5" />
-            <span>📸 划词回放</span>
+            <span className="flex items-center gap-2 truncate">
+              <Camera className="h-3.5 w-3.5 shrink-0" />
+              <span>划词回放</span>
+            </span>
             <span
               className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
                 activeSubTab === "replay" ? "bg-white/20 text-white" : "bg-[var(--g-surface-3)] text-[var(--g-text-3)]"
@@ -558,626 +646,519 @@ export const HistoryPanel: React.FC = () => {
             </span>
           </button>
         </div>
-      </div>
+      </aside>
 
-      {/* Header and Controls */}
+      {/* 右侧专注浏览与管理主舞台 */}
+      <div className="flex-1 min-w-0 w-full space-y-3">
+      {/* 生词本 / 查询历史主视图 */}
       {(activeSubTab === "vocabulary" || activeSubTab === "history") && (
         <>
-          <div className="lg-panel p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center space-x-3">
+          {/* 紧凑摘要 + 历史清理操作 */}
+          <div className="translator-pane rounded-2xl px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
               {activeSubTab === "vocabulary" ? (
-                <Star className="h-6 w-6 text-amber-500 fill-amber-500 shrink-0" />
+                <Star className="h-4 w-4 text-amber-500 fill-amber-500 shrink-0" />
               ) : (
-                <Clock className="h-6 w-6 shrink-0" style={{ color: "var(--accent-text)" }} />
+                <Clock className="h-4 w-4 shrink-0" style={{ color: "var(--accent-text)" }} />
               )}
-              <div>
-                <h2 className="text-lg font-bold">
-                  {activeSubTab === "vocabulary" ? "我的生词本" : "查询历史记录"}
-                </h2>
-                <p className="text-xs" style={{ color: "var(--g-text-2)" }}>
-                  {activeSubTab === "vocabulary"
-                    ? `已收藏 ${favoriteCount} 条生词${dueCount > 0 ? ` (当前 ${dueCount} 条待复习)` : " · 暂无到期生词"}`
-                    : `已保存 ${history.length} 条查询记录 (收藏 ${favoriteCount} 条)`}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center space-x-2.5 flex-wrap">
-              {activeSubTab === "vocabulary" ? (
-                <>
-                  <button
-                    onClick={startReview}
-                    disabled={dueCount === 0}
-                    className="lg-btn lg-btn-primary disabled:cursor-not-allowed cursor-pointer"
-                    title={
-                      favoriteCount === 0
-                        ? "先在列表或翻译结果里点亮 ⭐ 收藏生词，才会进入复习队列"
-                        : dueCount > 0
-                          ? `开始复习 ${Math.min(dueCount, MAX_REVIEW_QUEUE)} 个到期生词`
-                          : "当前没有到期生词"
-                    }
-                  >
-                    <GraduationCap className="h-4 w-4" />
-                    <span>开始复习{dueCount > 0 ? ` (${Math.min(dueCount, MAX_REVIEW_QUEUE)})` : ""}</span>
-                  </button>
-
-                  <button
-                    onClick={() => setShowAnkiModal(true)}
-                    disabled={favoriteCount === 0}
-                    className="lg-btn lg-btn-primary cursor-pointer disabled:opacity-50"
-                    title="通过 AnkiConnect 直连同步生词，或一键导出 Anki 卡片"
-                  >
-                    <GraduationCap className="h-4 w-4" />
-                    <span>📇 同步至 Anki</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsBatchMode((prev) => {
-                        if (prev) setSelectedIds(new Set());
-                        return !prev;
-                      });
-                    }}
-                    data-testid="header-batch-toggle"
-                    className={`lg-btn cursor-pointer transition ${
-                      isBatchMode
-                        ? "bg-[var(--accent)] text-white shadow-sm"
-                        : "lg-btn-ghost hover:bg-[var(--g-surface-2)]"
-                    }`}
-                    title={isBatchMode ? "退出批量操作" : "开启批量管理"}
-                  >
-                    <CheckSquare className="h-4 w-4" />
-                    <span>{isBatchMode ? "退出批量" : "批量管理"}</span>
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsBatchMode((prev) => {
-                        if (prev) setSelectedIds(new Set());
-                        return !prev;
-                      });
-                    }}
-                    data-testid="header-history-batch-toggle"
-                    className={`lg-btn cursor-pointer transition ${
-                      isBatchMode
-                        ? "bg-[var(--accent)] text-white shadow-sm"
-                        : "lg-btn-ghost hover:bg-[var(--g-surface-2)]"
-                    }`}
-                    title={isBatchMode ? "退出批量操作" : "开启批量管理"}
-                  >
-                    <CheckSquare className="h-4 w-4" />
-                    <span>{isBatchMode ? "退出批量" : "批量管理"}</span>
-                  </button>
-
-                  <button
-                    onClick={handleClearUnfavorited}
-                    disabled={history.filter((i) => !i.isFavorite).length === 0}
-                    className="lg-btn lg-btn-ghost cursor-pointer disabled:opacity-40"
-                    title="仅清空未收藏的临时查询记录，完整保留生词本中的所有收藏"
-                  >
-                    <Trash className="h-4 w-4" />
-                    <span>清空未收藏历史</span>
-                  </button>
-
-                  <button
-                    onClick={handleClearAll}
-                    disabled={history.length === 0}
-                    className="lg-btn lg-btn-ghost text-red-500/80 hover:text-red-500 cursor-pointer disabled:opacity-30 text-[11px]"
-                    title="清空全部历史记录与生词本"
-                  >
-                    <span>清空全部</span>
-                  </button>
-
-                  <button
-                    onClick={() => setShowAnkiModal(true)}
-                    disabled={history.length === 0}
-                    className="lg-btn lg-btn-primary cursor-pointer disabled:opacity-50"
-                    title="将查询历史同步至 Anki 或导出文件"
-                  >
-                    <GraduationCap className="h-4 w-4" />
-                    <span>同步至 Anki</span>
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
-      {/* 复习卡片模式（遮住译文自测 + Leitner 评分） */}
-      {reviewQueue.length > 0 && (
-        <div className="lg-surface p-6 relative overflow-hidden">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2.5">
-              <GraduationCap className="h-5 w-5" style={{ color: "var(--accent-text)" }} />
-              <h3 className="text-sm font-bold">生词复习</h3>
-              <span className="lg-pill">
-                {reviewFinished ? reviewQueue.length : reviewIndex + 1} / {reviewQueue.length}
+              <h2 className="text-sm font-bold shrink-0">
+                {activeSubTab === "vocabulary" ? "我的生词本" : "查询历史记录"}
+              </h2>
+              <span className="text-xs truncate" style={{ color: "var(--g-text-3)" }}>
+                {activeSubTab === "vocabulary"
+                  ? `已收藏 ${favoriteCount} 条生词${dueCount > 0 ? ` (当前 ${dueCount} 条待复习)` : " · 暂无到期生词"}`
+                  : `已保存 ${history.length} 条查询记录 (收藏 ${favoriteCount} 条)`}
               </span>
             </div>
-            <div className="flex items-center gap-2">
-              {!reviewFinished && (
-                <button onClick={() => setReviewRevealed((v) => !v)} className="lg-btn !py-1.5 !text-[11px]">
-                  {reviewRevealed ? <RotateCcw className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  <span>{reviewRevealed ? "重新遮挡" : "显示答案"}</span>
-                </button>
-              )}
-              <button onClick={exitReview} className="lg-btn lg-btn-ghost !p-2" title="退出复习">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
 
-          {/* 进度条 */}
-          <div className="lg-inset h-1.5 !rounded-full overflow-hidden mb-5">
-            <div
-              className="h-full rounded-full transition-all duration-300"
-              style={{
-                width: `${((reviewFinished ? reviewQueue.length : reviewIndex) / reviewQueue.length) * 100}%`,
-                background: "var(--accent)",
-              }}
-            />
-          </div>
-
-          {!reviewFinished && (
-            <p className="text-[10.5px] text-center mb-3" style={{ color: "var(--g-text-3)" }} data-testid="review-kbd-hint">
-              空格 翻面 · 1 不认识 · 2 模糊 · 3 认识 · Esc 退出
-            </p>
-          )}
-
-          {reviewFinished ? (
-            <div className="text-center py-8 space-y-4">
-              <div className="lg-inset inline-flex h-14 w-14 items-center justify-center !rounded-2xl">
-                <Check className="h-7 w-7" style={{ color: "var(--ok)" }} />
-              </div>
-              <div>
-                <h4 className="text-sm font-bold">本轮复习完成</h4>
-                <p className="text-xs mt-1.5" style={{ color: "var(--g-text-2)" }}>
-                  认识 <strong style={{ color: "var(--ok)" }}>{reviewStats.known}</strong> ·
-                  模糊 <strong style={{ color: "var(--warn)" }}>{reviewStats.fuzzy}</strong> ·
-                  不认识 <strong style={{ color: "var(--danger)" }}>{reviewStats.forgot}</strong>
-                  　已按艾宾浩斯间隔安排下一轮
-                </p>
-              </div>
-              <div className="flex items-center justify-center gap-2">
-                <button onClick={exitReview} className="lg-btn">返回生词本</button>
-              </div>
-            </div>
-          ) : currentReviewItem && (
-            <div className="text-center py-6 space-y-5">
-              {/* 正面：原文 */}
-              <div className="space-y-2">
-                <p className="text-2xl font-bold tracking-tight break-words">{currentReviewItem.original}</p>
+            {activeSubTab === "history" && (
+              <div className="flex items-center gap-1.5 shrink-0">
                 <button
-                  onClick={() => handleSpeech(currentReviewItem.original)}
-                  className="lg-btn lg-btn-ghost !p-2"
-                  title="朗读原词"
+                  type="button"
+                  onClick={handleClearUnfavorited}
+                  disabled={history.filter((i) => !i.isFavorite).length === 0}
+                  className="lg-btn lg-btn-ghost !px-2.5 !py-1 !text-[11px] !rounded-full cursor-pointer disabled:opacity-40"
+                  title="仅清空未收藏的临时查询记录，完整保留生词本中的所有收藏"
                 >
-                  <Volume2 className="h-4 w-4" />
+                  <Trash className="h-3.5 w-3.5" />
+                  <span>清空未收藏历史</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleClearAll}
+                  disabled={history.length === 0}
+                  className="lg-btn lg-btn-ghost !px-2.5 !py-1 !text-[11px] !rounded-full text-red-500/85 hover:text-red-500 cursor-pointer disabled:opacity-30"
+                  title="清空全部历史记录与生词本"
+                >
+                  <span>清空全部</span>
                 </button>
               </div>
-
-              {/* 背面：译文 */}
-              {reviewRevealed ? (
-                <div className="space-y-1 page-in">
-                  <p className="text-lg font-semibold" style={{ color: "var(--accent-text)" }}>
-                    {currentReviewItem.translated}
-                  </p>
-                  <span className="lg-pill font-mono">{currentReviewItem.sourceTier}</span>
-                </div>
-              ) : (
-                <button onClick={() => setReviewRevealed(true)} className="lg-btn !px-6 !py-2.5">
-                  <Eye className="h-4 w-4" />
-                  <span>显示答案</span>
-                </button>
-              )}
-
-              {/* 自评三键 */}
-              {reviewRevealed && (
-                <div className="flex items-center justify-center gap-2.5 page-in">
-                  <button
-                    onClick={() => gradeCurrent("forgot")}
-                    className="lg-btn !px-5"
-                    style={{ color: "var(--danger)", borderColor: "color-mix(in srgb, var(--danger) 40%, transparent)" }}
-                  >
-                    <span>不认识</span>
-                  </button>
-                  <button
-                    onClick={() => gradeCurrent("fuzzy")}
-                    className="lg-btn !px-5"
-                    style={{ color: "var(--warn)", borderColor: "color-mix(in srgb, var(--warn) 40%, transparent)" }}
-                  >
-                    <span>模糊</span>
-                  </button>
-                  <button
-                    onClick={() => gradeCurrent("known")}
-                    className="lg-btn lg-btn-primary !px-5"
-                  >
-                    <Check className="h-4 w-4" />
-                    <span>认识</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Filter Search Bar & Batch Mode Toggle */}
-      <div className="flex items-center gap-2.5">
-        <div className="relative flex-1">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4" style={{ color: "var(--g-text-3)" }} />
-          <input
-            type="text"
-            placeholder={activeSubTab === "vocabulary" ? "在我的生词本中搜索..." : "在查询历史记录中搜索..."}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="lg-input w-full !rounded-xl pl-10 pr-4 py-2.5 text-xs shadow-sm"
-          />
-        </div>
-        <button
-          type="button"
-          data-testid="batch-mode-toggle"
-          onClick={() => {
-            setIsBatchMode((prev) => {
-              if (prev) setSelectedIds(new Set());
-              return !prev;
-            });
-          }}
-          className={`lg-btn !px-3.5 !py-2.5 !rounded-xl !text-xs cursor-pointer transition shrink-0 ${
-            isBatchMode
-              ? "bg-[var(--accent)] text-white shadow-sm"
-              : "lg-btn-ghost hover:bg-[var(--g-surface-2)]"
-          }`}
-          title={isBatchMode ? "退出批量操作" : "开启批量管理"}
-        >
-          <CheckSquare className="h-4 w-4" />
-          <span>{isBatchMode ? "退出批量" : "批量管理"}</span>
-        </button>
-      </div>
-
-      {/* 顶部常驻批量操作栏（批量模式开启时立即显式展开在搜索栏正下方） */}
-      {isBatchMode && (activeSubTab === "vocabulary" || activeSubTab === "history") && (
-        <div className="lg-panel p-3.5 rounded-2xl border-2 border-[var(--accent)]/50 bg-[var(--accent)]/5 flex items-center justify-between gap-3 flex-wrap shadow-md animate-in fade-in slide-in-from-top-2 duration-150">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleSelectAll}
-              data-testid="batch-select-all"
-              className="lg-btn !text-xs !py-1.5 !px-3.5 cursor-pointer border border-[var(--g-border-strong)] hover:border-[var(--accent)] bg-[var(--g-surface)] font-medium shadow-xs"
-            >
-              <CheckSquare className="h-3.5 w-3.5 text-[var(--accent-text)]" />
-              <span>{allVisibleSelected ? "取消全选" : `全选当前 (${filteredItems.length})`}</span>
-            </button>
-
-            <span
-              data-testid="batch-selected-count"
-              className="text-xs font-semibold tabular-nums"
-              style={{ color: "var(--g-text-2)" }}
-            >
-              已选 <span className="font-bold text-[var(--accent-text)] text-sm">{selectedIds.size}</span> / {filteredItems.length} 项
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {activeSubTab === "vocabulary" ? (
-              <>
-                <button
-                  type="button"
-                  disabled={selectedIds.size === 0 || isBatchProcessing}
-                  onClick={() => setShowAnkiModal(true)}
-                  data-testid="batch-anki-btn"
-                  className="lg-btn lg-btn-primary !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold"
-                  title="将选中的生词同步至 Anki"
-                >
-                  <GraduationCap className="h-3.5 w-3.5" />
-                  <span>同步至 Anki{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={selectedIds.size === 0 || isBatchProcessing}
-                  onClick={handleBatchUnfavorite}
-                  data-testid="batch-unfavorite-btn"
-                  className="lg-btn !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold"
-                  title="从生词本中移出（保留在查询历史中，防误删）"
-                >
-                  <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
-                  <span>移出生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={selectedIds.size === 0 || isBatchProcessing}
-                  onClick={handleBatchDelete}
-                  data-testid="batch-delete-btn"
-                  className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold border border-red-500/30"
-                  title="彻底抹除所选记录（从生词本与查询历史中彻底删除）"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  disabled={selectedIds.size === 0 || isBatchProcessing}
-                  onClick={handleBatchFavorite}
-                  data-testid="batch-favorite-btn"
-                  className="lg-btn lg-btn-primary !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold"
-                  title="将所选记录批量加入生词本"
-                >
-                  <Star className="h-3.5 w-3.5 fill-current" />
-                  <span>加入生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={selectedIds.size === 0 || isBatchProcessing}
-                  onClick={handleBatchDelete}
-                  data-testid="batch-delete-btn"
-                  className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3.5 cursor-pointer disabled:opacity-40 font-semibold border border-red-500/30"
-                  title="从查询历史中彻底删除"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
-                </button>
-              </>
             )}
+          </div>
+
+          {/* 圆角搜索框 + 批量管理切换 */}
+          <div className="flex items-center gap-2">
+            <div className="search-hero-shell relative flex-1 rounded-full">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5" style={{ color: "var(--g-text-3)" }} />
+              <input
+                type="text"
+                placeholder={activeSubTab === "vocabulary" ? "在我的生词本中搜索..." : "在查询历史记录中搜索..."}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-transparent border-0 focus:outline-none focus:ring-0 pl-9 pr-8 py-2 text-xs"
+                style={{ color: "var(--g-text-1)" }}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-full hover:bg-[var(--g-surface-3)] cursor-pointer"
+                  style={{ color: "var(--g-text-3)" }}
+                  title="清空搜索"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
 
             <button
               type="button"
+              data-testid="batch-mode-toggle"
               onClick={() => {
-                setIsBatchMode(false);
-                setSelectedIds(new Set());
+                setIsBatchMode((prev) => {
+                  if (prev) setSelectedIds(new Set());
+                  return !prev;
+                });
               }}
-              className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-3 cursor-pointer ml-1"
-              title="完成并退出批量操作"
+              className={`lg-btn !px-3 !py-2 !rounded-full !text-xs cursor-pointer transition shrink-0 ${
+                isBatchMode
+                  ? "bg-[var(--accent)] text-white shadow-sm"
+                  : "hover:bg-[var(--g-surface-2)]"
+              }`}
+              title={isBatchMode ? "退出批量操作" : "开启批量管理"}
             >
-              <X className="h-3.5 w-3.5" />
-              <span>退出批量</span>
+              <CheckSquare className="h-3.5 w-3.5" />
+              <span>{isBatchMode ? "退出批量" : "批量管理"}</span>
             </button>
           </div>
-        </div>
-      )}
 
-      {/* History Items List */}
-      <div className="space-y-3">
-        {filteredItems.length === 0 ? (
-          <div className="lg-panel text-center py-14 space-y-3" style={{ color: "var(--g-text-3)" }}>
-            <Inbox className="h-10 w-10 mx-auto opacity-60" />
-            <p className="text-xs">
-              {activeSubTab === "vocabulary"
-                ? (favoriteCount === 0
-                    ? "生词本暂无收藏。在首页翻译或查询历史中点击 ⭐ 即可加入生词本"
-                    : "生词本中未找到匹配的词条")
-                : (history.length === 0
-                    ? "暂无任何历史记录，去「翻译」或「查词」页进行首次翻译吧"
-                    : "查询历史中未找到匹配的记录")}
-            </p>
-          </div>
-        ) : (
-          <>
-            {filteredItems.slice(0, visibleCount).map((item) => {
-              const box = reviewProgress[item.id]?.box;
-              const isSelected = selectedIds.has(item.id);
-              return (
-                <div
-                  key={item.id}
-                  onClick={isBatchMode ? () => handleToggleSelect(item.id) : undefined}
-                  className={`lg-inset p-4 flex items-center justify-between transition ${
-                    isBatchMode ? "cursor-pointer select-none" : ""
-                  } ${
-                    isSelected
-                      ? "ring-2 ring-[var(--accent)]/60 bg-[var(--accent)]/10 border-[var(--accent)]/40 shadow-sm"
-                      : "hover:bg-[var(--g-surface-2)]"
-                  }`}
-                >
-                  {isBatchMode && (
+          {/* 3D 翻面 Leitner 复习卡片模式 */}
+          {reviewQueue.length > 0 && (
+            <div className="translator-pane rounded-[22px] p-5 sm:p-6 relative overflow-hidden">
+              <div className="flex items-center justify-between mb-3.5">
+                <div className="flex items-center gap-2.5">
+                  <GraduationCap className="h-5 w-5" style={{ color: "var(--accent-text)" }} />
+                  <h3 className="text-sm font-bold">生词复习</h3>
+                  <span className="lg-pill">
+                    {reviewFinished ? reviewQueue.length : reviewIndex + 1} / {reviewQueue.length}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {!reviewFinished && (
                     <button
                       type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleToggleSelect(item.id);
-                      }}
-                      data-testid={`batch-checkbox-${item.id}`}
-                      className={`w-5 h-5 rounded-md flex items-center justify-center transition-all shrink-0 cursor-pointer mr-3.5 ${
-                        isSelected
-                          ? "bg-[var(--accent)] text-white shadow-xs border border-[var(--accent)]"
-                          : "border-2 border-[var(--g-border-strong)] hover:border-[var(--accent)] bg-[var(--g-surface)]"
-                      }`}
-                      title={isSelected ? "取消选择" : "选择此项"}
+                      onClick={() => setReviewRevealed((v) => !v)}
+                      className="lg-btn !py-1.5 !px-3 !text-[11px] !rounded-full cursor-pointer"
                     >
-                      {isSelected && <Check className="h-3.5 w-3.5 stroke-[3]" />}
+                      {reviewRevealed ? <RotateCcw className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      <span>{reviewRevealed ? "重新遮挡" : "显示答案"}</span>
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={exitReview}
+                    className="lg-btn lg-btn-ghost !p-2 !rounded-full cursor-pointer"
+                    title="退出复习"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
 
-                  <div className="space-y-1 flex-1 pr-4 min-w-0">
-                    <div className="flex items-center space-x-3 flex-wrap">
-                      <span className="font-semibold text-base truncate">{item.original}</span>
-                      <button
-                        onClick={(e) => {
-                          if (isBatchMode) e.stopPropagation();
-                          handleSpeech(item.original);
-                        }}
-                        className="transition hover:opacity-70"
-                        style={{ color: "var(--g-text-3)" }}
-                      >
-                        <Volume2 className="h-4 w-4" />
-                      </button>
-                      <span className="lg-pill font-mono">{item.sourceTier}</span>
-                      {(item.isFavorite || box !== undefined) && (
-                        <span
-                          className="lg-pill"
-                          data-testid={`due-badge-${item.id}`}
-                          title={`Leitner 盒 ${box ?? 0}/5 · 间隔 ${REVIEW_INTERVAL_DAYS[Math.min(box ?? 0, 5)]} 天 · 下次复习：${nextDueText(reviewProgress, item.id)}`}
-                          style={
-                            isReviewDue(reviewProgress, item.id)
-                              ? { color: "var(--danger)", borderColor: "color-mix(in srgb, var(--danger) 40%, transparent)" }
-                              : undefined
-                          }
-                        >
-                          <GraduationCap className="h-3 w-3" />
-                          {nextDueText(reviewProgress, item.id)}
-                          {box !== undefined ? ` · 盒 ${box}` : ""}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-sm font-bold" style={{ color: isLight ? "#059669" : "#34d399" }}>{item.translated}</p>
-                    <div className="flex items-center space-x-2 text-[11px]" style={{ color: "var(--g-text-3)" }}>
-                      <Clock className="h-3 w-3" />
-                      <span>{item.timestamp}</span>
-                    </div>
+              {/* 进度条 */}
+              <div className="lg-inset h-1.5 !rounded-full overflow-hidden mb-3">
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${((reviewFinished ? reviewQueue.length : reviewIndex) / reviewQueue.length) * 100}%`,
+                    background: "var(--accent)",
+                  }}
+                />
+              </div>
+
+              {!reviewFinished && (
+                <p className="text-[10.5px] text-center mb-4" style={{ color: "var(--g-text-3)" }} data-testid="review-kbd-hint">
+                  空格 翻面 · 1 不认识 · 2 模糊 · 3 认识 · Esc 退出
+                </p>
+              )}
+
+              {reviewFinished ? (
+                <div className="text-center py-7 space-y-4">
+                  <div className="lg-inset inline-flex h-14 w-14 items-center justify-center !rounded-2xl">
+                    <Check className="h-7 w-7" style={{ color: "var(--ok)" }} />
                   </div>
-
-                  <div className="flex items-center space-x-2 shrink-0">
-                    <button
-                      onClick={(e) => {
-                        if (isBatchMode) e.stopPropagation();
-                        handleToggleFav(item.id);
-                      }}
-                      data-testid={`fav-toggle-${item.id}`}
-                      className="lg-btn lg-btn-ghost !p-2"
-                      style={item.isFavorite ? { color: "var(--warn)", background: "color-mix(in srgb, var(--warn) 14%, transparent)" } : undefined}
-                      title={item.isFavorite ? "从生词本移除" : "加入生词本"}
-                    >
-                      <Star className={`h-4 w-4 ${item.isFavorite ? "fill-current" : ""}`} />
-                    </button>
-
-                    <button
-                      onClick={(e) => {
-                        if (isBatchMode) e.stopPropagation();
-                        handleDelete(item.id);
-                      }}
-                      className="lg-btn lg-btn-ghost !p-2"
-                      style={{ color: "var(--danger)" }}
-                      title="删除该条记录"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                  <div>
+                    <h4 className="text-sm font-bold">本轮复习完成</h4>
+                    <p className="text-xs mt-1.5" style={{ color: "var(--g-text-2)" }}>
+                      认识 <strong style={{ color: "var(--ok)" }}>{reviewStats.known}</strong> ·
+                      模糊 <strong style={{ color: "var(--warn)" }}>{reviewStats.fuzzy}</strong> ·
+                      不认识 <strong style={{ color: "var(--danger)" }}>{reviewStats.forgot}</strong>
+                      　已按艾宾浩斯间隔安排下一轮
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-center gap-2">
+                    <button type="button" onClick={exitReview} className="lg-btn lg-btn-primary !px-5 !rounded-full cursor-pointer">返回生词本</button>
                   </div>
                 </div>
-              );
-            })}
+              ) : currentReviewItem && (
+                <div className="py-2 space-y-5 flex flex-col items-center">
+                  <div className="vocab-flip-scene w-full max-w-lg">
+                    <div
+                      data-testid="review-flip-card"
+                      onClick={() => setReviewRevealed((v) => !v)}
+                      className={`vocab-flip-card cursor-pointer select-none ${reviewRevealed ? "is-flipped" : ""}`}
+                    >
+                      {/* 正面：原文 */}
+                      <div className="vocab-flip-face space-y-3 text-center">
+                        <span className="lg-pill font-mono">{currentReviewItem.sourceTier}</span>
+                        <p className="text-2xl font-bold tracking-tight break-words">{currentReviewItem.original}</p>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSpeech(currentReviewItem.original);
+                          }}
+                          className="lg-btn lg-btn-ghost !px-3 !py-1.5 !rounded-full !text-xs cursor-pointer"
+                          title="朗读原词"
+                        >
+                          <Volume2 className="h-3.5 w-3.5" />
+                          <span>朗读发音</span>
+                        </button>
+                        <span className="text-[11px]" style={{ color: "var(--g-text-3)" }}>
+                          点击卡片或按空格键翻看释义
+                        </span>
+                      </div>
 
-            {filteredItems.length > visibleCount && (
-              <div className="text-center pt-2">
+                      {/* 背面：译文 */}
+                      <div className="vocab-flip-face vocab-flip-face-back space-y-2.5 text-center">
+                        <span className="text-xs font-medium" style={{ color: "var(--g-text-3)" }}>
+                          {currentReviewItem.original}
+                        </span>
+                        <p className="text-xl font-bold break-words" style={{ color: isLight ? "#059669" : "#34d399" }}>
+                          {currentReviewItem.translated}
+                        </p>
+                        <span className="lg-pill font-mono">{currentReviewItem.sourceTier}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 未翻面显示「显示答案」，翻面后显示三枚评分按钮 */}
+                  {!reviewRevealed ? (
+                    <button
+                      type="button"
+                      onClick={() => setReviewRevealed(true)}
+                      className="lg-btn lg-btn-primary !px-6 !py-2 !rounded-full cursor-pointer"
+                    >
+                      <Eye className="h-4 w-4" />
+                      <span>显示答案</span>
+                    </button>
+                  ) : (
+                    <div className="flex items-center justify-center gap-2.5 animate-fade-in">
+                      <button
+                        type="button"
+                        onClick={() => gradeCurrent("forgot")}
+                        className="lg-btn !px-5 !rounded-full cursor-pointer"
+                        style={{ color: "var(--danger)", borderColor: "color-mix(in srgb, var(--danger) 40%, transparent)" }}
+                      >
+                        <span>不认识</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => gradeCurrent("fuzzy")}
+                        className="lg-btn !px-5 !rounded-full cursor-pointer"
+                        style={{ color: "var(--warn)", borderColor: "color-mix(in srgb, var(--warn) 40%, transparent)" }}
+                      >
+                        <span>模糊</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => gradeCurrent("known")}
+                        className="lg-btn lg-btn-primary !px-5 !rounded-full cursor-pointer"
+                      >
+                        <Check className="h-4 w-4" />
+                        <span>认识</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 单一内联批量操作条（消除上下重复栏） */}
+          {isBatchMode && (activeSubTab === "vocabulary" || activeSubTab === "history") && (
+            <div className="translator-pane px-3.5 py-2.5 rounded-2xl border border-[var(--accent-border)] bg-[var(--accent-soft)] flex items-center justify-between gap-2.5 flex-wrap animate-fade-in">
+              <div className="flex items-center gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setVisibleCount((prev) => prev + 30)}
-                  className="lg-btn lg-btn-ghost text-xs px-5 py-2 hover:bg-[var(--g-surface-2)] transition cursor-pointer"
+                  onClick={handleSelectAll}
+                  data-testid="batch-select-all"
+                  className="lg-btn !text-xs !py-1.5 !px-3 !rounded-full cursor-pointer font-medium shadow-xs"
                 >
-                  加载更多记录 (还有 {filteredItems.length - visibleCount} 条)
+                  <CheckSquare className="h-3.5 w-3.5 text-[var(--accent-text)]" />
+                  <span>{allVisibleSelected ? "取消全选" : `全选当前 (${filteredItems.length})`}</span>
+                </button>
+
+                <span
+                  data-testid="batch-selected-count"
+                  className="text-xs font-semibold tabular-nums"
+                  style={{ color: "var(--g-text-2)" }}
+                >
+                  已选 <span className="font-bold text-[var(--accent-text)] text-sm">{selectedIds.size}</span> / {filteredItems.length} 项
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                {activeSubTab === "vocabulary" ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={selectedIds.size === 0 || isBatchProcessing}
+                      onClick={() => setShowAnkiModal(true)}
+                      data-testid="batch-anki-btn"
+                      className="lg-btn lg-btn-primary !text-xs !py-1.5 !px-3 !rounded-full cursor-pointer disabled:opacity-40 font-semibold"
+                      title="将选中的生词同步至 Anki"
+                    >
+                      <GraduationCap className="h-3.5 w-3.5" />
+                      <span>同步至 Anki{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={selectedIds.size === 0 || isBatchProcessing}
+                      onClick={handleBatchUnfavorite}
+                      data-testid="batch-unfavorite-btn"
+                      className="lg-btn !text-xs !py-1.5 !px-3 !rounded-full cursor-pointer disabled:opacity-40 font-semibold"
+                      title="从生词本中移出（保留在查询历史中，防误删）"
+                    >
+                      <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
+                      <span>移出生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={selectedIds.size === 0 || isBatchProcessing}
+                      onClick={handleBatchDelete}
+                      data-testid="batch-delete-btn"
+                      className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3 !rounded-full cursor-pointer disabled:opacity-40 font-semibold border border-red-500/30"
+                      title="彻底抹除所选记录（从生词本与查询历史中彻底删除）"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      disabled={selectedIds.size === 0 || isBatchProcessing}
+                      onClick={handleBatchFavorite}
+                      data-testid="batch-favorite-btn"
+                      className="lg-btn lg-btn-primary !text-xs !py-1.5 !px-3 !rounded-full cursor-pointer disabled:opacity-40 font-semibold"
+                      title="将所选记录批量加入生词本"
+                    >
+                      <Star className="h-3.5 w-3.5 fill-current" />
+                      <span>加入生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={selectedIds.size === 0 || isBatchProcessing}
+                      onClick={handleBatchDelete}
+                      data-testid="batch-delete-btn"
+                      className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3 !rounded-full cursor-pointer disabled:opacity-40 font-semibold border border-red-500/30"
+                      title="从查询历史中彻底删除"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
+                    </button>
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBatchMode(false);
+                    setSelectedIds(new Set());
+                  }}
+                  className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-2.5 !rounded-full cursor-pointer"
+                  title="完成并退出批量操作"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span>退出批量</span>
                 </button>
               </div>
-            )}
-          </>
-        )}
-      </div>
+            </div>
+          )}
 
-      {/* 底部悬浮批量操作栏（使用 React Portal 挂载到 body，突破包含块限制并置于 Dock 之上） */}
-      {isBatchMode && (activeSubTab === "vocabulary" || activeSubTab === "history") && typeof document !== "undefined" && createPortal(
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[100] lg-panel px-5 py-3 shadow-2xl rounded-2xl flex items-center gap-3.5 flex-wrap max-w-[94vw] border-2 border-[var(--accent)]/50 bg-[var(--g-surface)]/95 backdrop-blur-xl">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleSelectAll}
-              className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-2.5 cursor-pointer"
-              data-testid="batch-select-all-floating"
-            >
-              <span>{allVisibleSelected ? "取消全选" : "全选当前"}</span>
-            </button>
-            <span
-              data-testid="batch-selected-count-floating"
-              className="text-xs font-semibold tabular-nums"
-              style={{ color: "var(--g-text-2)" }}
-            >
-              已选 <span className="font-bold text-[var(--accent-text)]">{selectedIds.size}</span> / {filteredItems.length} 项
-            </span>
-          </div>
-
-          <div className="h-4 w-[1px] bg-[var(--g-border)] hidden sm:block" />
-
-          <div className="flex items-center gap-2">
-            {activeSubTab === "vocabulary" ? (
-              <>
-                <button
-                  type="button"
-                  disabled={selectedIds.size === 0 || isBatchProcessing}
-                  onClick={handleBatchUnfavorite}
-                  className="lg-btn !text-xs !py-1.5 !px-3 cursor-pointer disabled:opacity-40 font-medium"
-                  data-testid="batch-unfavorite-btn-floating"
-                  title="从生词本中移出（保留在查询历史中）"
-                >
-                  <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
-                  <span>移出生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={selectedIds.size === 0 || isBatchProcessing}
-                  onClick={handleBatchDelete}
-                  className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3 cursor-pointer disabled:opacity-40 font-medium border border-red-500/30"
-                  data-testid="batch-delete-btn-floating"
-                  title="从所有历史记录与生词本中彻底删除"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
-                </button>
-              </>
+          {/* 单列高密度词条列表 */}
+          <div>
+            {filteredItems.length === 0 ? (
+              <div className="translator-pane rounded-2xl text-center py-14 space-y-3" style={{ color: "var(--g-text-3)" }}>
+                <Inbox className="h-10 w-10 mx-auto opacity-60" />
+                <p className="text-xs">
+                  {activeSubTab === "vocabulary"
+                    ? (favoriteCount === 0
+                        ? "生词本暂无收藏。在首页翻译或查询历史中点击 ⭐ 即可加入生词本"
+                        : "生词本中未找到匹配的词条")
+                    : (history.length === 0
+                        ? "暂无任何历史记录，去「翻译」或「查词」页进行首次翻译吧"
+                        : "查询历史中未找到匹配的记录")}
+                </p>
+              </div>
             ) : (
               <>
-                <button
-                  type="button"
-                  disabled={selectedIds.size === 0 || isBatchProcessing}
-                  onClick={handleBatchFavorite}
-                  className="lg-btn lg-btn-primary !text-xs !py-1.5 !px-3 cursor-pointer disabled:opacity-40 font-medium"
-                  data-testid="batch-favorite-btn-floating"
-                  title="将所选记录批量加入生词本"
-                >
-                  <Star className="h-3.5 w-3.5 fill-current" />
-                  <span>加入生词本{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
-                </button>
+                <div data-testid="vocab-dense-list" className="space-y-1.5">
+                  {filteredItems.slice(0, visibleCount).map((item, idx) => {
+                    const box = reviewProgress[item.id]?.box;
+                    const isSelected = selectedIds.has(item.id);
+                    const due = isReviewDue(reviewProgress, item.id);
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={isBatchMode ? () => handleToggleSelect(item.id) : undefined}
+                        style={{ animationDelay: `${Math.min(idx, 12) * 16}ms` }}
+                        className={`vocab-card-glass animate-card-in rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3 ${
+                          isBatchMode ? "cursor-pointer select-none" : ""
+                        } ${
+                          isSelected
+                            ? "ring-2 ring-[var(--accent)]/60 bg-[var(--accent-soft)] border-[var(--accent)]/50"
+                            : ""
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          {isBatchMode && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleSelect(item.id);
+                              }}
+                              data-testid={`batch-checkbox-${item.id}`}
+                              className={`w-4.5 h-4.5 rounded-md flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                                isSelected
+                                  ? "bg-[var(--accent)] text-white shadow-xs border border-[var(--accent)]"
+                                  : "border-2 border-[var(--g-border-strong)] hover:border-[var(--accent)] bg-[var(--g-surface)]"
+                              }`}
+                              title={isSelected ? "取消选择" : "选择此项"}
+                            >
+                              {isSelected && <Check className="h-3 w-3 stroke-[3]" />}
+                            </button>
+                          )}
 
-                <button
-                  type="button"
-                  disabled={selectedIds.size === 0 || isBatchProcessing}
-                  onClick={handleBatchDelete}
-                  className="lg-btn lg-btn-ghost text-red-500 hover:bg-red-500/10 !text-xs !py-1.5 !px-3 cursor-pointer disabled:opacity-40 font-medium border border-red-500/30"
-                  data-testid="batch-delete-btn-floating"
-                  title="从查询历史中彻底删除"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>彻底删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}</span>
-                </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-semibold text-[14px] leading-snug truncate max-w-[260px]" title={item.original}>
+                                {item.original}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  if (isBatchMode) e.stopPropagation();
+                                  handleSpeech(item.original);
+                                }}
+                                className="p-0.5 rounded-full transition hover:bg-[var(--g-surface-3)] hover:opacity-90 shrink-0 cursor-pointer"
+                                style={{ color: "var(--g-text-3)" }}
+                                title="朗读原词"
+                              >
+                                <Volume2 className="h-3.5 w-3.5" />
+                              </button>
+                              <span className="text-[13px] font-bold truncate" style={{ color: isLight ? "#059669" : "#34d399" }}>
+                                {item.translated}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                          <span className="lg-pill font-mono">{item.sourceTier}</span>
+                          {(item.isFavorite || box !== undefined) && (
+                            <span
+                              className="lg-pill"
+                              data-testid={`due-badge-${item.id}`}
+                              title={`Leitner 盒 ${box ?? 0}/5 · 间隔 ${REVIEW_INTERVAL_DAYS[Math.min(box ?? 0, 5)]} 天 · 下次复习：${nextDueText(reviewProgress, item.id)}`}
+                              style={
+                                due
+                                  ? {
+                                      color: isLight ? "#dc2626" : "#ff8a80",
+                                      background: isLight ? "rgba(239, 68, 68, 0.08)" : "rgba(255, 69, 58, 0.16)",
+                                      borderColor: isLight ? "rgba(239, 68, 68, 0.28)" : "rgba(255, 138, 128, 0.35)",
+                                    }
+                                  : undefined
+                              }
+                            >
+                              <GraduationCap className="h-3 w-3" />
+                              {nextDueText(reviewProgress, item.id)}
+                              {box !== undefined ? ` · 盒 ${box}` : ""}
+                            </span>
+                          )}
+                          <span className="hidden lg:inline-flex items-center gap-1 text-[10.5px] pl-0.5" style={{ color: "var(--g-text-3)" }}>
+                            <Clock className="h-3 w-3" />
+                            <span>{item.timestamp}</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              if (isBatchMode) e.stopPropagation();
+                              handleToggleFav(item.id);
+                            }}
+                            data-testid={`fav-toggle-${item.id}`}
+                            className={`lg-btn lg-btn-ghost !p-1.5 !rounded-full cursor-pointer ${item.isFavorite ? "animate-star-bounce" : ""}`}
+                            style={item.isFavorite ? { color: "var(--warn)", background: "color-mix(in srgb, var(--warn) 14%, transparent)" } : undefined}
+                            title={item.isFavorite ? "从生词本移除" : "加入生词本"}
+                          >
+                            <Star className={`h-3.5 w-3.5 ${item.isFavorite ? "fill-current" : ""}`} />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              if (isBatchMode) e.stopPropagation();
+                              handleDelete(item.id);
+                            }}
+                            className="lg-btn lg-btn-ghost !p-1.5 !rounded-full cursor-pointer"
+                            style={{ color: "var(--danger)" }}
+                            title="删除该条记录"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {filteredItems.length > visibleCount && (
+                  <div className="text-center pt-3">
+                    <button
+                      type="button"
+                      onClick={() => setVisibleCount((prev) => prev + 30)}
+                      className="lg-btn lg-btn-ghost text-xs px-5 py-2 !rounded-full hover:bg-[var(--g-surface-2)] transition cursor-pointer"
+                    >
+                      加载更多记录 (还有 {filteredItems.length - visibleCount} 条)
+                    </button>
+                  </div>
+                )}
               </>
             )}
-
-            <button
-              type="button"
-              onClick={() => {
-                setIsBatchMode(false);
-                setSelectedIds(new Set());
-              }}
-              className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-2.5 cursor-pointer ml-1"
-              title="完成并退出批量操作"
-            >
-              <X className="h-3.5 w-3.5" />
-              <span>退出</span>
-            </button>
           </div>
-        </div>,
-        document.body
-      )}
         </>
       )}
 
       {/* ── 剪贴板翻译历史 ─────────────────────────────────────────────────── */}
       {activeSubTab === "clipboard" && (
-        <div className="lg-panel p-5 animate-in fade-in" data-testid="clipboard-history-section">
+        <div className="translator-pane rounded-2xl p-4 sm:p-5 animate-fade-in" data-testid="clipboard-history-section">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold flex items-center gap-2">
               <ClipboardList className="h-4 w-4" style={{ color: "var(--accent-text)" }} />
@@ -1189,14 +1170,9 @@ export const HistoryPanel: React.FC = () => {
             {clipHistory.length > 0 && (
               <button
                 type="button"
-                onClick={() => {
-                  if (!window.confirm("确定清空全部剪贴板翻译历史吗？")) return;
-                  cmdClearClipboardHistory()
-                    .then(() => setClipHistory([]))
-                    .catch(console.warn);
-                }}
-                className="flex items-center gap-1 text-[11px] font-medium rounded-lg px-2 py-1 border transition cursor-pointer hover:bg-rose-500/10 hover:text-rose-500"
-                style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}
+                onClick={handleClearClipboardHistory}
+                className="lg-btn lg-btn-ghost !px-2.5 !py-1 !text-[11px] !rounded-full hover:bg-rose-500/10 hover:text-rose-500 cursor-pointer"
+                style={{ color: "var(--g-text-3)" }}
               >
                 <Trash className="h-3 w-3" />
                 <span>清空</span>
@@ -1205,36 +1181,35 @@ export const HistoryPanel: React.FC = () => {
           </div>
 
           {clipHistory.length === 0 ? (
-            <p className="text-xs" style={{ color: "var(--g-text-3)" }}>
+            <p className="text-xs py-6 text-center" style={{ color: "var(--g-text-3)" }}>
               在设置中开启「剪贴板静默翻译」后，复制的外文会自动翻译并记录在这里
             </p>
           ) : (
-            <div className={`${activeSubTab === 'clipboard' ? 'max-h-[62vh]' : 'max-h-72'} space-y-1.5 overflow-y-auto pr-1 scrollbar-thin`}>
+            <div className="max-h-[62vh] space-y-2 overflow-y-auto pr-1 scrollbar-thin">
               {clipHistory.slice(0, visibleClipCount).map((entry, idx) => (
                 <div
                   key={`${entry.atMs}_${idx}`}
-                  className="rounded-lg border px-3 py-2 text-xs"
-                  style={{ borderColor: "var(--g-border)" }}
+                  className="vocab-card-glass rounded-xl px-3.5 py-2.5 text-xs"
                   data-testid="clipboard-history-item"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-mono truncate" style={{ color: "var(--g-text-3)" }}>{entry.original}</span>
                     <div className="flex shrink-0 items-center gap-1.5">
-                      <span className="text-[9px] font-mono px-1 rounded border" style={{ color: "var(--g-text-3)", borderColor: "var(--g-border)" }}>
+                      <span className="lg-pill font-mono">
                         {entry.sourceTier}
                       </span>
                       <button
                         type="button"
-                        onClick={() => navigator.clipboard.writeText(entry.translated)}
-                        className="rounded p-0.5 transition cursor-pointer hover:text-sky-500"
-                        style={{ color: "var(--g-text-3)" }}
+                        onClick={() => handleCopyClipboardEntry(idx, entry.translated)}
+                        className="rounded-full p-1 transition cursor-pointer hover:bg-[var(--g-surface-3)]"
+                        style={{ color: copiedClipIdx === idx ? "var(--ok)" : "var(--g-text-3)" }}
                         title="复制译文"
                       >
-                        <Copy className="h-3 w-3" />
+                        {copiedClipIdx === idx ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                       </button>
                     </div>
                   </div>
-                  <div className="mt-0.5 font-bold truncate">{entry.translated}</div>
+                  <div className="mt-1 font-bold text-[13px] truncate" style={{ color: isLight ? "#059669" : "#34d399" }}>{entry.translated}</div>
                 </div>
               ))}
               {clipHistory.length > visibleClipCount && (
@@ -1242,7 +1217,7 @@ export const HistoryPanel: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setVisibleClipCount((prev) => prev + 20)}
-                    className="text-[11px] font-medium px-3 py-1 rounded hover:bg-[var(--g-surface-2)] transition cursor-pointer"
+                    className="text-[11px] font-medium px-3 py-1 rounded-full hover:bg-[var(--g-surface-2)] transition cursor-pointer"
                     style={{ color: "var(--g-text-3)" }}
                   >
                     查看更多剪贴板记录 (还有 {clipHistory.length - visibleClipCount} 条)
@@ -1256,92 +1231,91 @@ export const HistoryPanel: React.FC = () => {
 
       {/* ── 划词回放：整场截图翻译会话时间线 ───────────────────────────────── */}
       {activeSubTab === "replay" && (
-        <div className="lg-panel p-5 animate-in fade-in">
-        <div className="flex items-center justify-between pb-3 border-b" style={{ borderColor: "var(--g-hairline)" }}>
-          <div className="flex items-center space-x-2.5">
-            <Camera className="h-5 w-5" style={{ color: "var(--accent-text)" }} />
-            <h3 className="text-sm font-bold">划词回放</h3>
-            <span className="text-[11px]" style={{ color: "var(--g-text-2)" }}>
-              {sessions.length > 0 ? `${sessions.length} 场截图翻译可重看` : "使用划词翻译后会自动保存整场会话"}
-            </span>
-          </div>
-          {sessions.length > 0 && (
-            <button onClick={handleClearSessions} className="lg-btn lg-btn-ghost !px-2.5 !py-1.5 !text-[11px]" style={{ color: "var(--danger)" }}>
-              <Trash className="h-3.5 w-3.5" />
-              <span>清空回放</span>
-            </button>
-          )}
-        </div>
-
-        {sessions.length === 0 ? (
-          <div className="flex flex-col items-center py-6 text-xs space-y-2" style={{ color: "var(--g-text-3)" }}>
-            <Play className="h-8 w-8 opacity-50" />
-            <p>按 {settings.hotkey || "F4"} 截图划词后，这里会出现可回放的翻译现场</p>
-          </div>
-        ) : (
-          <div className="space-y-2 pt-3">
-            {sessions.slice(0, visibleSessionCount).map((session) => (
-              <div
-                key={session.id}
-                className="lg-inset flex items-center justify-between gap-3 p-3 cursor-pointer transition group hover:border-[var(--g-border-strong)]"
-                onClick={() => setReplay(session)}
-              >
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <span className="lg-pill !p-2 shrink-0 group-hover:scale-105 transition-transform">
-                    <Play className="h-3.5 w-3.5" style={{ color: "var(--accent-text)" }} />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-bold">{session.timestamp}</span>
-                      <span className="lg-pill font-mono">
-                        {session.engine} → {session.targetLang}
-                      </span>
-                      <span className="text-[10px]" style={{ color: "var(--g-text-3)" }}>
-                        {session.blocks.length} 个文本块
-                      </span>
-                    </div>
-                    <p className="text-[11px] truncate mt-0.5" style={{ color: "var(--g-text-2)" }}>
-                      {session.blocks.map((b) => b.original).join(" · ")}
-                    </p>
-                  </div>
-                </div>
-                <span className="text-[10px] shrink-0 opacity-0 group-hover:opacity-100 transition" style={{ color: "var(--accent-text)" }}>
-                  点击回放 →
-                </span>
-              </div>
-            ))}
-            {sessions.length > visibleSessionCount && (
-              <div className="text-center pt-1">
-                <button
-                  type="button"
-                  onClick={() => setVisibleSessionCount((prev) => prev + 10)}
-                  className="text-[11px] font-medium px-3 py-1 rounded hover:bg-[var(--g-surface-2)] transition cursor-pointer"
-                  style={{ color: "var(--g-text-3)" }}
-                >
-                  查看更多回放记录 (还有 {sessions.length - visibleSessionCount} 场)
-                </button>
-              </div>
+        <div className="translator-pane rounded-2xl p-4 sm:p-5 animate-fade-in">
+          <div className="flex items-center justify-between pb-3 border-b" style={{ borderColor: "var(--g-hairline)" }}>
+            <div className="flex items-center space-x-2.5">
+              <Camera className="h-5 w-5" style={{ color: "var(--accent-text)" }} />
+              <h3 className="text-sm font-bold">划词回放</h3>
+              <span className="text-[11px]" style={{ color: "var(--g-text-2)" }}>
+                {sessions.length > 0 ? `${sessions.length} 场截图翻译可重看` : "使用划词翻译后会自动保存整场会话"}
+              </span>
+            </div>
+            {sessions.length > 0 && (
+              <button type="button" onClick={handleClearSessions} className="lg-btn lg-btn-ghost !px-2.5 !py-1.5 !text-[11px] !rounded-full cursor-pointer" style={{ color: "var(--danger)" }}>
+                <Trash className="h-3.5 w-3.5" />
+                <span>清空回放</span>
+              </button>
             )}
           </div>
-        )}
-      </div>
+
+          {sessions.length === 0 ? (
+            <div className="flex flex-col items-center py-8 text-xs space-y-2" style={{ color: "var(--g-text-3)" }}>
+              <Play className="h-8 w-8 opacity-50" />
+              <p>按 {settings.hotkey || "F4"} 截图划词后，这里会出现可回放的翻译现场</p>
+            </div>
+          ) : (
+            <div className="space-y-2 pt-3">
+              {sessions.slice(0, visibleSessionCount).map((session) => (
+                <div
+                  key={session.id}
+                  className="vocab-card-glass rounded-2xl flex items-center justify-between gap-3 p-3 cursor-pointer transition group"
+                  onClick={() => setReplay(session)}
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <span className="lg-pill !p-2 shrink-0 group-hover:scale-105 transition-transform">
+                      <Play className="h-3.5 w-3.5" style={{ color: "var(--accent-text)" }} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold">{session.timestamp}</span>
+                        <span className="lg-pill font-mono">
+                          {session.engine} → {session.targetLang}
+                        </span>
+                        <span className="text-[10px]" style={{ color: "var(--g-text-3)" }}>
+                          {session.blocks.length} 个文本块
+                        </span>
+                      </div>
+                      <p className="text-[11px] truncate mt-0.5" style={{ color: "var(--g-text-2)" }}>
+                        {session.blocks.map((b) => b.original).join(" · ")}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] shrink-0 opacity-0 group-hover:opacity-100 transition font-semibold" style={{ color: "var(--accent-text)" }}>
+                    点击回放 →
+                  </span>
+                </div>
+              ))}
+              {sessions.length > visibleSessionCount && (
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleSessionCount((prev) => prev + 10)}
+                    className="text-[11px] font-medium px-3 py-1 rounded-full hover:bg-[var(--g-surface-2)] transition cursor-pointer"
+                    style={{ color: "var(--g-text-3)" }}
+                  >
+                    查看更多回放记录 (还有 {sessions.length - visibleSessionCount} 场)
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {/* ── 回放弹窗：原位卡片重演 + 文本对照 ─────────────────────────────── */}
       {replay && typeof document !== "undefined" && createPortal(
         <div
           className={`fixed inset-0 z-[500] flex items-center justify-center p-6 transition-colors ${
-            isLight ? 'bg-black/20 backdrop-blur-sm' : 'bg-black/60 backdrop-blur-md'
+            isLight ? 'bg-black/25 backdrop-blur-sm' : 'bg-black/60 backdrop-blur-md'
           }`}
-          style={{ animation: 'page-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both' }}
           onClick={() => setReplay(null)}
         >
           <div
-            className="lg-surface w-full max-w-3xl max-h-[85vh] overflow-y-auto scrollbar-thin shadow-2xl"
-            style={{ background: isLight ? 'rgba(255,255,255,0.96)' : 'rgba(20,22,30,0.96)' }}
+            className="vision-modal-shell animate-modal-pop rounded-[22px] w-full max-w-3xl max-h-[85vh] overflow-y-auto scrollbar-thin"
+            style={{ color: 'var(--g-text-1)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-3.5 border-b sticky top-0 z-10 backdrop-blur-xl" style={{ borderColor: "var(--g-hairline)", background: isLight ? 'rgba(255,255,255,0.85)' : 'rgba(20,22,30,0.85)' }}>
+            <div className="flex items-center justify-between px-5 py-3.5 border-b sticky top-0 z-10 backdrop-blur-xl" style={{ borderColor: "var(--g-hairline)", background: "var(--g-surface-2)" }}>
               <div className="flex items-center gap-2.5">
                 <Play className="h-4 w-4" style={{ color: "var(--accent-text)" }} />
                 <span className="text-sm font-bold">
@@ -1352,17 +1326,18 @@ export const HistoryPanel: React.FC = () => {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => handleCopyReplay(replay)} className="lg-btn lg-btn-primary !px-3 !py-1.5 !text-xs">
+                <button type="button" onClick={() => handleCopyReplay(replay)} className="lg-btn lg-btn-primary !px-3 !py-1.5 !text-xs !rounded-full cursor-pointer">
                   {replayCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                   <span>{replayCopied ? '已复制' : '复制全部'}</span>
                 </button>
-                <button onClick={() => handleExportReplay(replay)} className="lg-btn !px-3 !py-1.5 !text-xs">
+                <button type="button" onClick={() => handleExportReplay(replay)} className="lg-btn !px-3 !py-1.5 !text-xs !rounded-full cursor-pointer">
                   <FileText className="h-3.5 w-3.5" />
                   <span>导出 TXT</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setReplay(null)}
-                  className="lg-btn lg-btn-ghost !p-2"
+                  className="lg-btn lg-btn-ghost !p-2 !rounded-full cursor-pointer"
                   style={{ color: "var(--danger)" }}
                   title="关闭回放"
                 >
@@ -1386,7 +1361,6 @@ export const HistoryPanel: React.FC = () => {
                 const rawH = Math.max(maxY - minY, 1);
                 const contentW = rawW + pad * 2;
                 const contentH = rawH + pad * 2;
-                // 限制在最大 680x320 容器内等比缩放，放大上限 1.25，缩小下限 0.35
                 const scale = Math.min(1.25, Math.max(0.35, Math.min(680 / contentW, 320 / contentH)));
                 const boxW = Math.round(contentW * scale);
                 const boxH = Math.round(contentH * scale);
@@ -1456,30 +1430,33 @@ export const HistoryPanel: React.FC = () => {
         document.body
       )}
 
-      {/* 跨平台安全确认弹窗 (彻底解决 Tauri WebView 下原生 window.confirm 被静默拦截或无响应问题) */}
+      {/* 跨平台安全确认弹窗 */}
       {confirmModal && typeof document !== "undefined" && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in"
+          onClick={() => setConfirmModal(null)}
+        >
           <div
-            className={`w-full max-w-sm rounded-2xl border p-5 space-y-4 shadow-2xl ${
-              isLight ? "bg-white border-slate-200 text-slate-800" : "bg-zinc-900 border-white/10 text-zinc-100"
-            }`}
+            className="vision-modal-shell animate-modal-pop w-full max-w-sm rounded-[22px] p-5 space-y-4"
+            style={{ color: "var(--g-text-1)" }}
+            onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start space-x-3">
-              <div className="p-2 rounded-xl bg-red-500/10 text-red-500 shrink-0">
+              <div className="p-2 rounded-xl bg-red-500/12 text-red-500 shrink-0">
                 <AlertCircle className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-bold">{confirmModal.title}</div>
-                <p className={`mt-2 text-xs leading-relaxed whitespace-pre-line ${isLight ? "text-slate-600" : "text-zinc-400"}`}>
+                <p className="mt-2 text-xs leading-relaxed whitespace-pre-line" style={{ color: "var(--g-text-2)" }}>
                   {confirmModal.body}
                 </p>
               </div>
             </div>
-            <div className="flex justify-end gap-2.5 pt-1">
+            <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setConfirmModal(null)}
-                className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-3.5 cursor-pointer"
+                className="lg-btn lg-btn-ghost !text-xs !py-1.5 !px-3.5 !rounded-full cursor-pointer"
               >
                 取消
               </button>
@@ -1491,7 +1468,7 @@ export const HistoryPanel: React.FC = () => {
                   setConfirmModal(null);
                   await action();
                 }}
-                className={`flex items-center space-x-1.5 rounded-xl px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition cursor-pointer ${
+                className={`flex items-center space-x-1.5 rounded-full px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition cursor-pointer ${
                   confirmModal.danger
                     ? "bg-red-600 hover:bg-red-500 border border-red-400/40"
                     : "bg-[var(--accent)] hover:opacity-90"
@@ -1512,6 +1489,7 @@ export const HistoryPanel: React.FC = () => {
         items={activeSubTab === "vocabulary" ? history.filter((i) => i.isFavorite) : history}
         selectedIds={selectedIds.size > 0 ? selectedIds : undefined}
       />
+      </div>
     </div>
   );
 };

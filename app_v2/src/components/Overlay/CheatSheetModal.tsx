@@ -132,19 +132,15 @@ export const CheatSheetModal: React.FC<CheatSheetModalProps> = ({ isOpen, onClos
 
   return (
     <div
-      className={`fixed inset-0 z-[300] flex items-center justify-center p-4 transition-colors animate-in fade-in duration-150 ${
-        isLight ? 'bg-black/20 backdrop-blur-sm' : 'bg-black/60 backdrop-blur-md'
-      }`}
+      className="vision-modal-backdrop fixed inset-0 z-[300] flex items-center justify-center p-4 transition-colors animate-in fade-in duration-150"
       onClick={onClose}
       data-testid="cheatsheet-modal-overlay"
     >
       <div
         ref={modalRef}
-        className="lg-surface relative w-full max-w-3xl p-6 space-y-6 transition-all animate-in zoom-in-95 duration-150 overflow-hidden !rounded-2xl border"
+        className="vision-modal-shell vision-modal-enter relative w-full max-w-3xl p-6 space-y-6 transition-all overflow-hidden rounded-[26px]"
         style={{
-          background: 'var(--g-surface-solid)',
           color: 'var(--g-text-1)',
-          borderColor: 'var(--g-border-strong)',
         }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
