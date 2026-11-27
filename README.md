@@ -1,139 +1,179 @@
-# 🐾 猫步翻译 (Catwalk Translator)
+<div align="center">
 
-<p align="center">
-  <img src="app_icon.png" width="128" height="128" alt="猫步翻译 Logo" />
+<img src="./app_icon.png" alt="猫步翻译 Logo" width="112" height="112" />
+
+<h1>🐾 猫步翻译 (Catwalk Translator)</h1>
+
+<p><strong>专为 3D/CG 创作者、设计师、极客与重度桌面用户打造的新一代 Vision 液态玻璃 AI 截图划词翻译神器</strong></p>
+
+<p>
+  <a href="https://github.com/maobukeai/catwalk-translator/releases/latest">
+    <img src="https://img.shields.io/github/v/release/maobukeai/catwalk-translator?style=flat-square&color=38bdf8&label=Release" alt="Latest Release" />
+  </a>
+  <img src="https://img.shields.io/badge/Platform-Windows%20x64-0078D4?style=flat-square&logo=windows" alt="Platform Windows x64" />
+  <img src="https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2.0" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 19" />
+  <img src="https://img.shields.io/badge/Rust-2021-DEA584?style=flat-square&logo=rust&logoColor=black" alt="Rust 2021" />
+  <img src="https://img.shields.io/badge/Language-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-brightgreen?style=flat-square" alt="Language Simplified Chinese" />
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-success?style=flat-square" alt="MIT License" />
+  </a>
 </p>
 
-<p align="center">
-  <b>专为 3D/CG 创作者、设计师、游戏玩家与极客打造的新一代轻量、沉浸式桌面 AI 截图划词翻译神器</b>
+<p>
+  <a href="#-界面预览">界面预览</a> •
+  <a href="#-核心特性亮点">核心特性</a> •
+  <a href="#-核心快捷键一览">快捷键一览</a> •
+  <a href="#-下载与安装">下载与安装</a> •
+  <a href="#-开发者本地构建指南">开发指南</a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/maobukeai/catwalk-translator/releases"><img src="https://img.shields.io/github/v/release/maobukeai/catwalk-translator?style=flat-square&color=38bdf8" alt="Release" /></a>
-  <img src="https://img.shields.io/badge/Platform-Windows%20x64-blue?style=flat-square" alt="Platform" />
-  <img src="https://img.shields.io/badge/Tauri-2.0-orange?style=flat-square" alt="Tauri" />
-  <img src="https://img.shields.io/badge/React-19-61dafb?style=flat-square" alt="React" />
-  <img src="https://img.shields.io/badge/Rust-2021-DEA584?style=flat-square" alt="Rust" />
-  <img src="https://img.shields.io/badge/Language-中文简体-brightgreen?style=flat-square" alt="Language" />
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
-</p>
+<br />
+
+<!-- 根据 GitHub 访客系统的浅色 / 暗黑偏好自动切换 Hero 预览图 -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/screenshots/hero-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="./docs/screenshots/hero-light.png" />
+  <img src="./docs/screenshots/hero-light.png" alt="猫步翻译 v0.4.0 Vision 液态玻璃主界面预览" width="100%" />
+</picture>
+
+</div>
+
+---
+
+## ✨ 界面预览
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="./docs/screenshots/feature-overlay.png" alt="全局截图划词与原位覆层翻译" width="100%" />
+      <br />
+      <strong>📸 全局截图 · 自动拾色原位覆层翻译</strong>
+      <br />
+      <sub>框选 Blender / Maya / 文档界面，38ms 极速本地识别并与原 UI 背景无缝融色覆盖，搭载双行液态玻璃浮动工具栏。</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="./docs/screenshots/feature-aichat.png" alt="AI 智能语境工作台" width="100%" />
+      <br />
+      <strong>🤖 AI 智能语境 · 思维链与术语精讲</strong>
+      <br />
+      <sub>支持 DeepSeek R1/V3、OpenAI、Gemini 与本地 Ollama，思维链自动折叠、斜杠预设与 CG 语境联动解析。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="./docs/screenshots/feature-vocab.png" alt="生词本与间隔重复复习" width="100%" />
+      <br />
+      <strong>📚 生词本 · Leitner 记忆曲线与 Anki 同步</strong>
+      <br />
+      <sub>收藏词条、查询历史、剪贴板翻译与划词回放四大视图彻底解耦，内置间隔重复复习与 AnkiConnect 一键推送。</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="./docs/screenshots/feature-settings.png" alt="高自由度设置中心与效果预览" width="100%" />
+      <br />
+      <strong>🎨 高自由度设置 · 实时毛玻璃与动效调节</strong>
+      <br />
+      <sub>亮/暗双主题、高斯模糊强度滑杆、全局字体排版、热键录制与统一弹性滑动指示器所见即所得。</sub>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary>🔍 <strong>点击展开更多窗口形态预览：独立置顶贴图窗 × 悬停即译浮窗 × 关于与架构矩阵</strong></summary>
+<br />
+<div align="center">
+  <img src="./docs/screenshots/extra-pin-lookup.png" alt="独立置顶贴图窗与无感悬停查词浮窗" width="100%" />
+  <p><sub>📌 <strong>独立置顶贴图窗（亮 / 暗双主题） × 无感划词 / 悬停浮窗</strong>：支持多引擎切换对比、滚轮缩放、贴边自动吸附及即时追问。</sub></p>
+  <br />
+  <img src="./docs/screenshots/extra-about.png" alt="关于页面与技术架构全景矩阵" width="100%" />
+  <p><sub>🚀 <strong>关于中心 &amp; 静默更新</strong>：实时展示 ONNX 离线引擎、4,800+ CG 专业词库与在线热更新状态。</sub></p>
+</div>
+</details>
 
 ---
 
 ## 🌟 核心特性亮点
 
-### 1. ⚡ 毫秒级原生 OCR 引擎
-- **本地 ONNX 离线识别**：支持 PP-OCRv6 Small、Tiny 与 Medium，模型可在设置页下载；默认使用 Small。
-- **Windows 10/11 原生 OCR 免模型直连**：零模型体积依赖，开箱即用。
-- **高 DPI 像素级映射**：完美兼容 100%、125%、150%、200% 等 Windows 多显示器缩放比例，识别框零偏移。
+1. **🧊 Vision 液态玻璃质感 &amp; 全站弹性滑动动效 (`v0.4.0` 全新升级)**
+   * **全场景半透明毛玻璃**：统一主界面、独立贴图窗、悬停查词卡、AI 助手与截屏工具栏的视觉规范，智能自适应 **浅色 (Light)** 与 **暗黑 (Dark)** 系统主题。
+   * **统一流体滑动指示器**：Dock 导航、语言选择、多引擎对比、术语筛选、风格切换与字号分段控件全量搭载弹簧物理滑动高亮与平滑过渡动效。
+   * **高 DPI 像素级精确映射**：完美兼容 Windows 100%、125%、150%、200% 及多显示器混拼缩放，框选框与原位译文零偏移。
 
-### 2. ⚡ 快慢双流渐进呈现（在线 0.15s 秒出 + AI 慢通道无缝升级）
-- **在线引擎并发大竞速**：首屏以毫秒级速度并发请求 Google、Bing、有道等多引擎，谁最快率先上屏，零等待感。
-- **大模型后台异步精翻**：后台静默进行大模型高阶推导，完成后平滑无缝升级主译文并点亮 `✨` 专属徽章。
-- **生词本容量扩容至 2,000 条**：支持优质生词智能甄选自动收藏（剔除无价值日常词，锁定 3D/CG 术语与 AI 精翻），星标词终身防淘汰。
+2. **⚡ 毫秒级原生 + 本地离线 OCR 引擎**
+   * **本地 ONNX PP-OCRv6**：内置 Tiny / Small / Medium 多档轻量离线模型，支持设置页一键下载切换，断网亦能毫秒出字。
+   * **Windows 原生 OCR 免依赖**：开箱即用直连系统 WinRT OCR，零模型下载体积即可完成高精度截屏识别。
+   * **原位背景拾色覆层**：自动采样截图区块周边像素色值渲染译文盖层，提供 **译文 / 原文 / 双语** 一键切换、置顶贴图与直接保存成图。
 
-### 3. 🎯 三级级联智能翻译流水线
-- **专业 CG 词库毫秒直出**：内置 Blender、Substance 3D、Unity、Unreal Engine、Maya、Houdini 等数万条行业专业术语库。
-- **主流大模型 (LLM) 深度整合**：原生支持 DeepSeek-V3 / R1、OpenAI GPT-4o-mini、Ollama 本地大模型、智谱 GLM 及任意 OpenAI 兼容 API。
-- **在线引擎智能兜底**：集成 Google Translate、Bing、有道等高可用免费在线引擎，网络波动自动无缝降级。
+3. **🧠 快慢双流渐进翻译 &amp; AI 智能副驾**
+   * **极速首屏 + AI 慢通道精修**：在线多引擎（DeepL、Bing、Google、有道、百度）与本地专业词库秒级抢跑呈现，大模型（DeepSeek-V3/R1、OpenAI、Claude、Gemini、Ollama）随后自动在背景完成语境精译与词汇拆解，无缝平滑升级。
+   * **AI 深度解析与对话工作台**：划词或输入文本自动拆分重点词汇、音标与双语场景例句；支持连续多轮追问、推理思考折叠展示与 Prompt 预设模板。
 
-### 3. 🎨 原位覆盖与智能背景拾色 (In-situ Overlay)
-- **4px 外环中值色取样**：自动提取原文背景色，自适应生成高可读性前景色。
-- **双模渲染**：支持卡片原位覆盖模式（Immersion）与面板聚合展示模式（Panel）。
+4. **🎮 3D/CG 垂直领域词库与独立生词复习闭环**
+   * **主流 DCC / 引擎全覆盖**：深度预置 **Blender、Unreal Engine、Unity、Maya、Substance Painter、Houdini** 专业节点与着色器术语库，告别“生硬直译”。
+   * **Leitner 间隔重复 + Anki 联动**：内置收藏词本、Leitner 五阶记忆复习系统与批量管理，支持通过 AnkiConnect 推送或导出 `.apkg` / TXT。
 
-### 4. 🛠️ 选区微调与专业截图标注
-- **8 锚点自由调整选区**：划框后支持自由缩放、拖拽与方向键像素级微调。
-- **丰富标注工具箱**：内置矩形框选、指示箭头、画笔涂鸦、马赛克遮挡等一站式截图编辑工具。
-
-### 5. 🔄 区域变动监控 (Watch Mode)
-- 选定屏幕区域后按 `W` 键，软件将自动以毫秒级周期监控区域文字变化，动态重译，专为实时渲染面板、游戏与视频界面量身定制。
-
-### 6. 📖 生词本与复习强化
-- 查词一键收藏至生词本（`Ctrl+D`），支持发音朗读、上下文回溯与生词记忆巩固。
-
-### 7. 📌 译文贴图钉屏（Snipaste 式）
-- 翻译结果一键钉在桌面置顶小窗：拖拽移动、滚轮缩放字号、复制与朗读，主窗口关闭后依然常驻。
-- 三个入口：主翻译器「贴图」按钮、划词覆盖层工具栏、卡片右键菜单（单卡片 / 整场译文）。
-
-### 8. 🖼 批量图片翻译与译文导出
-- 粘贴 / 拖入多张图片自动排队逐张翻译，每张独立展示识别框叠加 + 行级对照，支持单张重试与移除。
-- 译文一键渲染为分享卡片 PNG（双语对照 + 时间水印），保存到 `图片库/猫步翻译/exports/`。
-
-### 9. 📚 通用离线英汉词典（ECDICT）
-- 内置可选的离线大词典（MIT 协议 ECDICT）：一次性下载后本地精简为高频词条缓存。
-- CG 专业词库未命中时自动走离线词典，查普通英文单词完全断网可用，真实音标 + 中文释义直达词卡。
-
-### 10. 🎯 智能词库 · 自动识别 3D 软件
-- 按下截图快捷键的瞬间识别前台软件（Blender / Maya / Houdini / Substance / Unity / Unreal），本次划词自动切换对应专业词库。
-
-### 11. 🔧 工程化与网络能力
-- **网络诊断**：并发探测各引擎/LLM 端点/更新源延迟，一眼区分网络问题与配置问题。
-- **手动代理**：HTTP/SOCKS5 代理优先于系统代理，访问 OpenAI / Gemini 无障碍。
-- **翻译记忆持久化**：翻译缓存跨重启复用，重复划词零网络延迟。
-- **剪贴板翻译历史**：被动监听的翻译自动留档（上限 200 条），随时回看复制。
-- **备份与同步**：本地 zip 备份 + WebDAV 云同步，配置与生词本永不丢失。
-- **桌面集成**：开机自启、主窗口置顶、TTS 朗读语速调节、快捷键录制冲突检测。
+5. **📌 桌面贴图、无感取词与全自动静默更新**
+   * **多端小窗联动**：支持快捷键唤起 `Ctrl+K` 桌面置顶贴图查词窗、`Alt+Space` Spotlight 全局快查框，以及鼠标划词 / `Ctrl` 悬停无感译词浮窗。
+   * **WebDAV 同步 &amp; 静默更新**：支持个人词库/设置备份至本地或 WebDAV 云端，并在后台自动检测 GitHub Releases 完成静默更新安装。
 
 ---
 
-## ⌨️ 常用快捷键速查
+## ⌨️ 核心快捷键一览
 
-| 快捷键 | 功能说明 |
-| :--- | :--- |
-| `F4` | 唤起屏幕截图与划词翻译覆盖层 |
-| `Alt + Space` | 呼出 Spotlight 快速查词 / 划词面板 |
-| `Alt + Q` | 快速显示 / 隐藏主翻译窗口 |
-| `W` (在覆盖层中) | 开启 / 停止当前选区的动态区域监控 (Watch Mode) |
-| `Enter` / `Ctrl + C` | 复制当前全部译文 |
-| `Esc` | 取消选区 / 关闭当前覆盖窗口 |
-| `Tab` / `Shift + Tab` | 快速轮播切换翻译引擎 (DeepSeek / OpenAI / Blender 词典等) |
-
----
-
-## 📦 下载与安装指南
-
-请进入 [GitHub Releases 发布页面](https://github.com/maobukeai/catwalk-translator/releases/latest) 下载对应格式文件：
-
-| 安装包类型 | 文件名 | 说明 |
-| :--- | :--- | :--- |
-| **Windows 中文安装包 (强烈推荐)** | `猫步翻译_<最新版本>_x64-setup.exe` | 纯中文安装引导，体积约 ~8.7MB，支持覆盖升级与自动桌面图标 |
-| **Windows MSI 安装包** | `猫步翻译_<最新版本>_x64_zh-CN.msi` | 适用于 Windows 批量部署与标准 MSI 管理环境 |
-| **绿色便携免安装版** | `猫步翻译_<最新版本>_x64_portable.exe` | 单文件独立运行，无需安装，解压即用 |
-
-### 🔄 覆盖安装与升级说明
-- 安装包采用智能覆盖安装机制，直接运行最新安装包即可**自动就地升级**，无需手动卸载旧版本；
-- 软件配置与生词本历史记录独立保存在系统 `%APPDATA%` 中，覆盖安装**绝对不会丢失您的 API Key、个性化设置与生词记录**。
+| 快捷键 | 功能说明 | 可自定义 |
+| :--- | :--- | :---: |
+| **`F4`** | 发起全屏区域框选截图 OCR 与原位翻译（支持长按/切换模式） | ✅ |
+| **`Alt + Space`** | 呼出 Spotlight 悬浮全局查词输入框 | ✅ |
+| **`Alt + Q`** | 显示 / 隐藏猫步翻译主窗口 | ✅ |
+| **`Alt + W`** | 呼出桌面快捷贴图小窗（`PinQuick`） | ✅ |
+| **`Ctrl + 按住悬停`** | 鼠标悬停屏幕任意英文单词触发无感查词浮窗 | ✅ |
+| **`Esc` / 右键** | 快速退出截图覆盖层或收起当前弹窗 | — |
 
 ---
 
-## 💻 开发者指南
+## 📦 下载与安装
+
+1. 前往本仓库右侧 [**Releases 页面**](https://github.com/maobukeai/catwalk-translator/releases/latest) 下载最新版本（当前推荐 **`v0.4.0`**）：
+   | 安装包文件 | 格式说明 | 适用场景 |
+   | :--- | :--- | :--- |
+   | `猫步翻译_0.4.0_x64-setup.exe` / `MaobuTranslator_0.4.0_x64-setup.exe` | NSIS 标准安装向导 | 大多数 Windows 10/11 (x64) 用户首选，支持自启动与静默更新 |
+   | `猫步翻译_0.4.0_x64_zh-CN.msi` | Windows MSI 安装包 | 企业部署或习惯 MSI 标准安装流程的用户 |
+   | `猫步翻译_0.4.0_x64_portable.exe` | 单文件绿色便携版 | 免安装即点即用，适合 U 盘或临时工作站环境 |
+2. 启动后可在左下角 **「设置」→「快捷键与 AI 模型」** 中填入 DeepSeek / OpenAI / Gemini 或本地 Ollama 服务地址与 API Key，并按需下载 ONNX PP-OCRv6 离线识别模型以开启最佳体验。
+
+---
+
+## 🛠️ 开发者本地构建指南
 
 ### 环境依赖
-- [Node.js](https://nodejs.org/)（20.19+ 或 22.12+，建议使用当前 LTS）与 `pnpm`（项目使用 pnpm workspace）
-- [Rust](https://rustup.rs/) 稳定版与 Cargo（本次检查使用 Rust 1.95.0）
-- Windows 10/11 x64 (附带 WebView2 运行时)
+* **Node.js** `>= 18.x` &amp; **pnpm** `>= 9.x`
+* **Rust 工具链** (`cargo`, `rustc` via [rustup](https://rustup.rs/))
+* **Windows 平台要求**：Visual Studio Build Tools 2022（C++ 桌面开发组件）与系统自带 WebView2 Runtime
 
-### 🚀 极速一键启动 (推荐)
-- **Windows 用户**：直接双击根目录下的 [启动猫步翻译.bat](启动猫步翻译.bat) 即可自动检查环境、安装依赖并启动客户端；
-- **PowerShell / 终端用户**：运行 [启动猫步翻译.ps1](启动猫步翻译.ps1) 即可进入带菜单的交互式管理工具（支持一键调试、全量测试与安装包打包）。
+### 开发与构建命令
 
-### 手动运行与构建
 ```bash
-# 进入前端与 Tauri 工程目录
-cd app_v2
+# 1. 克隆仓库并进入桌面端工作区
+git clone https://github.com/maobukeai/catwalk-translator.git
+cd catwalk-translator/app_v2
 
-# 安装前端依赖
+# 2. 安装前端依赖
 pnpm install
 
-# 启动本地开发（热重载）
+# 3. 启动热重载开发服务器（同时拉起 Tauri Rust 核心与前端界面）
 pnpm tauri dev
 
-# 打包生产安装包与独立运行版
+# 4. 运行 TypeScript 检查与前后端单元测试
+npx tsc --noEmit
+pnpm test --run
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+# 5. 构建 Windows 生产级安装包（NSIS / MSI）
 pnpm tauri build
 ```
 
 ---
 
-## 📄 开源许可证
+## 📄 开源协议
 
-本项目基于 [MIT License](LICENSE) 开源发布。
+本项目基于 [**MIT License**](./LICENSE) 开源许可发布。欢迎提交 Issue 反馈问题或发起 Pull Request 共同完善工具！
